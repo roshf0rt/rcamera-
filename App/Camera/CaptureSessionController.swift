@@ -63,6 +63,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var outputsInstalled = false
     private var hasRecordOutput = false
     private var currentPosition: AVCaptureDevice.Position?
+    /// True while the input is the physical wide camera for 120/240 fps video.
+    private var currentHighFrameRate = false
     private var currentFormatIndex: Int?
     private var currentAppleLog = false
     /// Cameras whose hand-picked 4:3 format gave no RAW. Their photos use the `.photo` preset instead,
@@ -140,10 +142,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         return nil
     }
 
-    private func device(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
-        position == .front
-            ? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
-            : backDevice()
+    private func device(for position: AVCaptureDevice.Position, highFrameRate: Bool = false) -> AVCaptureDevice? {
+        if position == .front { return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) }
+        if highFrameRate, let wide = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) { return wide }
+        return backDevice()
     }
 
     private struct FormatPlan {
@@ -191,8 +193,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     private func applyOnQueue(_ config: Config) -> DeviceInfo {
         let position: AVCaptureDevice.Position = config.lens == .front ? .front : .back
-        let needsInput = videoInput == nil || currentPosition != position
-        let candidate = needsInput ? self.device(for: position) : videoInput?.device
+        // The multi-camera virtual device offers no formats above 60 fps; the main camera alone does.
+        let highFrameRate = config.mode == .video && config.format.fps > FormatChooser.highFrameRate && position == .back
+        let needsInput = videoInput == nil || currentPosition != position || currentHighFrameRate != highFrameRate
+        let candidate = needsInput ? self.device(for: position, highFrameRate: highFrameRate) : videoInput?.device
         guard let device = candidate else {
             return DeviceInfo(focalLengths: ZoomStop.defaultFocalLengths, rawAvailable: false, appleLogActive: false, didReconfigure: false, frameRates: [:])
         }
@@ -209,7 +213,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             session.beginConfiguration()
             session.automaticallyConfiguresCaptureDeviceForWideColor = false
             installOutputsIfNeeded()
-            if needsInput { swapInput(to: device, position: position) }
+            if needsInput {
+                swapInput(to: device, position: position)
+                currentHighFrameRate = highFrameRate
+            }
             if let index = formatPlan.index, index < device.formats.count {
                 setFormat(device.formats[index], appleLog: formatPlan.appleLog, on: device)
             } else if session.canSetSessionPreset(formatPlan.fallbackPreset) {
@@ -241,7 +248,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
         if !session.isRunning { session.startRunning() }
 
-        let described = Self.describe(device.formats)
+        // Rates come from the camera in use and, on the back, from the main camera alone, which is where
+        // 120 and 240 fps live.
+        var described = Self.describe(device.formats)
+        if position == .back, let wide = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back), wide != device {
+            described += Self.describe(wide.formats)
+        }
         return DeviceInfo(
             focalLengths: focalLengths(),
             rawAvailable: !photoOutput.availableRawPhotoPixelFormatTypes.isEmpty,

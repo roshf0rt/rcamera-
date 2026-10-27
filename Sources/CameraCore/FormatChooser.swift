@@ -77,9 +77,13 @@ public enum FormatChooser {
         return nil
     }
 
+    /// Above this many frames per second the back camera runs alone, without the multi-camera device.
+    public static let highFrameRate = 60
+
     /// Frame rates offered for a video width: the standard ones some 16:9 format (or, for 1080p, the
-    /// photo format) can run. 120 shows up only on cameras that have it, e.g. 4K120 on recent Pro iPhones.
-    public static func frameRates(_ formats: [FormatDescriptor], width: Int, candidates: [Int] = [24, 30, 60, 120]) -> [Int] {
+    /// photo format) can run. 120 and 240 show up only on cameras that have them (4K120 on recent Pro
+    /// iPhones, 1080p240 on most).
+    public static func frameRates(_ formats: [FormatDescriptor], width: Int, candidates: [Int] = [24, 30, 60, 120, 240]) -> [Int] {
         let photo = photoFormat(formats)
         return candidates.filter { fps in
             if width <= 1920, let photo, photo.width >= 1920, photo.maxFPS >= Double(fps) { return true }

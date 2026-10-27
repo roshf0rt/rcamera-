@@ -291,7 +291,7 @@ final class CineExposureTests: XCTestCase {
             FormatDescriptor(index: 1, width: 1920, height: 1080, maxFPS: 240),
             FormatDescriptor(index: 2, width: 3840, height: 2160, maxFPS: 60),
         ]
-        XCTAssertEqual(FormatChooser.frameRates(formats, width: 1920), [24, 30, 60, 120])
+        XCTAssertEqual(FormatChooser.frameRates(formats, width: 1920), [24, 30, 60, 120, 240])
         XCTAssertEqual(FormatChooser.frameRates(formats, width: 3840), [24, 30, 60])
         let pro = formats + [FormatDescriptor(index: 3, width: 3840, height: 2160, maxFPS: 120)]
         XCTAssertEqual(FormatChooser.frameRates(pro, width: 3840), [24, 30, 60, 120])
