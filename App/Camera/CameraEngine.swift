@@ -106,7 +106,7 @@ final class CameraEngine {
         settings = new
         if new.videoFormat != old.videoFormat, !isRecording {
             send(.updateVideoConfiguration(new.videoFormat))
-        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW), !isRecording {
+        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.photoResolution != old.photoResolution), !isRecording {
             Task { await applyConfig() }
         } else {
             reapplyIfAppleLogChanged()
@@ -283,7 +283,8 @@ final class CameraEngine {
             appleLog: appleLogRequested,
             digitalZoom: digitalZoom,
             exposureBias: evBias,
-            wantsRAW: settings.capturesRAW
+            wantsRAW: settings.capturesRAW,
+            photoResolution: settings.photoResolution
         )
         let info = await controller.apply(config)
         focalLengths = info.focalLengths

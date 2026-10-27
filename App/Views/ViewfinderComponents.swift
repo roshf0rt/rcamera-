@@ -313,6 +313,9 @@ struct OptionsPanel: View {
         option(title: "Portrait", active: settings.portrait, action: { update { $0.portrait.toggle() } }) {
             Image(systemName: "person.crop.circle").font(.system(size: 26))
         }
+        option(title: "Resolution", active: settings.photoResolution != .mp12, action: { update { $0.photoResolution = $0.photoResolution.next } }) {
+            Text(settings.photoResolution.label).font(.system(size: 20, weight: .semibold))
+        }
     }
 
     private var dynamicRangeOption: some View {

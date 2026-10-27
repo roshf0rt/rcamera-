@@ -124,6 +124,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var portraitFNumber = PortraitAperture.standard
     /// The lens look applied to portrait photos.
     public var lensStyle: LensStyle = .solis
+    /// The photo size. 12 MP by default.
+    public var photoResolution: PhotoResolution = .mp12
 
     public var videoResolution: VideoResolution = .hd1080
     public var videoFPS = 30
@@ -144,7 +146,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, savesLocation, digitalZoomStop
-        case grainEnabled, halationEnabled, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle
+        case grainEnabled, halationEnabled, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle, photoResolution
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, revision
     }
 
@@ -171,6 +173,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         portrait = (try? c.decode(Bool.self, forKey: .portrait)) ?? portrait
         portraitFNumber = PortraitAperture.nearest(to: (try? c.decode(Double.self, forKey: .portraitFNumber)) ?? portraitFNumber)
         lensStyle = (try? c.decode(LensStyle.self, forKey: .lensStyle)) ?? lensStyle
+        photoResolution = (try? c.decode(PhotoResolution.self, forKey: .photoResolution)) ?? photoResolution
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo

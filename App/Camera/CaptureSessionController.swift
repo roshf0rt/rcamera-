@@ -23,6 +23,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var digitalZoom: Double
         var exposureBias: Double
         var wantsRAW: Bool
+        var photoResolution: PhotoResolution
     }
 
     struct DeviceInfo: Sendable {
@@ -197,11 +198,14 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             currentFormatIndex = formatPlan.index
             currentAppleLog = formatPlan.appleLog
             setDepthFormat(on: device)
-            configurePhotoOutput(device: device)
+            configurePhotoOutput(device: device, resolution: config.photoResolution)
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
             setPixelFormat(tenBit: formatPlan.appleLog)
         }
+
+        // A new photo size does not need a new format, so it is applied on every configuration.
+        if !structural { configurePhotoOutput(device: device, resolution: config.photoResolution) }
 
         // RAW is what Redevelop works from. If the chosen format has none, fall back to the photo preset once.
         if structural, config.mode == .photo, config.wantsRAW, position == .back, formatPlan.index != nil,
@@ -318,9 +322,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     }
 
     /// 12 MP photos (or the closest the format offers) and ProRAW where the format supports it.
-    private func configurePhotoOutput(device: AVCaptureDevice) {
+    private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution) {
         let dimensions = device.activeFormat.supportedMaxPhotoDimensions
-        let fitting = dimensions.filter { Int($0.width) * Int($0.height) <= FormatChooser.preferredPhotoPixels }
+        let limit = resolution.pixelLimit ?? Int.max
+        let fitting = dimensions.filter { Int($0.width) * Int($0.height) <= limit }
         let pixels: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
         if let best = fitting.max(by: { pixels($0) < pixels($1) }) ?? dimensions.min(by: { pixels($0) < pixels($1) }) {
             let current = photoOutput.maxPhotoDimensions
