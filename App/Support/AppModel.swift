@@ -209,7 +209,8 @@ final class AppModel {
 
     /// `Previews/preset-<n>.jpg` in the bundle, if the picture was added.
     nonisolated static func previewURL(for presetID: String) -> URL? {
-        Bundle.main.url(forResource: presetID, withExtension: "jpg", subdirectory: "Previews")
+        Bundle.main.url(forResource: presetID, withExtension: "png", subdirectory: "Previews")
+            ?? Bundle.main.url(forResource: presetID, withExtension: "jpg", subdirectory: "Previews")
     }
 
     nonisolated static func parseLUT(_ url: URL?) -> LUT3D? {

@@ -95,24 +95,33 @@ struct PresetCard: View {
     let isSelected: Bool
     var thumbnail: UIImage?
     let action: () -> Void
+    @Environment(AppModel.self) private var model
+
+    /// The card picture carries its own words, but only when it is shown as the preset's card.
+    private var printed: Bool {
+        thumbnail == nil && (model.presetArt[preset.id]?.hasPicture ?? false)
+    }
 
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
                 PresetArtView(preset: preset, override: thumbnail)
-                LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
-                VStack(alignment: .leading, spacing: 1) {
-                    PresetTags(preset: preset)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
-                    Text(preset.name)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                // A finished card already has its name and words on the picture.
+                if !printed {
+                    LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
+                    VStack(alignment: .leading, spacing: 1) {
+                        PresetTags(preset: preset)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.8))
+                        Text(preset.name)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
             }
             .frame(width: 140, height: 88)
             .clipShape(RoundedRectangle(cornerRadius: 16))

@@ -6,6 +6,8 @@ struct PresetArt: @unchecked Sendable {
     let image: UIImage
     let tags: [String]
     let hasLUT: Bool
+    /// True when the picture is a finished card with its own name and words printed on it.
+    var hasPicture = false
 
     static let pixelWidth = 360
     static let pixelHeight = 220
@@ -15,7 +17,7 @@ struct PresetArt: @unchecked Sendable {
     static func make(lut: LUT3D?, previewURL: URL?) -> PresetArt? {
         let tags = lut.map { LUTProfile(lut: $0).tags } ?? ["No LUT"]
         if let previewURL, let image = UIImage(contentsOfFile: previewURL.path) {
-            return PresetArt(image: image, tags: tags, hasLUT: lut != nil)
+            return PresetArt(image: image, tags: tags, hasLUT: lut != nil, hasPicture: true)
         }
         let width = pixelWidth, height = pixelHeight
         let pixels = LUTCardArt.render(lut: lut, width: width, height: height)
