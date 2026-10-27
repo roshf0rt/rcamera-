@@ -2,51 +2,141 @@ import CameraCore
 import PhotosUI
 import SwiftUI
 
-/// How a preset's card looks, from the RCamera card designs (FilterPicker.swift and FilterCardsSVG):
-/// a dark card with a colour strip, filled with the gradient when selected. The preset's `accentIndex`
-/// picks the design, so a custom preset copied from a built-in one keeps that one's card.
+/// How a preset's card looks: soft lights of colour blurred into each other under film grain, a small
+/// description top left and the name large at the bottom, as in the RCamera card designs. The preset's
+/// `accentIndex` picks the artwork; a built-in keeps its own description whatever artwork it is given.
 struct PresetCardStyle {
-    let subtitle: String
-    let colors: [Color]
-    /// Light gradients need dark text when the card is filled.
-    var light = false
-    /// Filled with this instead of the gradient when selected; the strip then stays visible.
-    var selectedFill: Color?
-
-    /// Bottom-left to top-right, as in the designs.
-    var gradient: LinearGradient {
-        LinearGradient(colors: colors, startPoint: .bottomLeading, endPoint: .topTrailing)
+    /// One soft light in the artwork: its colour, its centre (0...1 across and down) and its radius as a
+    /// share of the card's width.
+    struct Glow {
+        var color: Color
+        var x: CGFloat
+        var y: CGFloat
+        var radius: CGFloat
     }
 
-    /// In the order of the built-in presets: JaneSu, Carbon, Clear, Drift, Mosaic, Rise, Sienna, Silver, Solstice, Velvet.
+    let subtitle: String
+    let base: Color
+    let glows: [Glow]
+    /// Light artwork needs dark text.
+    var light = false
+
+    /// The artwork's colours as a plain gradient, for small dots.
+    var gradient: LinearGradient {
+        LinearGradient(colors: [base] + glows.map(\.color), startPoint: .bottomLeading, endPoint: .topTrailing)
+    }
+
+    /// In the order of the built-in presets' ids: JaneSu, Carbon, Clear, Drift, Mosaic, Rise, Sienna, Silver, Solstice, Velvet.
     static let all: [PresetCardStyle] = [
-        PresetCardStyle(subtitle: "Film color", colors: hex(0x218DFD, 0x7066D8, 0xF13722), light: true, selectedFill: hex(0xE9E9DF)[0]),
-        PresetCardStyle(subtitle: "Mono · Contrast", colors: hex(0x33383C, 0x9DA1A0, 0xE0DED5)),
-        PresetCardStyle(subtitle: "Clean · Neutral", colors: hex(0xE7E7DD, 0xC5C8BD), light: true),
-        PresetCardStyle(subtitle: "Soft · Airy", colors: hex(0x476D74, 0x9CB8A9, 0xD6D6C4)),
-        PresetCardStyle(subtitle: "Color · Vivid", colors: hex(0x4058A0, 0x996DA2, 0xEBCB8B)),
-        PresetCardStyle(subtitle: "Custom · Color", colors: hex(0x1160A3, 0x7867A3, 0xDD87B0)),
-        PresetCardStyle(subtitle: "Warm · Film", colors: hex(0xA84B32, 0xE38A50, 0xF2CA8F)),
-        PresetCardStyle(subtitle: "Mono · Soft", colors: hex(0x676B6E, 0xC5C7C4, 0xECECE3)),
-        PresetCardStyle(subtitle: "Warm · Light", colors: hex(0xBC703B, 0xE0B15D, 0xF7D99B)),
-        PresetCardStyle(subtitle: "Grain · Cool green", colors: hex(0x008873, 0x85A764, 0xEDBD53)),
+        PresetCardStyle(subtitle: "Film • Color", base: hex(0x2F55D8), glows: [
+            glow(0x218DFD, 0.1, 0.2, 0.45), glow(0x7066D8, 0.5, 0.6, 0.4), glow(0xF13722, 0.97, 0.5, 0.4), glow(0xF6A27A, 0.75, 1.05, 0.25),
+        ]),
+        PresetCardStyle(subtitle: "Mono • Contrast", base: hex(0x26292C), glows: [
+            glow(0x9DA1A0, 0.75, 0.35, 0.4), glow(0xE8E6DE, 0.97, 0.12, 0.25), glow(0x111315, 0.1, 0.9, 0.4),
+        ]),
+        PresetCardStyle(subtitle: "Clean • Neutral", base: hex(0xD6D7CD), glows: [
+            glow(0xF4F4EC, 0.3, 0.3, 0.45), glow(0xBFC3B6, 0.9, 0.95, 0.4), glow(0xE9E2CF, 0.8, 0.2, 0.3),
+        ], light: true),
+        PresetCardStyle(subtitle: "Grain • Golden", base: hex(0x7F9AA6), glows: [
+            glow(0x6C93B8, 0.1, 0.15, 0.45), glow(0xE6DFA0, 0.55, 0.35, 0.35), glow(0xD5E86A, 0.97, 0.4, 0.4),
+            glow(0x5E8A36, 0.12, 1.0, 0.45), glow(0x9BB38C, 0.6, 0.95, 0.35),
+        ]),
+        PresetCardStyle(subtitle: "Color • Vivid", base: hex(0x4058A0), glows: [
+            glow(0x996DA2, 0.55, 0.5, 0.4), glow(0xEBCB8B, 1.0, 0.3, 0.35), glow(0x2D3F86, 0.05, 0.9, 0.4),
+        ]),
+        PresetCardStyle(subtitle: "Custom • Color LUT", base: hex(0x163566), glows: [
+            glow(0x0F2A55, 0.05, 0.4, 0.45), glow(0x8EA4C6, 0.5, 1.0, 0.35), glow(0x6E7FB0, 0.6, 0.2, 0.3), glow(0xE2452C, 1.0, 0.45, 0.4),
+        ]),
+        PresetCardStyle(subtitle: "Warm • Film", base: hex(0x9C4429), glows: [
+            glow(0xE38A50, 0.6, 0.5, 0.45), glow(0xF2CA8F, 1.0, 0.2, 0.35), glow(0x6E2A18, 0.0, 1.0, 0.4),
+        ]),
+        PresetCardStyle(subtitle: "Mono • Soft", base: hex(0x6C7073), glows: [
+            glow(0xC5C7C4, 0.6, 0.4, 0.45), glow(0xF1F1EA, 0.95, 0.1, 0.3), glow(0x45494C, 0.05, 0.95, 0.4),
+        ]),
+        PresetCardStyle(subtitle: "Grain • Halation", base: hex(0x214C4E), glows: [
+            glow(0x18393B, 0.1, 0.9, 0.5), glow(0xC9706C, 0.8, 0.55, 0.38), glow(0xFBE6E2, 0.88, 0.45, 0.18),
+        ]),
+        PresetCardStyle(subtitle: "Grain • Cool green", base: hex(0x0B5A4E), glows: [
+            glow(0x85A764, 0.55, 0.6, 0.4), glow(0xEDBD53, 1.0, 0.3, 0.35), glow(0x063A33, 0.0, 0.1, 0.4),
+        ]),
     ]
 
     static func of(_ preset: Preset) -> PresetCardStyle {
         all[((preset.accentIndex % all.count) + all.count) % all.count]
     }
 
-    /// What the preset is: a built-in keeps its own description whatever colours its card is given.
+    /// What the preset is: a built-in keeps its own description whatever artwork its card is given.
     static func subtitle(of preset: Preset) -> String {
         if preset.isCustom { return "My preset" }
         let number = Int(preset.id.replacingOccurrences(of: "preset-", with: "")) ?? 0
         return all.indices.contains(number - 1) ? all[number - 1].subtitle : of(preset).subtitle
     }
 
-    private static func hex(_ values: UInt32...) -> [Color] {
-        values.map { rgb in
-            Color(.sRGB, red: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255)
+    private static func hex(_ rgb: UInt32) -> Color {
+        Color(.sRGB, red: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255)
+    }
+
+    private static func glow(_ rgb: UInt32, _ x: CGFloat, _ y: CGFloat, _ radius: CGFloat) -> Glow {
+        Glow(color: hex(rgb), x: x, y: y, radius: radius)
+    }
+}
+
+/// A card's artwork: the style's lights blurred together, with film grain over them.
+struct PresetArtwork: View {
+    let style: PresetCardStyle
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack {
+                style.base
+                ForEach(style.glows.indices, id: \.self) { index in
+                    let glow = style.glows[index]
+                    Circle()
+                        .fill(glow.color)
+                        .frame(width: glow.radius * 2 * size.width, height: glow.radius * 2 * size.width)
+                        .position(x: glow.x * size.width, y: glow.y * size.height)
+                }
+            }
+            .blur(radius: max(size.width, size.height) * 0.11, opaque: true)
+            .overlay(FilmGrainOverlay())
         }
+        .clipped()
+        .drawingGroup()
+    }
+}
+
+/// Fine monochrome grain, tiled. The same noise every time, so cards do not shimmer.
+struct FilmGrainOverlay: View {
+    private static let tile: UIImage = {
+        let side = 96
+        var state: UInt64 = 0x9E37_79B9_7F4A_7C15
+        var pixels = [UInt8](repeating: 255, count: side * side * 4)
+        for index in 0 ..< side * side {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            let value = UInt8(truncatingIfNeeded: (z ^ (z >> 31)) >> 56)
+            pixels[index * 4] = value
+            pixels[index * 4 + 1] = value
+            pixels[index * 4 + 2] = value
+        }
+        let provider = CGDataProvider(data: Data(pixels) as CFData)
+        guard let provider,
+              let image = CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: side * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        else { return UIImage() }
+        return UIImage(cgImage: image)
+    }()
+
+    var body: some View {
+        Rectangle()
+            .fill(ImagePaint(image: Image(uiImage: Self.tile), scale: 0.5))
+            .blendMode(.overlay)
+            .opacity(0.45)
+            .allowsHitTesting(false)
     }
 }
 
@@ -62,7 +152,7 @@ struct PresetPicker: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(model.presets) { preset in
+                    ForEach(model.visiblePresets) { preset in
                         PresetCard(preset: preset, isSelected: preset.id == model.selectedPreset.id) {
                             model.selectPreset(preset.id)
                         }
@@ -106,8 +196,9 @@ struct PresetPicker: View {
     }
 }
 
-/// A preset card: its subtitle and name over a dark card with the colour strip, or over the gradient when
-/// selected. With a `thumbnail` (Redevelop) the card shows that photo instead.
+/// A preset card: the artwork with the description small at the top and the name large at the bottom,
+/// running off the edge like the designs. No frame: the selected card is at full colour and a little
+/// larger, the others are dimmed. With a `thumbnail` (Redevelop) or a cover photo the card shows that instead.
 struct PresetCard: View {
     static let width: CGFloat = 138
     static let height: CGFloat = 84
@@ -122,66 +213,64 @@ struct PresetCard: View {
     private var style: PresetCardStyle { PresetCardStyle.of(preset) }
     /// The redevelop thumbnail, or the photo the user chose for the card.
     private var picture: UIImage? { thumbnail ?? model.cover(for: preset.id) }
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Self.corner, style: .continuous) }
-    private var foreground: Color { isSelected && style.light && picture == nil ? .black : .white }
+    private var darkText: Bool { style.light && picture == nil }
 
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .topLeading) {
-                background
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(PresetCardStyle.subtitle(of: preset))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(foreground.opacity(isSelected ? 0.65 : 0.5))
-                        .lineLimit(1)
-                    Text(preset.name)
-                        .font(.system(size: 22, weight: .semibold))
-                        .tracking(-0.5)
-                        .foregroundStyle(foreground)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    Spacer(minLength: 0)
-                    if picture == nil, !isSelected || style.selectedFill != nil {
-                        RoundedRectangle(cornerRadius: 1.5).fill(style.gradient).frame(height: 5)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
-                .padding(.bottom, 9)
+                artwork
+                Text(PresetCardStyle.subtitle(of: preset))
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(darkText ? Color.black.opacity(0.45) : Color.white.opacity(0.62))
+                    .lineLimit(1)
+                    .padding(.leading, 10)
+                    .padding(.top, 9)
+                Text(preset.name)
+                    .font(.system(size: 34, weight: .regular))
+                    .tracking(-1)
+                    .foregroundStyle(darkText ? Color.black.opacity(0.85) : .white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(.trailing, 9)
+                    // The descenders run off the bottom edge, as in the designs.
+                    .offset(y: 7)
             }
             .frame(width: Self.width, height: Self.height)
-            .clipShape(shape)
+            .clipShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
             .overlay {
-                shape.strokeBorder(isSelected ? Color.white.opacity(0.95) : Color.white.opacity(0.08), lineWidth: isSelected ? 2 : 1)
+                RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+                    .fill(Color.black.opacity(isSelected ? 0 : 0.5))
+                    .allowsHitTesting(false)
             }
-            .contentShape(shape)
-            .animation(.easeInOut(duration: 0.16), value: isSelected)
+            .scaleEffect(isSelected ? 1 : 0.96)
+            .contentShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
+            .animation(.spring(response: 0.28, dampingFraction: 0.85), value: isSelected)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle(scale: 0.96))
         .sensoryFeedback(.selection, trigger: isSelected)
         .accessibilityLabel("\(preset.name), \(PresetCardStyle.subtitle(of: preset))")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
-    private var background: some View {
+    private var artwork: some View {
         if let picture {
             Image(uiImage: picture)
                 .resizable()
                 .scaledToFill()
                 .frame(width: Self.width, height: Self.height)
                 .clipped()
-            LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .center)
-        } else if isSelected {
-            if let fill = style.selectedFill { shape.fill(fill) } else { shape.fill(style.gradient) }
+                .overlay(FilmGrainOverlay())
+            LinearGradient(colors: [.black.opacity(0.45), .clear, .black.opacity(0.35)], startPoint: .top, endPoint: .bottom)
         } else {
-            shape.fill(Color(white: 0.08))
+            PresetArtwork(style: style)
         }
     }
 }
 
-/// A small square of the preset's card: its photo if it has one, otherwise its colours. For lists and the
-/// camera's preset button.
+/// A small square of the preset's card: its photo if it has one, otherwise its artwork. For lists and
+/// the camera's preset button.
 struct PresetSwatch: View {
     @Environment(AppModel.self) private var model
     let preset: Preset
@@ -195,7 +284,8 @@ struct PresetSwatch: View {
                 .overlay(LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .center, endPoint: .bottom))
                 .clipShape(shape)
         } else {
-            shape.fill(PresetCardStyle.of(preset).gradient)
+            PresetArtwork(style: PresetCardStyle.of(preset))
+                .clipShape(shape)
         }
     }
 }
@@ -235,7 +325,7 @@ struct NewPresetSheet: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 startCard(nil)
-                                ForEach(model.presets) { preset in startCard(preset) }
+                                ForEach(model.visiblePresets) { preset in startCard(preset) }
                             }
                             .padding(.horizontal, 16)
                         }

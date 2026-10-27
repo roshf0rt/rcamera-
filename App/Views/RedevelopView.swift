@@ -116,7 +116,7 @@ struct RedevelopView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(model.presets) { preset in
+                    ForEach(model.visiblePresets) { preset in
                         PresetCard(preset: preset, isSelected: preset.id == presetID, thumbnail: thumbnails[preset.id]) {
                             presetID = preset.id
                         }
@@ -202,7 +202,7 @@ struct RedevelopView: View {
             PhotoPipeline.previewBase(source: source, pushPull: 0, aspect: aspect, mirror: mirror, scale: 0.08)
         }.value
         guard let small else { return }
-        for preset in model.presets {
+        for preset in model.visiblePresets {
             if Task.isCancelled { return }
             let look = await model.baseLook(for: preset).with(grain: false, halation: true)
             if let image = await Task.detached(priority: .utility, operation: { PhotoPipeline.gradePreview(small, look: look) }).value {

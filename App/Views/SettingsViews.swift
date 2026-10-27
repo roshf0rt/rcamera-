@@ -17,9 +17,16 @@ struct SettingsView: View {
                     .frame(width: 52, height: 34)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(preset.name)
-                    Text(PresetCardStyle.subtitle(of: preset))
+                    Text(preset.isHidden ? "Hidden on the camera" : PresetCardStyle.subtitle(of: preset))
                         .font(.system(size: 12))
-                        .foregroundStyle(preset.isCustom ? Theme.accent.opacity(0.8) : Theme.secondaryText)
+                        .foregroundStyle(preset.isCustom && !preset.isHidden ? Theme.accent.opacity(0.8) : Theme.secondaryText)
+                }
+                .opacity(preset.isHidden ? 0.5 : 1)
+                if preset.isHidden {
+                    Spacer()
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.secondaryText)
                 }
             }
         }
@@ -40,6 +47,14 @@ struct SettingsView: View {
                     // One list in the camera's order: hold a row and drag to move it, or use Edit.
                     ForEach(model.presets) { preset in
                         presetRow(preset)
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                Button {
+                                    withAnimation { model.setPresetHidden(!preset.isHidden, id: preset.id) }
+                                } label: {
+                                    Label(preset.isHidden ? "Show" : "Hide", systemImage: preset.isHidden ? "eye" : "eye.slash")
+                                }
+                                .tint(preset.isHidden ? .green : .gray)
+                            }
                             .swipeActions(edge: .trailing, allowsFullSwipe: preset.isCustom) {
                                 if preset.isCustom {
                                     Button(role: .destructive) {
@@ -67,7 +82,7 @@ struct SettingsView: View {
                             .textCase(nil)
                     }
                 } footer: {
-                    Text("Hold a preset and drag it to change the order on the camera. Built-in presets change only film speed, contrast curve, dynamic range and their card; make your own to change everything. Swipe your own presets to delete them.")
+                    Text("Hold a preset and drag it to change the order on the camera. Swipe right to hide a preset from the camera or show it again; swipe your own presets left to delete them. Built-in presets change only film speed, contrast curve, dynamic range and their card; make your own to change everything.")
                 }
 
                 Section {

@@ -14,6 +14,8 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
     public var accentIndex: Int
     /// Manual regulators on top of the LUT. Neutral unless the user changes them.
     public var adjustments: LookAdjustments
+    /// Left out of the camera's preset row and Camera Control; still listed in Settings.
+    public var isHidden: Bool
 
     public init(
         id: String,
@@ -21,7 +23,8 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
         grain: Double = 0,
         halation: Double = 0,
         accentIndex: Int,
-        adjustments: LookAdjustments = .neutral
+        adjustments: LookAdjustments = .neutral,
+        isHidden: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -29,9 +32,10 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
         self.halation = halation
         self.accentIndex = accentIndex
         self.adjustments = adjustments
+        self.isHidden = isHidden
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, grain, halation, accentIndex, adjustments }
+    enum CodingKeys: String, CodingKey { case id, name, grain, halation, accentIndex, adjustments, isHidden }
 
     /// Files written before halation existed still load.
     public init(from decoder: Decoder) throws {
@@ -42,6 +46,7 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
         halation = (try? c.decode(Double.self, forKey: .halation)) ?? 0
         accentIndex = (try? c.decode(Int.self, forKey: .accentIndex)) ?? 0
         adjustments = (try? c.decode(LookAdjustments.self, forKey: .adjustments)) ?? .neutral
+        isHidden = (try? c.decode(Bool.self, forKey: .isHidden)) ?? false
     }
 }
 
@@ -77,8 +82,14 @@ public enum PresetCatalog {
     public static let customPrefix = "custom-"
     /// Bumped whenever default names or looks change, so older installs can adopt them.
     /// Revision 4 locked the built-in presets; earlier edits to them move into custom copies.
-    public static let revision = 4
+    /// Revision 5 put the presets in `displayOrder` and hid every other one.
+    public static let revision = 5
     static let lockRevision = 4
+    static let orderRevision = 5
+
+    /// The order the camera shows the built-in presets in: JaneSu, Solstice, Velvet, Rise, Carbon,
+    /// Clear, Mosaic, Silver, Sienna, Drift.
+    public static let displayOrder = ["preset-1", "preset-9", "preset-10", "preset-6", "preset-2", "preset-3", "preset-5", "preset-8", "preset-7", "preset-4"]
 
     /// JaneSu first, then the Roshfort collection.
     static let names = ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet"]
@@ -176,6 +187,9 @@ public final class PresetLibrary {
         if savedRevision < PresetCatalog.lockRevision {
             moveBuiltInEditsToCustomCopies(defaults: defaults)
         }
+        if savedRevision < PresetCatalog.orderRevision {
+            adoptDisplayOrder()
+        }
         try? "\(PresetCatalog.revision)".write(to: revisionFile, atomically: true, encoding: .utf8)
     }
 
@@ -200,6 +214,17 @@ public final class PresetLibrary {
             changed = true
         }
         if changed { try? save() }
+    }
+
+    /// Puts the built-in presets in `PresetCatalog.displayOrder` and hides every preset outside it.
+    /// Hidden presets keep their files and can be shown again from Settings.
+    private func adoptDisplayOrder() {
+        let order = PresetCatalog.displayOrder
+        for index in presets.indices {
+            presets[index].isHidden = !order.contains(presets[index].id)
+        }
+        try? reorder(order)
+        try? save()
     }
 
     /// What may change on a built-in preset: the film speed's values (grain, grain size, sharpness,
@@ -321,6 +346,14 @@ public final class PresetLibrary {
         }.map(\.element)
         guard ordered != presets else { return }
         presets = ordered
+        try save()
+    }
+
+    /// Shows or hides a preset on the camera. The last visible preset cannot be hidden.
+    public func setHidden(_ hidden: Bool, id: String) throws {
+        guard let index = presets.firstIndex(where: { $0.id == id }), presets[index].isHidden != hidden else { return }
+        if hidden, presets.filter({ !$0.isHidden }).count <= 1 { return }
+        presets[index].isHidden = hidden
         try save()
     }
 

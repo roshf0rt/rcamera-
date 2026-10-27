@@ -91,8 +91,9 @@ final class PresetLibraryTests: XCTestCase {
     func testDefaultsHaveTenNamedPresets() throws {
         let library = try PresetLibrary(storageDirectory: makeTempDirectory())
         XCTAssertEqual(library.presets.count, 10)
-        XCTAssertEqual(library.presets.map(\.name), ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet"])
-        XCTAssertEqual(library.presets.last?.id, "preset-10")
+        XCTAssertEqual(library.presets.map(\.name), ["JaneSu", "Solstice", "Velvet", "Rise", "Carbon", "Clear", "Mosaic", "Silver", "Sienna", "Drift"])
+        XCTAssertEqual(library.presets.last?.id, "preset-4")
+        XCTAssertFalse(library.presets.contains(where: \.isHidden))
         XCTAssertTrue(library.presets.allSatisfy { $0.grain > 0 }, "presets start with film grain")
         XCTAssertFalse(library.hasLUT(for: "preset-1"))
     }
@@ -248,13 +249,14 @@ final class PresetLibraryTests: XCTestCase {
 
         let library = try PresetLibrary(storageDirectory: storage)
         XCTAssertEqual(library.presets[0].name, "JaneSu")
-        XCTAssertEqual(library.presets[1].name, "Carbon")
-        XCTAssertEqual(library.presets[2].name, "Clear")
-        XCTAssertEqual(library.presets[3].name, "Drift", "built-ins are locked; the renamed one lives on as a custom copy")
+        XCTAssertEqual(library.preset(id: "preset-2")?.name, "Carbon")
+        XCTAssertEqual(library.preset(id: "preset-3")?.name, "Clear")
+        XCTAssertEqual(library.preset(id: "preset-4")?.name, "Drift", "built-ins are locked; the renamed one lives on as a custom copy")
         XCTAssertEqual(library.presets.filter(\.isCustom).map(\.name), ["Мой пресет"])
+        XCTAssertEqual(library.presets.filter(\.isCustom).map(\.isHidden), [true], "presets outside the new order are hidden")
         XCTAssertGreaterThan(library.presets[0].grain, 0)
         XCTAssertGreaterThan(library.presets[0].halation, 0)
-        XCTAssertEqual(library.presets[5].grain, 0.45, "amounts from before the new renderer are replaced")
+        XCTAssertEqual(library.preset(id: "preset-6")?.grain, 0.45, "amounts from before the new renderer are replaced")
 
         // The migration runs once: a later edit back to zero grain is respected.
         var edited = library.presets[0]
@@ -425,10 +427,32 @@ final class CustomPresetTests: XCTestCase {
         try library.reorder([added.id, "preset-3", "preset-1"])
         let ids = library.presets.map(\.id)
         XCTAssertEqual(Array(ids.prefix(3)), [added.id, "preset-3", "preset-1"])
-        XCTAssertEqual(ids[3], "preset-2", "unlisted presets follow in their old order")
+        XCTAssertEqual(ids[3], "preset-9", "unlisted presets follow in their old order")
         XCTAssertEqual(Set(ids).count, PresetCatalog.defaultCount + 1)
         let reopened = try PresetLibrary(storageDirectory: directory)
         XCTAssertEqual(reopened.presets.map(\.id), ids)
+    }
+
+    func testOlderInstallsAdoptTheNewOrderAndHideTheRest() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mine = try library.addCustom(copying: nil, name: "Mine")
+        XCTAssertFalse(mine.isHidden, "new presets show on the camera")
+        // An install from revision 4, in the old order.
+        var presets = PresetCatalog.defaults()
+        presets.append(mine)
+        try JSONEncoder().encode(presets).write(to: directory.appendingPathComponent("presets.json"))
+        try "4".write(to: directory.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
+
+        let reopened = try PresetLibrary(storageDirectory: directory)
+        XCTAssertEqual(Array(reopened.presets.map(\.id).prefix(10)), PresetCatalog.displayOrder)
+        XCTAssertEqual(reopened.preset(id: mine.id)?.isHidden, true)
+        XCTAssertEqual(reopened.presets.filter { !$0.isHidden }.count, 10)
+
+        try reopened.setHidden(false, id: mine.id)
+        XCTAssertEqual(try PresetLibrary(storageDirectory: directory).preset(id: mine.id)?.isHidden, false, "the order is adopted once")
+        for id in PresetCatalog.displayOrder { try reopened.setHidden(true, id: id) }
+        XCTAssertEqual(reopened.presets.filter { !$0.isHidden }.count, 1, "one preset always stays visible")
     }
 
     func testCustomPresetsTakeEveryChange() throws {

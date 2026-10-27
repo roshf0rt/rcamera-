@@ -667,10 +667,7 @@ struct CameraView: View {
                     .padding(.bottom, 6)
             }
             .frame(width: 58, height: 58)
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(showPresets ? Theme.accent : Color.white.opacity(0.15), lineWidth: showPresets ? 2 : 1)
-            )
+            .scaleEffect(showPresets ? 1.06 : 1)
             .frame(width: 64, height: 64)
         }
         .buttonStyle(.plain)

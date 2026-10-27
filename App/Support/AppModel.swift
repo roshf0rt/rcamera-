@@ -62,7 +62,7 @@ final class AppModel {
 
     /// The Camera Control button's lists: presets, grain and halation, plus aperture and lens in portrait mode.
     func syncCameraControls() {
-        let presets = presets
+        let presets = visiblePresets
         let selected = presets.firstIndex { $0.id == settings.selectedPresetID } ?? 0
         let levels = GrainLevel.allCases
         let stops = PortraitAperture.stops
@@ -70,8 +70,8 @@ final class AppModel {
         var pickers: [CaptureSessionController.ControlPicker] = [
             .init(title: "Preset", symbol: "camera.filters", titles: presets.map(\.name), selected: selected) { [weak self] index in
                 Task { @MainActor in
-                    guard let self, self.presets.indices.contains(index) else { return }
-                    self.selectPreset(self.presets[index].id)
+                    guard let self, self.visiblePresets.indices.contains(index) else { return }
+                    self.selectPreset(self.visiblePresets[index].id)
                 }
             },
             .init(title: "Grain", symbol: "circle.grid.3x3", titles: levels.map(\.label), selected: levels.firstIndex(of: settings.grainLevel) ?? 0) { [weak self] index in
@@ -178,7 +178,7 @@ final class AppModel {
             syncCameraControls()
             lookCache = lookCache.filter { !$0.key.hasPrefix("\(id)|") }
             covers[id] = nil
-            if settings.selectedPresetID == id, let first = presets.first { selectPreset(first.id) }
+            if settings.selectedPresetID == id, let first = visiblePresets.first { selectPreset(first.id) }
         } catch {
             alert = error.localizedDescription
         }
@@ -233,7 +233,24 @@ final class AppModel {
     // MARK: Presets
 
     var selectedPreset: Preset {
-        presets.first { $0.id == settings.selectedPresetID } ?? presets[0]
+        presets.first { $0.id == settings.selectedPresetID && !$0.isHidden } ?? visiblePresets.first ?? presets[0]
+    }
+
+    /// The presets the camera offers, in order; hidden ones are only listed in Settings.
+    var visiblePresets: [Preset] {
+        presets.filter { !$0.isHidden }
+    }
+
+    /// Shows or hides a preset on the camera. Hiding the selected one moves the camera to the first visible one.
+    func setPresetHidden(_ hidden: Bool, id: String) {
+        do {
+            try presetLibrary.setHidden(hidden, id: id)
+            presets = presetLibrary.presets
+            syncCameraControls()
+            if hidden, settings.selectedPresetID == id, let first = visiblePresets.first { selectPreset(first.id) }
+        } catch {
+            alert = error.localizedDescription
+        }
     }
 
     func selectPreset(_ id: String) {
