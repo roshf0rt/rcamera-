@@ -152,9 +152,10 @@ struct CaptureViewer: View {
     private var record: CaptureRecord? { model.captures.first { $0.id == (current ?? startID) } }
 
     var body: some View {
-        let progress = min(max(dragY / 320, 0), 1)
+        let progress: CGFloat = min(max(dragY / 320, 0), 1)
+        let chromeOpacity: Double = 1 - min(1, Double(progress) * 2.5)
         ZStack {
-            Color.black.opacity(1 - progress).ignoresSafeArea()
+            Color.black.opacity(Double(1 - progress)).ignoresSafeArea()
 
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 0) {
@@ -182,7 +183,7 @@ struct CaptureViewer: View {
 
             if let record {
                 chrome(record)
-                    .opacity(1 - min(1, progress * 2.5))
+                    .opacity(chromeOpacity)
             }
         }
         .onAppear { current = startID }
