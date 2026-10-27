@@ -26,6 +26,23 @@ private struct GradeParams {
     var previousLutScale: Float = 1
     var previousLutOffset: Float = 0
     var previousMix: Float = 0
+    var exposure: Float = 1
+    var temp: Float = 0
+    var tint: Float = 0
+    var contrast: Float = 1
+    var shadows: Float = 0
+    var midpoint: Float = 0
+    var highlights: Float = 0
+    var fade: Float = 0
+    var shoulderKnee: Float = 1
+    var saturation: Float = 1
+    var hueCos: Float = 1
+    var hueSin: Float = 0
+    var hasHue: Int32 = 0
+    var filmStrength: Float = 1
+    var bloom: Float = 0
+    var sharpness: Float = 0
+    var fringe: Float = 0
 }
 
 /// Applies a `FilmLook` on the GPU in one pass, like Lampa's Ironstone: camera pixel, LUT, halation, grain.
@@ -157,19 +174,39 @@ final class MetalGrader: @unchecked Sendable {
 
         params.grain = FilmMath.grainIntensity(look.grain)
         // One grain texel per output pixel at 1080 across, scaled up for bigger frames, so the grain
-        // looks the same in the viewfinder, in 4K and in a 12 MP photo.
-        params.grainScale = max(1, Float(min(crop.width, crop.height)) / 1080)
+        // looks the same in the viewfinder, in 4K and in a 12 MP photo. Grain size scales it further.
+        let regulators = RegulatorUniforms(look.adjustments)
+        params.grainScale = Float(max(1, Double(min(crop.width, crop.height)) / 1080) * regulators.grainSizeScale)
+        params.exposure = Float(regulators.exposure)
+        params.temp = Float(regulators.temp)
+        params.tint = Float(regulators.tint)
+        params.contrast = Float(regulators.contrast)
+        params.shadows = Float(regulators.shadows)
+        params.midpoint = Float(regulators.midpoint)
+        params.highlights = Float(regulators.highlights)
+        params.fade = Float(regulators.fade)
+        params.shoulderKnee = Float(regulators.shoulderKnee)
+        params.saturation = Float(regulators.saturation)
+        params.hueCos = Float(regulators.hueCos)
+        params.hueSin = Float(regulators.hueSin)
+        params.hasHue = regulators.hasHue ? 1 : 0
+        params.filmStrength = Float(regulators.filmStrength)
+        params.bloom = Float(regulators.bloom)
+        params.sharpness = Float(regulators.sharpness)
+        params.fringe = Float(regulators.fringe)
         let grainSpan = Float(Self.grainTextureSize) * params.grainScale
         params.grainOffsetX = Float.random(in: 0 ..< grainSpan)
         params.grainOffsetY = Float.random(in: 0 ..< grainSpan)
         let grain = grainTextures.randomElement() ?? emptyMask
 
         params.halation = FilmMath.halationStrength(look.halation)
+        // Bloom reuses the halation mask, so it needs the mask even when halation is off.
+        let needsGlow = params.halation > 0 || params.bloom > 0
 
         guard let commandBuffer = queue.makeCommandBuffer() else { return false }
 
         var glow = emptyMask
-        if params.halation > 0,
+        if needsGlow,
            let masks = masks(width: crop.width, height: crop.height, cached: cachedMasks),
            let encoder = commandBuffer.makeComputeCommandEncoder() {
             encoder.setComputePipelineState(maskState)
@@ -185,6 +222,7 @@ final class MetalGrader: @unchecked Sendable {
             glow = masks.blurred
         } else {
             params.halation = 0
+            params.bloom = 0
         }
 
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return false }

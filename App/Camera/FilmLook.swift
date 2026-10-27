@@ -1,12 +1,14 @@
 import CameraCore
 import Metal
 
-/// A preset resolved for rendering: an optional LUT, a halation amount and a grain amount, all 0...1.
-/// `MetalGrader` turns it into pixels; the LUT is uploaded to the GPU once and kept here.
+/// A preset resolved for rendering: an optional LUT, a halation amount, a grain amount and the manual
+/// regulators, all 0...1 or in their own ranges. `MetalGrader` turns it into pixels; the LUT is uploaded
+/// to the GPU once and kept here.
 final class FilmLook: @unchecked Sendable {
     let lut: LUT3D?
     let grain: Double
     let halation: Double
+    let adjustments: LookAdjustments
 
     /// Shared between a look and its toggled variants, so the LUT is uploaded once.
     private let upload: Upload
@@ -16,17 +18,19 @@ final class FilmLook: @unchecked Sendable {
         var texture: MTLTexture?
     }
 
-    init(lut: LUT3D?, grain: Double, halation: Double = 0) {
+    init(lut: LUT3D?, grain: Double, halation: Double = 0, adjustments: LookAdjustments = .neutral) {
         self.lut = lut
         self.grain = grain
         self.halation = halation
+        self.adjustments = adjustments
         upload = Upload()
     }
 
-    private init(lut: LUT3D?, grain: Double, halation: Double, upload: Upload) {
+    private init(lut: LUT3D?, grain: Double, halation: Double, adjustments: LookAdjustments, upload: Upload) {
         self.lut = lut
         self.grain = grain
         self.halation = halation
+        self.adjustments = adjustments
         self.upload = upload
     }
 
@@ -40,7 +44,7 @@ final class FilmLook: @unchecked Sendable {
     /// The same look with grain or halation switched off by the camera-screen toggles.
     func with(grain grainOn: Bool, halation halationOn: Bool) -> FilmLook {
         if grainOn, halationOn { return self }
-        return FilmLook(lut: lut, grain: grainOn ? grain : 0, halation: halationOn ? halation : 0, upload: upload)
+        return FilmLook(lut: lut, grain: grainOn ? grain : 0, halation: halationOn ? halation : 0, adjustments: adjustments, upload: upload)
     }
 
     /// The LUT as a 3D half-float texture, red along x. Created on first use.

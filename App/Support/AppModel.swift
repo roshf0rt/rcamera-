@@ -186,7 +186,7 @@ final class AppModel {
             }
         }.value
         if let cached = lookCache[key] { return cached }
-        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation)
+        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation, adjustments: preset.adjustments)
         lookCache[key] = look
         return look
     }

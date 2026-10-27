@@ -9,16 +9,26 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
     public var halation: Double
     /// Picks the gradient shown on the preset card.
     public var accentIndex: Int
+    /// Manual regulators on top of the LUT. Neutral unless the user changes them.
+    public var adjustments: LookAdjustments
 
-    public init(id: String, name: String, grain: Double = 0, halation: Double = 0, accentIndex: Int) {
+    public init(
+        id: String,
+        name: String,
+        grain: Double = 0,
+        halation: Double = 0,
+        accentIndex: Int,
+        adjustments: LookAdjustments = .neutral
+    ) {
         self.id = id
         self.name = name
         self.grain = grain
         self.halation = halation
         self.accentIndex = accentIndex
+        self.adjustments = adjustments
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, grain, halation, accentIndex }
+    enum CodingKeys: String, CodingKey { case id, name, grain, halation, accentIndex, adjustments }
 
     /// Files written before halation existed still load.
     public init(from decoder: Decoder) throws {
@@ -28,6 +38,7 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
         grain = (try? c.decode(Double.self, forKey: .grain)) ?? 0
         halation = (try? c.decode(Double.self, forKey: .halation)) ?? 0
         accentIndex = (try? c.decode(Int.self, forKey: .accentIndex)) ?? 0
+        adjustments = (try? c.decode(LookAdjustments.self, forKey: .adjustments)) ?? .neutral
     }
 }
 
