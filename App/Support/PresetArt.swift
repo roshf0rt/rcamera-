@@ -10,8 +10,13 @@ struct PresetArt: @unchecked Sendable {
     static let pixelWidth = 360
     static let pixelHeight = 220
 
-    /// CPU work, a few milliseconds per preset. Call off the main thread.
-    static func make(lut: LUT3D?) -> PresetArt? {
+    /// A picture you made yourself (see App/Resources/Previews/README.md) replaces the generated landscape.
+    /// Its words still come from the LUT. CPU work, a few milliseconds per preset. Call off the main thread.
+    static func make(lut: LUT3D?, previewURL: URL?) -> PresetArt? {
+        let tags = lut.map { LUTProfile(lut: $0).tags } ?? ["No LUT"]
+        if let previewURL, let image = UIImage(contentsOfFile: previewURL.path) {
+            return PresetArt(image: image, tags: tags, hasLUT: lut != nil)
+        }
         let width = pixelWidth, height = pixelHeight
         let pixels = LUTCardArt.render(lut: lut, width: width, height: height)
         guard let provider = CGDataProvider(data: Data(pixels) as CFData),
@@ -30,7 +35,6 @@ struct PresetArt: @unchecked Sendable {
                   intent: .defaultIntent
               )
         else { return nil }
-        let tags = lut.map { LUTProfile(lut: $0).tags } ?? ["No LUT"]
         return PresetArt(image: UIImage(cgImage: cgImage), tags: tags, hasLUT: lut != nil)
     }
 }

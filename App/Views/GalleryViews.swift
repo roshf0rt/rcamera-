@@ -78,7 +78,7 @@ struct GalleryView: View {
                 }
             }
             .navigationDestination(item: $selection) { id in
-                CaptureDetailView(recordID: id)
+                CaptureDetailView(recordID: id) { selection = $0 }
             }
         }
         .preferredColorScheme(.dark)
@@ -100,6 +100,8 @@ struct CaptureDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let recordID: UUID
+    /// Opens another capture in place, for swiping sideways through the library.
+    var open: (UUID) -> Void = { _ in }
 
     @State private var showRedevelop = false
     @State private var confirmDelete = false
@@ -119,6 +121,20 @@ struct CaptureDetailView: View {
         .background(Color.black.ignoresSafeArea())
         .navigationBarBackButtonHidden()
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    /// Swipe down goes back to the grid, swipe left and right move to the neighbouring capture.
+    private func swipe(_ value: DragGesture.Value, _ record: CaptureRecord) {
+        let dx = value.translation.width, dy = value.translation.height
+        if dy > 90, dy > abs(dx) * 1.4 {
+            dismiss()
+        } else if abs(dx) > 70, abs(dx) > abs(dy) * 1.4 {
+            // The library is newest first: a swipe left goes to an older capture.
+            let all = model.captures
+            guard let index = all.firstIndex(where: { $0.id == record.id }) else { return }
+            let target = dx < 0 ? index + 1 : index - 1
+            if all.indices.contains(target) { open(all[target].id) }
+        }
     }
 
     private func content(_ record: CaptureRecord) -> some View {
@@ -149,6 +165,8 @@ struct CaptureDetailView: View {
                 image = await Task.detached { UIImage(contentsOfFile: url.path) }.value
             }
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { swipe($0, record) })
         .fullScreenCover(isPresented: $showRedevelop) { RedevelopView(recordID: record.id) }
         .confirmationDialog("Delete this capture?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {

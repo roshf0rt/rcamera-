@@ -229,6 +229,28 @@ struct CameraView: View {
                 }
                 .onEnded { _ in pinchStart = nil }
         )
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in swipe(value, engine: engine) }
+        )
+    }
+
+    /// Lampa-style swipes on the viewfinder: up opens the filters, down closes them or opens settings,
+    /// left and right switch between photo and video. Only clearly directional drags count.
+    private func swipe(_ value: DragGesture.Value, engine: CameraEngine) {
+        let dx = value.translation.width, dy = value.translation.height
+        if abs(dy) > abs(dx) * 1.4, abs(dy) > 60 {
+            if dy < 0 {
+                guard !showPresets else { return }
+                withAnimation(.easeOut(duration: 0.2)) { showPresets = true; showOptions = false }
+            } else if showPresets || showOptions {
+                withAnimation(.easeOut(duration: 0.2)) { showPresets = false; showOptions = false }
+            } else {
+                showSettings = true
+            }
+        } else if abs(dx) > abs(dy) * 1.4, abs(dx) > 70, !engine.isRecording, !engine.isSwitchingMode {
+            engine.selectMode(engine.mode == .photo ? .video : .photo)
+        }
     }
 
     /// Zoom chips centered, flip button on the right, as in Lampa. The exposure readout replaces the chips

@@ -140,13 +140,20 @@ final class AppModel {
     /// Parses the photo LUT (or the video one) of each preset off the main thread and keeps only its card art.
     private func refreshArt(for ids: [String]? = nil) {
         let targets = (ids ?? presets.map(\.id)).map { id in
-            (id, presetLibrary.lutURL(for: id, slot: .photo) ?? presetLibrary.lutURL(for: id, slot: .video))
+            (id, presetLibrary.lutURL(for: id, slot: .photo) ?? presetLibrary.lutURL(for: id, slot: .video), Self.previewURL(for: id))
         }
         Task {
-            for (id, url) in targets {
-                presetArt[id] = await Task.detached(priority: .utility) { PresetArt.make(lut: Self.parseLUT(url)) }.value
+            for (id, url, preview) in targets {
+                presetArt[id] = await Task.detached(priority: .utility) {
+                    PresetArt.make(lut: Self.parseLUT(url), previewURL: preview)
+                }.value
             }
         }
+    }
+
+    /// `Previews/preset-<n>.jpg` in the bundle, if the picture was added.
+    nonisolated static func previewURL(for presetID: String) -> URL? {
+        Bundle.main.url(forResource: presetID, withExtension: "jpg", subdirectory: "Previews")
     }
 
     nonisolated static func parseLUT(_ url: URL?) -> LUT3D? {
