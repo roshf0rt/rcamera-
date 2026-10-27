@@ -13,10 +13,13 @@ struct CameraView: View {
 
     @State private var showOptions = false
     @State private var showDynamicRange = false
-    @State private var apertureOpen = false
-    @State private var showLenses = false
-    /// The lens is being picked by holding its pill and sliding.
-    @State private var lensScrubbing = false
+    /// The aperture or lens dial over the picture in portrait mode.
+    @State private var dial: Dial?
+    /// The dial is being turned (pill held or dial dragged), so it must not close by itself.
+    @State private var dialHeld = false
+    /// Bumped on every dial change, restarting the timer that closes an idle dial.
+    @State private var dialTouch = 0
+    @State private var dialDragStart: Int?
     /// The preset name shown over the picture for a moment after a switch.
     @State private var presetToast: String?
     /// The version, shown for a few seconds at launch so an installed build can be told apart.
@@ -67,29 +70,18 @@ struct CameraView: View {
                         .transition(.opacity)
                 }
 
-                if apertureOpen || lensScrubbing {
-                    Group {
-                        if apertureOpen {
-                            ApertureOverlay(fNumber: model.settings.portraitFNumber)
-                        } else {
-                            LensOverlay(lens: model.settings.lensStyle)
-                        }
-                    }
-                    .frame(width: geo.size.width)
-                    .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50 - 290)
-                    .transition(.scale(scale: 0.85).combined(with: .opacity))
-                }
-
-                if showLenses, model.settings.portrait, engine.mode == .photo {
-                    LensPicker(selected: model.settings.lensStyle) { lens in
-                        UISelectionFeedbackGenerator().selectionChanged()
-                        withAnimation(Self.panelSpring) { model.updateSettings { $0.lensStyle = lens } }
-                    }
-                    .background(Color.black.opacity(0.55))
-                    .background(.ultraThinMaterial)
-                    .frame(width: geo.size.width)
-                    .offset(y: geo.size.height - controlsHeight - 196)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                if let dial, model.settings.portrait, engine.mode == .photo {
+                    // Anything outside the dial closes it; the viewfinder's own gestures wait meanwhile.
+                    Color.black.opacity(0.001)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .onTapGesture { closeDial() }
+                        .gesture(DragGesture(minimumDistance: 0).onEnded { _ in closeDial() })
+                    dialView(dial)
+                        .frame(width: geo.size.width, height: 290)
+                        .contentShape(Rectangle())
+                        .gesture(dialDrag(dial))
+                        .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50 - 300)
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
                 }
 
                 zoomLine(engine: engine)
@@ -141,10 +133,8 @@ struct CameraView: View {
                     )
                     .frame(width: geo.size.width)
                     .offset(y: topBarHeight + 6)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)),
-                        removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing))
-                    ))
+                    // A shade that slides down from the top bar.
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
                 if showDynamicRange {
@@ -207,8 +197,13 @@ struct CameraView: View {
         .onChange(of: model.settings.isLevelEnabled) { _, enabled in
             enabled ? model.level.start() : model.level.stop()
         }
-        .onChange(of: engine.mode) { _, _ in showOptions = false; showLenses = false }
-        .onChange(of: model.settings.portrait) { _, on in if !on { withAnimation(Self.panelSpring) { showLenses = false } } }
+        .onChange(of: engine.mode) { _, _ in showOptions = false; closeDial() }
+        .onChange(of: model.settings.portrait) { _, on in if !on { closeDial() } }
+        .task(id: dialTouch) {
+            guard dial != nil else { return }
+            try? await Task.sleep(for: .seconds(2.5))
+            if !Task.isCancelled, !dialHeld { closeDial() }
+        }
     }
 
     private struct Layout {
@@ -275,7 +270,7 @@ struct CameraView: View {
             }
             Spacer(minLength: 0)
 
-            Button { withAnimation(Self.panelSpring) { showOptions.toggle(); showPresets = false; showLenses = false; showDynamicRange = false } } label: {
+            Button { withAnimation(Self.panelSpring) { showOptions.toggle(); showPresets = false; showDynamicRange = false } } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(showOptions ? Theme.accent : .white)
@@ -291,13 +286,16 @@ struct CameraView: View {
 
     private var sortedLenses: [LensStyle] { LensStyle.allCases.sorted { $0.order < $1.order } }
 
-    /// The f-number and lens pills. Hold either and slide to change it, as in mood; a tap on the lens
-    /// opens the lens cards, a tap on the f-number steps to the next stop.
+    enum Dial: Equatable {
+        case aperture
+        case lens
+    }
+
+    /// The f-number and lens pills. Tap one to open its dial and slide on the dial; or hold the pill and
+    /// slide without lifting, and the dial closes on release, as in mood. A tap outside closes it, and so
+    /// does leaving it alone for a moment.
     private var portraitControls: some View {
-        let stops = PortraitAperture.stops
-        let stopIndex = stops.firstIndex(of: model.settings.portraitFNumber) ?? 0
-        let lensIndex = sortedLenses.firstIndex(of: model.settings.lensStyle) ?? 0
-        return HStack(spacing: 8) {
+        HStack(spacing: 8) {
             HStack(spacing: 7) {
                 ApertureShape(roundness: 0.3, rotation: .zero)
                     .stroke(.white, lineWidth: 1.8)
@@ -306,20 +304,13 @@ struct CameraView: View {
                     .font(.system(size: 15, weight: .semibold, design: .monospaced))
                     .contentTransition(.numericText())
             }
-            .foregroundStyle(apertureOpen ? Theme.accent : .white)
+            .foregroundStyle(dial == .aperture ? Theme.accent : .white)
             .padding(.horizontal, 14)
             .frame(height: 38)
             .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
-            .scaleEffect(apertureOpen ? 1.08 : 1)
+            .scaleEffect(dial == .aperture ? 1.08 : 1)
             .contentShape(Capsule())
-            .modifier(HoldScrub(
-                count: stops.count,
-                index: stopIndex,
-                began: { withAnimation(Self.panelSpring) { apertureOpen = true; showLenses = false } },
-                changed: { index in model.updateSettings { $0.portraitFNumber = stops[index] } },
-                ended: { withAnimation(Self.panelSpring) { apertureOpen = false } },
-                tapped: { model.updateSettings { $0.portraitFNumber = stops[(stopIndex + 1) % stops.count] } }
-            ))
+            .modifier(pillScrub(.aperture))
 
             HStack(spacing: 8) {
                 LensPreview(lens: model.settings.lensStyle)
@@ -329,26 +320,98 @@ struct CameraView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .tracking(0.6)
             }
-            .foregroundStyle(showLenses || lensScrubbing ? Theme.accent : .white)
+            .foregroundStyle(dial == .lens ? Theme.accent : .white)
             .padding(.leading, 7)
             .padding(.trailing, 14)
             .frame(height: 38)
             .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
-            .scaleEffect(lensScrubbing ? 1.08 : 1)
+            .scaleEffect(dial == .lens ? 1.08 : 1)
             .contentShape(Capsule())
-            .modifier(HoldScrub(
-                count: sortedLenses.count,
-                index: lensIndex,
-                step: 40,
-                began: { withAnimation(Self.panelSpring) { lensScrubbing = true; showLenses = false } },
-                changed: { index in model.updateSettings { $0.lensStyle = sortedLenses[index] } },
-                ended: { withAnimation(Self.panelSpring) { lensScrubbing = false } },
-                tapped: { withAnimation(Self.panelSpring) { showLenses.toggle(); showPresets = false; showOptions = false } }
-            ))
+            .modifier(pillScrub(.lens))
         }
-        .animation(Self.panelSpring, value: apertureOpen)
-        .animation(Self.panelSpring, value: lensScrubbing)
+        .animation(Self.panelSpring, value: dial)
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: model.settings.portraitFNumber)
+    }
+
+    private var sortedLenses: [LensStyle] { LensStyle.allCases.sorted { $0.order < $1.order } }
+
+    private func dialCount(_ dial: Dial) -> Int {
+        dial == .aperture ? PortraitAperture.stops.count : sortedLenses.count
+    }
+
+    private func dialIndex(_ dial: Dial) -> Int {
+        switch dial {
+        case .aperture: PortraitAperture.stops.firstIndex(of: model.settings.portraitFNumber) ?? 0
+        case .lens: sortedLenses.firstIndex(of: model.settings.lensStyle) ?? 0
+        }
+    }
+
+    private func setDial(_ dial: Dial, to index: Int) {
+        switch dial {
+        case .aperture: model.updateSettings { $0.portraitFNumber = PortraitAperture.stops[index] }
+        case .lens: model.updateSettings { $0.lensStyle = sortedLenses[index] }
+        }
+        dialTouch += 1
+    }
+
+    private func openDial(_ which: Dial) {
+        withAnimation(Self.panelSpring) {
+            dial = which
+            showPresets = false
+            showOptions = false
+            showDynamicRange = false
+        }
+        dialTouch += 1
+    }
+
+    private func closeDial() {
+        guard dial != nil else { return }
+        dialHeld = false
+        dialDragStart = nil
+        withAnimation(Self.panelSpring) { dial = nil }
+    }
+
+    private func pillScrub(_ which: Dial) -> HoldScrub {
+        HoldScrub(
+            count: dialCount(which),
+            index: dialIndex(which),
+            step: which == .aperture ? 34 : 40,
+            began: { dialHeld = true; openDial(which) },
+            changed: { setDial(which, to: $0) },
+            ended: { dialHeld = false; closeDial() },
+            tapped: { dial == which ? closeDial() : openDial(which) }
+        )
+    }
+
+    @ViewBuilder
+    private func dialView(_ dial: Dial) -> some View {
+        switch dial {
+        case .aperture: ApertureOverlay(fNumber: model.settings.portraitFNumber)
+        case .lens: LensOverlay(lens: model.settings.lensStyle)
+        }
+    }
+
+    /// Sliding on the open dial turns it; the scale follows the finger.
+    private func dialDrag(_ which: Dial) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let start = dialDragStart ?? dialIndex(which)
+                if dialDragStart == nil {
+                    dialDragStart = start
+                    dialHeld = true
+                }
+                let step: CGFloat = which == .aperture ? 40 : 56
+                let target = min(max(start - Int((value.translation.width / step).rounded()), 0), dialCount(which) - 1)
+                if target != dialIndex(which) {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    setDial(which, to: target)
+                }
+            }
+            .onEnded { _ in
+                dialDragStart = nil
+                dialHeld = false
+                dialTouch += 1
+            }
     }
 
     // MARK: Viewfinder
@@ -413,8 +476,8 @@ struct CameraView: View {
         .contentShape(Rectangle())
         .simultaneousGesture(
             SpatialTapGesture().onEnded { value in
-                if showOptions || showPresets || showLenses || showDynamicRange {
-                    withAnimation(Self.panelSpring) { showOptions = false; showPresets = false; showLenses = false; showDynamicRange = false }
+                if showOptions || showPresets || showDynamicRange {
+                    withAnimation(Self.panelSpring) { showOptions = false; showPresets = false; showDynamicRange = false }
                     return
                 }
                 focusMarker = FocusPoint(location: value.location)
@@ -444,18 +507,23 @@ struct CameraView: View {
         )
     }
 
-    /// Lampa-style swipes on the viewfinder: up opens the filters, down closes them or opens settings,
+    /// Swipes on the viewfinder: up opens the filters, down pulls the options shade from the top,
     /// left and right switch between photo and video. Only clearly directional drags count.
     private func swipe(_ value: DragGesture.Value, engine: CameraEngine) {
         let dx = value.translation.width, dy = value.translation.height
         if abs(dy) > abs(dx) * 1.4, abs(dy) > 60 {
             if dy < 0 {
-                guard !showPresets else { return }
-                withAnimation(Self.panelSpring) { showPresets = true; showOptions = false; showLenses = false }
-            } else if showPresets || showOptions || showLenses || showDynamicRange {
-                withAnimation(Self.panelSpring) { showPresets = false; showOptions = false; showLenses = false; showDynamicRange = false }
+                // Up: closes the shade if it is down, otherwise brings up the presets.
+                if showOptions || showDynamicRange {
+                    withAnimation(Self.panelSpring) { showOptions = false; showDynamicRange = false }
+                } else if !showPresets {
+                    withAnimation(Self.panelSpring) { showPresets = true }
+                }
+            } else if showPresets {
+                withAnimation(Self.panelSpring) { showPresets = false }
             } else {
-                showSettings = true
+                // Down: pulls the shade with the camera options from the top.
+                withAnimation(Self.panelSpring) { showOptions = true; showDynamicRange = false }
             }
         } else if abs(dx) > abs(dy) * 1.4, abs(dx) > 70, !engine.isRecording, !engine.isSwitchingMode {
             engine.selectMode(engine.mode == .photo ? .video : .photo)
@@ -563,7 +631,7 @@ struct CameraView: View {
     private var presetButton: some View {
         let preset = model.selectedPreset
         let style = PresetCardStyle.of(preset)
-        return Button { withAnimation(Self.panelSpring) { showPresets.toggle(); showOptions = false; showLenses = false } } label: {
+        return Button { withAnimation(Self.panelSpring) { showPresets.toggle(); showOptions = false } } label: {
             ZStack(alignment: .bottomLeading) {
                 PresetSwatch(preset: preset, corner: 14)
                 Text(preset.name)

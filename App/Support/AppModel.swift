@@ -56,6 +56,39 @@ final class AppModel {
             Task { @MainActor in self?.engine.shutterTapped() }
         }
         pushLooks()
+        syncCameraControls()
+    }
+
+    /// The Camera Control button's lists: presets and grain, plus aperture and lens in portrait mode.
+    func syncCameraControls() {
+        let presets = presets
+        let selected = presets.firstIndex { $0.id == settings.selectedPresetID } ?? 0
+        let levels = GrainLevel.allCases
+        let stops = PortraitAperture.stops
+        let lenses = LensStyle.allCases.sorted { $0.order < $1.order }
+        var pickers: [CaptureSessionController.ControlPicker] = [
+            .init(title: "Preset", symbol: "camera.filters", titles: presets.map(\.name), selected: selected) { [weak self] index in
+                Task { @MainActor in
+                    guard let self, self.presets.indices.contains(index) else { return }
+                    self.selectPreset(self.presets[index].id)
+                }
+            },
+            .init(title: "Grain", symbol: "circle.grid.3x3", titles: levels.map(\.label), selected: levels.firstIndex(of: settings.grainLevel) ?? 0) { [weak self] index in
+                Task { @MainActor in self?.updateSettings { $0.grainLevel = levels[index] } }
+            },
+        ]
+        if settings.portrait {
+            let stopTitles = stops.map { "ƒ" + ApertureTitle.format($0) }
+            pickers.append(.init(title: "Aperture", symbol: "camera.aperture", titles: stopTitles,
+                                 selected: stops.firstIndex(of: settings.portraitFNumber) ?? 0) { [weak self] index in
+                Task { @MainActor in self?.updateSettings { $0.portraitFNumber = stops[index] } }
+            })
+            pickers.append(.init(title: "Lens", symbol: "circle.hexagongrid", titles: lenses.map(\.label),
+                                 selected: lenses.firstIndex(of: settings.lensStyle) ?? 0) { [weak self] index in
+                Task { @MainActor in self?.updateSettings { $0.lensStyle = lenses[index] } }
+            })
+        }
+        engine.controller.setControlPickers(pickers)
     }
 
     /// Creates a custom preset, from scratch (`base` nil) or from another preset's look and LUTs, with
@@ -67,6 +100,7 @@ final class AppModel {
             let added = try presetLibrary.addCustom(copying: base, name: trimmed.isEmpty ? "New Preset" : trimmed, accentIndex: accentIndex)
             if let cover { setCover(cover, for: added.id) }
             presets = presetLibrary.presets
+            syncCameraControls()
             selectPreset(added.id)
             return added.id
         } catch {
@@ -80,6 +114,7 @@ final class AppModel {
         do {
             try presetLibrary.resetBuiltIn(id: id)
             presets = presetLibrary.presets
+            syncCameraControls()
             invalidateLooks(for: id)
         } catch {
             alert = error.localizedDescription
@@ -123,6 +158,7 @@ final class AppModel {
         do {
             try presetLibrary.removeCustom(id: id)
             presets = presetLibrary.presets
+            syncCameraControls()
             lookCache = lookCache.filter { !$0.key.hasPrefix("\(id)|") }
             covers[id] = nil
             if settings.selectedPresetID == id, let first = presets.first { selectPreset(first.id) }
@@ -166,6 +202,7 @@ final class AppModel {
         settings = updated
         try? settingsStore.save(updated)
         engine.update(settings: updated)
+        syncCameraControls()
         if togglesChanged { pushLooks() }
     }
 
@@ -203,6 +240,7 @@ final class AppModel {
         do {
             try presetLibrary.update(preset)
             presets = presetLibrary.presets
+            syncCameraControls()
             lookCache = lookCache.filter { !$0.key.hasPrefix("\(preset.id)|") }
             if preset.id == settings.selectedPresetID { pushLooks() }
         } catch {

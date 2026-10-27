@@ -417,11 +417,20 @@ struct HoldScrub: ViewModifier {
     let tapped: () -> Void
 
     @State private var start: Int?
+    /// True while the hold lasts. A gesture the system cancels never reaches `onEnded`, but this resets,
+    /// so the control never stays open after the finger is gone.
+    @GestureState private var holding = false
 
     func body(content: Content) -> some View {
         content.gesture(
             LongPressGesture(minimumDuration: 0.18)
                 .sequenced(before: DragGesture(minimumDistance: 0))
+                .updating($holding) { value, state, _ in
+                    switch value {
+                    case .first(true), .second(true, _): state = true
+                    default: break
+                    }
+                }
                 .onChanged { value in
                     switch value {
                     case .first(true):
@@ -446,6 +455,12 @@ struct HoldScrub: ViewModifier {
                 }
                 .exclusively(before: TapGesture().onEnded { tapped() })
         )
+        .onChange(of: holding) { _, now in
+            if !now, start != nil {
+                start = nil
+                ended()
+            }
+        }
     }
 
     private func begin() {
@@ -525,10 +540,10 @@ struct ApertureOverlay: View {
     let fNumber: Double
 
     private var index: Int { PortraitAperture.stops.firstIndex(of: fNumber) ?? 0 }
-    /// 1 wide open, about 0.45 at f/16.
+    /// 1 wide open, 0.3 at f/16: the opening shrinks like real blades closing.
     private var openness: CGFloat {
         let t = log(fNumber / 1.4) / log(16 / 1.4)
-        return CGFloat(1 - 0.55 * t)
+        return CGFloat(1 - 0.7 * t)
     }
 
     var body: some View {
@@ -544,10 +559,10 @@ struct ApertureOverlay: View {
                     Circle().fill(Color(red: 0.95, green: 0.3, blue: 0.15)).frame(width: 64).offset(x: 24, y: 16)
                 }
                 .blur(radius: 14)
-                .frame(width: 110, height: 110)
+                .frame(width: 120, height: 120)
                 .clipShape(shape)
-                .overlay(shape.stroke(.white, lineWidth: 4))
-                .frame(width: 110 * openness + 20, height: 110 * openness + 20)
+                .overlay(shape.stroke(.white, lineWidth: 4 / max(openness, 0.3)))
+                .scaleEffect(openness)
                 .animation(.spring(response: 0.3, dampingFraction: 0.75), value: fNumber)
             }
             .frame(height: 160)
@@ -562,12 +577,9 @@ struct ApertureOverlay: View {
                 .background(Capsule().fill(Color.black.opacity(0.55)))
         }
         .shadow(color: .black.opacity(0.35), radius: 12)
-        .allowsHitTesting(false)
     }
 
-    static func format(_ value: Double) -> String {
-        value == value.rounded() && value >= 10 ? String(Int(value)) : String(format: "%.1f", value)
-    }
+    static func format(_ value: Double) -> String { ApertureTitle.format(value) }
 }
 
 /// The big lens shown while the lens is being dragged: its bokeh in a ring, its name and character.
@@ -602,6 +614,5 @@ struct LensOverlay: View {
                 .background(Capsule().fill(Color.black.opacity(0.55)))
         }
         .shadow(color: .black.opacity(0.35), radius: 12)
-        .allowsHitTesting(false)
     }
 }

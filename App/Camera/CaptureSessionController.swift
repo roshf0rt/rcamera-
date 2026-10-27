@@ -70,6 +70,24 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var lensZoomFactors: [LensID: Double] = [.wide: 1]
     private var photoDelegates: [Int64: PhotoCaptureDelegate] = [:]
 
+    /// One list the Camera Control button can scroll through, e.g. the presets.
+    struct ControlPicker: @unchecked Sendable {
+        var title: String
+        var symbol: String
+        var titles: [String]
+        var selected: Int
+        var pick: (Int) -> Void
+    }
+
+    /// What Camera Control offers besides zoom and exposure. Read on the session queue.
+    private var controlPickers: [ControlPicker] = []
+    /// The titles the installed pickers were built with; a change rebuilds them.
+    private var installedPickerTitles: [[String]] = []
+    private var installedControlsDevice: AVCaptureDevice?
+    /// `AVCaptureIndexPicker`s by title, kept to move their selection when the app changes it.
+    private var indexPickers: [String: AnyObject] = [:]
+    private var controlsDelegate: AnyObject?
+
     override init() {
         hub = FrameHub(queue: captureQueue)
         super.init()
@@ -200,6 +218,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             currentAppleLog = formatPlan.appleLog
             setDepthFormat(on: device)
             configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat)
+            if #available(iOS 18.0, *) { installControls(device: device) }
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
             setPixelFormat(tenBit: formatPlan.appleLog)
@@ -226,6 +245,61 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             appleLogActive: formatPlan.appleLog,
             didReconfigure: structural && wasRunning
         )
+    }
+
+    // MARK: Camera Control
+
+    /// Sets the lists on the Camera Control button (iPhone 16 and later). Only a change of the lists
+    /// themselves rebuilds the controls; a new selection just moves the pickers.
+    func setControlPickers(_ pickers: [ControlPicker]) {
+        sessionQueue.async {
+            self.controlPickers = pickers
+            guard #available(iOS 18.0, *), let device = self.installedControlsDevice else { return }
+            if pickers.map(\.titles) != self.installedPickerTitles || pickers.count != self.installedPickerTitles.count {
+                self.session.beginConfiguration()
+                self.installControls(device: device, force: true)
+                self.session.commitConfiguration()
+            } else {
+                let selections = pickers.map { ($0.title, $0.selected) }
+                DispatchQueue.main.async {
+                    for (title, index) in selections {
+                        (self.indexPickers[title] as? AVCaptureIndexPicker)?.selectedIndex = index
+                    }
+                }
+            }
+        }
+    }
+
+    /// Zoom and exposure as the system draws them, then the app's own pickers. Call inside a configuration.
+    @available(iOS 18.0, *)
+    private func installControls(device: AVCaptureDevice, force: Bool = false) {
+        guard session.supportsControls else { return }
+        guard force || device !== installedControlsDevice || controlPickers.map(\.titles) != installedPickerTitles else { return }
+        if controlsDelegate == nil {
+            let delegate = CameraControlsDelegate()
+            controlsDelegate = delegate
+            session.setControlsDelegate(delegate, queue: sessionQueue)
+        }
+        for control in session.controls { session.removeControl(control) }
+        indexPickers = [:]
+
+        var controls: [AVCaptureControl] = [
+            AVCaptureSystemZoomSlider(device: device),
+            AVCaptureSystemExposureBiasSlider(device: device),
+        ]
+        for item in controlPickers where !item.titles.isEmpty {
+            let picker = AVCaptureIndexPicker(item.title, symbolName: item.symbol, localizedIndexTitles: item.titles)
+            picker.selectedIndex = min(max(item.selected, 0), item.titles.count - 1)
+            let pick = item.pick
+            picker.setActionQueue(.main) { index in pick(index) }
+            indexPickers[item.title] = picker
+            controls.append(picker)
+        }
+        for control in controls.prefix(session.maxControlsCount) where session.canAddControl(control) {
+            session.addControl(control)
+        }
+        installedControlsDevice = device
+        installedPickerTitles = controlPickers.map(\.titles)
     }
 
     private func installOutputsIfNeeded() {
@@ -594,5 +668,21 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
         completion(.init(raw: raw, processed: processed, depth: depth, error: error ?? failure))
+    }
+}
+
+/// Camera Control needs a delegate on the session; RCamera keeps its own interface as it is meanwhile.
+@available(iOS 18.0, *)
+private final class CameraControlsDelegate: NSObject, AVCaptureSessionControlsDelegate {
+    func sessionControlsDidBecomeActive(_ session: AVCaptureSession) {}
+    func sessionControlsWillEnterFullscreenAppearance(_ session: AVCaptureSession) {}
+    func sessionControlsWillExitFullscreenAppearance(_ session: AVCaptureSession) {}
+    func sessionControlsDidBecomeInactive(_ session: AVCaptureSession) {}
+}
+
+/// "1.8", "2.8", "11": f-numbers as camera dials print them.
+enum ApertureTitle {
+    static func format(_ value: Double) -> String {
+        value >= 10 ? String(Int(value.rounded())) : String(format: "%.1f", value)
     }
 }

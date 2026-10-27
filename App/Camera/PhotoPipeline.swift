@@ -127,7 +127,7 @@ enum PhotoPipeline {
             base = nil
         }
         guard let base else { return nil }
-        let blurred = depth.flatMap { portraitBlur(base, depth: $0, fNumber: fNumber) } ?? base
+        let blurred = depth.flatMap { portraitBlur(base, depth: $0, fNumber: fNumber, lens: lens) } ?? base
         let subject = depth == nil ? base : lensLook(blurred, lens: lens)
         let finished = finish(subject, look: look, aspect: aspect, mirror: mirror)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
@@ -194,21 +194,98 @@ enum PhotoPipeline {
         return result
     }
 
+    /// Portrait background blur drawn by the lens: the background (by the depth map) is blurred with
+    /// Core Image's bokeh blur, whose rings and softness come from the lens, then swirled and stretched
+    /// the way the lens draws, and laid back under the sharp subject. Strength follows the f-number.
+    ///
     /// The depth map comes from the sensor's landscape orientation, so it is turned to match the photo.
-    /// Blur strength and orientation were written without a device to check them against.
-    static func portraitBlur(_ image: CIImage, depth: AVDepthData, fNumber: Double) -> CIImage? {
-        let disparity = depth.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat16).depthDataMap
-        let map = CIImage(cvPixelBuffer: disparity).oriented(.right)
+    /// Strengths and orientation were written without a device to check them against.
+    static func portraitBlur(_ image: CIImage, depth: AVDepthData, fNumber: Double, lens: LensStyle) -> CIImage? {
         let extent = image.extent
-        let fitted = map.transformed(by: CGAffineTransform(
-            scaleX: extent.width / map.extent.width,
-            y: extent.height / map.extent.height
-        ))
-        guard let filter = CIFilter(name: "CIDepthBlurEffect") else { return nil }
-        filter.setValue(image, forKey: kCIInputImageKey)
-        filter.setValue(fitted, forKey: "inputDisparityImage")
-        filter.setValue(fNumber, forKey: "inputAperture")
-        return filter.outputImage?.cropped(to: extent)
+        guard let mask = backgroundMask(depth: depth, extent: extent) else { return nil }
+
+        // Wide open is strong, f/16 nearly sharp. Radius in pixels of the full photo.
+        let strength = PortraitAperture.blurStrength(fNumber: fNumber)
+        let radius = Double(min(extent.width, extent.height)) * 0.03 * strength
+        guard radius > 0.5 else { return image }
+
+        // Blur at a quarter size (the result is soft anyway); anamorphic lenses squeeze the frame
+        // sideways first, so round blur turns into tall ovals when it is stretched back.
+        let quarter = 0.25
+        let squeeze = 1 / (1 + 0.5 * max(0, lens.ovality))
+        let small = image.clampedToExtent()
+            .transformed(by: CGAffineTransform(scaleX: quarter * squeeze, y: quarter))
+        guard let bokeh = CIFilter(name: "CIBokehBlur") else { return nil }
+        bokeh.setValue(small, forKey: kCIInputImageKey)
+        bokeh.setValue(radius * quarter, forKey: kCIInputRadiusKey)
+        bokeh.setValue(max(0, lens.rim) * 0.9, forKey: "inputRingAmount")
+        bokeh.setValue(0.02 + 0.16 * lens.rimWidth, forKey: "inputRingSize")
+        bokeh.setValue(lens.rim < 0 ? 3.0 : 0.6, forKey: "inputSoftness")
+        guard var background = bokeh.outputImage?
+            .transformed(by: CGAffineTransform(scaleX: 1 / (quarter * squeeze), y: 1 / quarter))
+        else { return nil }
+
+        // Swirl around the centre for Helios- and Petzval-style lenses.
+        if lens.swirl > 0.05, let twirl = CIFilter(name: "CITwirlDistortion") {
+            twirl.setValue(background, forKey: kCIInputImageKey)
+            twirl.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: kCIInputCenterKey)
+            twirl.setValue(Double(max(extent.width, extent.height)) * 0.7, forKey: kCIInputRadiusKey)
+            twirl.setValue(lens.swirl * 0.5 * strength.squareRoot(), forKey: kCIInputAngleKey)
+            background = twirl.outputImage ?? background
+        }
+        background = background.cropped(to: extent)
+
+        guard let blend = CIFilter(name: "CIBlendWithMask") else { return nil }
+        blend.setValue(background, forKey: kCIInputImageKey)
+        blend.setValue(image, forKey: kCIInputBackgroundImageKey)
+        blend.setValue(mask, forKey: kCIInputMaskImageKey)
+        return blend.outputImage?.cropped(to: extent)
+    }
+
+    /// White where the scene is behind the subject, black on the subject, with a soft edge. The subject is
+    /// whatever is in the middle of the frame, as the portrait focus usually is.
+    private static func backgroundMask(depth: AVDepthData, extent: CGRect) -> CIImage? {
+        let disparity = depth.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32).depthDataMap
+        let map = CIImage(cvPixelBuffer: disparity).oriented(.right)
+        let fitted = map
+            .transformed(by: CGAffineTransform(translationX: -map.extent.minX, y: -map.extent.minY))
+            .transformed(by: CGAffineTransform(scaleX: extent.width / map.extent.width, y: extent.height / map.extent.height))
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+        let centre = CGRect(x: extent.midX - extent.width * 0.15, y: extent.midY - extent.height * 0.15,
+                            width: extent.width * 0.3, height: extent.height * 0.3)
+        guard let focus = averageRed(fitted, in: centre), focus > 0.0001 else { return nil }
+        // Disparity falls with distance: at 85% of the subject's it starts to blur, at 55% fully.
+        let near = focus * 0.85, far = focus * 0.55
+        let gain = 1 / (near - far)
+        guard let matrix = CIFilter(name: "CIColorMatrix") else { return nil }
+        matrix.setValue(fitted, forKey: kCIInputImageKey)
+        let row = CIVector(x: CGFloat(-gain), y: 0, z: 0, w: 0)
+        matrix.setValue(row, forKey: "inputRVector")
+        matrix.setValue(row, forKey: "inputGVector")
+        matrix.setValue(row, forKey: "inputBVector")
+        matrix.setValue(CIVector(x: 0, y: 0, z: 0, w: 0), forKey: "inputAVector")
+        let bias = CGFloat(near * gain)
+        matrix.setValue(CIVector(x: bias, y: bias, z: bias, w: 1), forKey: "inputBiasVector")
+        guard let raw = matrix.outputImage else { return nil }
+        let clamped = raw.applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
+        ])
+        return clamped
+            .clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: Double(min(extent.width, extent.height)) * 0.008])
+            .cropped(to: extent)
+    }
+
+    /// Mean of the red channel over `rect`, unclamped.
+    private static func averageRed(_ image: CIImage, in rect: CGRect) -> Double? {
+        guard let average = CIFilter(name: "CIAreaAverage", parameters: [
+            kCIInputImageKey: image,
+            kCIInputExtentKey: CIVector(cgRect: rect),
+        ])?.outputImage else { return nil }
+        var pixel = [Float](repeating: 0, count: 4)
+        context.render(average, toBitmap: &pixel, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBAf, colorSpace: nil)
+        return Double(pixel[0])
     }
 
     /// Draws a pattern in translucent white over the whole frame. The photo is drawn on top and hides the middle.

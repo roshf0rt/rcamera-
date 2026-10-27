@@ -333,6 +333,9 @@ final class PortraitTests: XCTestCase {
 
     func testStoredValueSnapsToTheNearestStop() {
         XCTAssertEqual(PortraitAperture.nearest(to: 3.1), 2.8)
+        let strengths = PortraitAperture.stops.map { PortraitAperture.blurStrength(fNumber: $0) }
+        XCTAssertEqual(strengths, strengths.sorted(by: >), "the blur weakens as the aperture closes")
+        XCTAssertEqual(PortraitAperture.blurStrength(fNumber: 2.8), 1)
         XCTAssertEqual(PortraitAperture.nearest(to: 30), 16)
     }
 
