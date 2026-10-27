@@ -14,11 +14,7 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     /// How the selected lens draws the live portrait background. Nil when portrait mode is off.
     struct PortraitLook: Equatable {
         var strength: Float
-        var swirl: Float
-        var squeeze: Float
-        var vignette: Float
-        var boost: Float
-        var softness: Float
+        var lens: LensStyle
     }
 
     struct Geometry {
@@ -230,11 +226,8 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         let aspect = aspect, mirror = mirror
         let portrait: PortraitPass? = {
             guard let portraitLook, let depth else { return nil }
-            return PortraitPass(
-                depth: depth.map, depthRotated: depthRotated, focus: depth.focus,
-                strength: portraitLook.strength, swirl: portraitLook.swirl, squeeze: portraitLook.squeeze,
-                vignette: portraitLook.vignette, boost: portraitLook.boost, softness: portraitLook.softness
-            )
+            return PortraitPass(depth: depth.map, depthRotated: depthRotated, focus: depth.focus,
+                                strength: portraitLook.strength, lens: portraitLook.lens)
         }()
         let separateRecordStream = recordOutput != nil
         let isRecordStream = separateRecordStream && output === recordOutput

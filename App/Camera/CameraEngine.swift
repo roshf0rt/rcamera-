@@ -387,7 +387,7 @@ final class CameraEngine {
     /// 10-bit Apple Log frames pick the Apple Log look by themselves. If the camera can only deliver
     /// Apple Log as BGRA, every video frame is log while it is active.
     private func updateHub() {
-        let look: FilmLook
+        var look: FilmLook
         if mode == .photo {
             look = looks.photo
         } else if appleLogActive, let appleLog = looks.appleLog {
@@ -395,6 +395,7 @@ final class CameraEngine {
         } else {
             look = looks.video
         }
+        if portraitLook != nil { look = look.with { settings.lensStyle.apply(to: &$0) } }
         controller.hub.configure(
             look: look,
             logLook: mode == .video ? looks.appleLog : nil,
@@ -407,15 +408,7 @@ final class CameraEngine {
     /// How the chosen lens and f-number draw the live portrait background; nil outside portrait photos.
     private var portraitLook: FrameHub.PortraitLook? {
         guard settings.portrait, mode == .photo, lens != .front else { return nil }
-        let style = settings.lensStyle
-        return FrameHub.PortraitLook(
-            strength: Float(PortraitAperture.blurStrength(fNumber: settings.portraitFNumber)),
-            swirl: Float(style.swirl),
-            squeeze: Float(1 / (1 + 0.5 * max(0, style.ovality))),
-            vignette: Float(style.vignette),
-            boost: Float(0.3 + 0.7 * max(0, style.rim)),
-            softness: style.rim < 0 ? 1.4 : 1
-        )
+        return FrameHub.PortraitLook(strength: Float(PortraitAperture.blurStrength(fNumber: settings.portraitFNumber)), lens: settings.lensStyle)
     }
 
     // MARK: Photo

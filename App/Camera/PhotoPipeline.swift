@@ -187,68 +187,39 @@ enum PhotoPipeline {
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
     }
 
-    /// Blurs the background of a portrait photo with Core Image's depth blur, driven by the photo's depth map.
-    /// The lens character on top of the blur: vignetting at the edges and a glow around the highlights.
-    /// The look's colour fringing comes from the lens too, through `LensStyle.apply(to:)`.
+    /// The lens's vignette on a portrait photo, the same fall-off as the viewfinder's: untouched inside 30% of
+    /// the half diagonal, darkening to the corners. The lens's colour fringing and glow come through the look,
+    /// through `LensStyle.apply(to:)`.
     static func lensLook(_ image: CIImage, lens: LensStyle) -> CIImage {
-        var result = image
-        if let vignette = CIFilter(name: "CIVignette") {
-            vignette.setValue(result, forKey: kCIInputImageKey)
-            vignette.setValue(-lens.vignette, forKey: kCIInputIntensityKey)
-            vignette.setValue(1.5, forKey: kCIInputRadiusKey)
-            result = vignette.outputImage?.cropped(to: image.extent) ?? result
-        }
-        if let bloom = CIFilter(name: "CIBloom") {
-            bloom.setValue(result, forKey: kCIInputImageKey)
-            bloom.setValue(lens.ring * 0.5, forKey: kCIInputIntensityKey)
-            bloom.setValue(10 + lens.highlightSpread * 20, forKey: kCIInputRadiusKey)
-            result = bloom.outputImage?.cropped(to: image.extent) ?? result
-        }
-        return result
+        guard lens.vignette > 0.001 else { return image }
+        let extent = image.extent
+        let halfDiagonal = CGFloat(hypot(extent.width, extent.height)) * 0.5
+        let edge = CGFloat(1 - lens.vignette * 0.9)
+        let filter = CIFilter(name: "CIRadialGradient")
+        filter?.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: "inputCenter")
+        filter?.setValue(halfDiagonal * 0.3, forKey: "inputRadius0")
+        filter?.setValue(halfDiagonal * 0.95, forKey: "inputRadius1")
+        filter?.setValue(CIColor(red: 1, green: 1, blue: 1), forKey: "inputColor0")
+        filter?.setValue(CIColor(red: edge, green: edge, blue: edge), forKey: "inputColor1")
+        guard let gradient = filter?.outputImage else { return image }
+        return image
+            .applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: gradient.cropped(to: extent)])
+            .cropped(to: extent)
     }
 
-    /// Portrait background blur drawn by the lens: the background (by the depth map) is blurred with
-    /// Core Image's bokeh blur, whose rings and softness come from the lens, then swirled and stretched
-    /// the way the lens draws, and laid back under the sharp subject. Strength follows the f-number.
+    /// Portrait background blur drawn by the lens: the background (by the depth map) goes through the same
+    /// Metal gather as the viewfinder, in the lens's own shape (blades, rim, cat's eye, ovality, swirl), and is
+    /// laid back under the sharp subject. Strength follows the f-number.
     ///
     /// The depth map comes from the sensor's landscape orientation, so it is turned to match the photo.
     /// Strengths and orientation were written without a device to check them against.
     static func portraitBlur(_ image: CIImage, depth: AVDepthData, fNumber: Double, lens: LensStyle) -> CIImage? {
         let extent = image.extent
         guard let mask = backgroundMask(depth: depth, extent: extent) else { return nil }
-
-        // Wide open is strong, f/16 nearly sharp. Radius in pixels of the full photo.
         let strength = PortraitAperture.blurStrength(fNumber: fNumber)
-        let radius = Double(min(extent.width, extent.height)) * 0.03 * strength
-        guard radius > 0.5 else { return image }
-
-        // Blur at a quarter size (the result is soft anyway); anamorphic lenses squeeze the frame
-        // sideways first, so round blur turns into tall ovals when it is stretched back.
-        let quarter = 0.25
-        let squeeze = 1 / (1 + 0.5 * max(0, lens.ovality))
-        let small = image.clampedToExtent()
-            .transformed(by: CGAffineTransform(scaleX: quarter * squeeze, y: quarter))
-        guard let bokeh = CIFilter(name: "CIBokehBlur") else { return nil }
-        bokeh.setValue(small, forKey: kCIInputImageKey)
-        bokeh.setValue(radius * quarter, forKey: kCIInputRadiusKey)
-        bokeh.setValue(max(0, lens.rim) * 0.9, forKey: "inputRingAmount")
-        bokeh.setValue(0.02 + 0.16 * lens.rimWidth, forKey: "inputRingSize")
-        bokeh.setValue(lens.rim < 0 ? 3.0 : 0.6, forKey: "inputSoftness")
-        guard var background = bokeh.outputImage?
-            .transformed(by: CGAffineTransform(scaleX: 1 / (quarter * squeeze), y: 1 / quarter))
+        guard let background = MetalGrader.shared?.portraitBackground(image: image, mask: mask, lens: lens, strength: strength, context: context),
+              let blend = CIFilter(name: "CIBlendWithMask")
         else { return nil }
-
-        // Swirl around the centre for Helios- and Petzval-style lenses.
-        if lens.swirl > 0.05, let twirl = CIFilter(name: "CITwirlDistortion") {
-            twirl.setValue(background, forKey: kCIInputImageKey)
-            twirl.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: kCIInputCenterKey)
-            twirl.setValue(Double(max(extent.width, extent.height)) * 0.7, forKey: kCIInputRadiusKey)
-            twirl.setValue(lens.swirl * 0.5 * strength.squareRoot(), forKey: kCIInputAngleKey)
-            background = twirl.outputImage ?? background
-        }
-        background = background.cropped(to: extent)
-
-        guard let blend = CIFilter(name: "CIBlendWithMask") else { return nil }
         blend.setValue(background, forKey: kCIInputImageKey)
         blend.setValue(image, forKey: kCIInputBackgroundImageKey)
         blend.setValue(mask, forKey: kCIInputMaskImageKey)

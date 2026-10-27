@@ -333,16 +333,14 @@ struct CameraView: View {
             .modifier(pillScrub(.aperture))
 
             HStack(spacing: 8) {
-                LensPreview(lens: model.settings.lensStyle)
-                    .frame(width: 24, height: 24)
-                    .clipShape(Circle())
+                Image(systemName: "circle.hexagongrid")
+                    .font(.system(size: 15, weight: .semibold))
                 Text(model.settings.lensStyle.label)
                     .font(.system(size: 14, weight: .semibold))
                     .tracking(0.6)
             }
             .foregroundStyle(dial == .lens ? Theme.accent : .white)
-            .padding(.leading, 7)
-            .padding(.trailing, 14)
+            .padding(.horizontal, 14)
             .frame(height: 38)
             .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
             .scaleEffect(dial == .lens ? 1.08 : 1)

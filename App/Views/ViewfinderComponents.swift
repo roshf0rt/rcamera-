@@ -609,7 +609,7 @@ struct ApertureOverlay: View {
     static func format(_ value: Double) -> String { ApertureTitle.format(value) }
 }
 
-/// The big lens shown while the lens is being dragged: its bokeh in a ring, its name and character.
+/// The big lens shown while the lens is being dragged: its name in a ring, the scale of lenses and its character.
 struct LensOverlay: View {
     let lens: LensStyle
 
@@ -621,10 +621,10 @@ struct LensOverlay: View {
                 Circle()
                     .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [0.1, 10]))
                     .frame(width: 150, height: 150)
-                LensPreview(lens: lens)
-                    .frame(width: 118, height: 118)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(.white, lineWidth: 3))
+                Text(lens.label)
+                    .font(.system(size: 30, weight: .semibold))
+                    .tracking(1.5)
+                    .foregroundStyle(.white)
                     .id(lens)
                     .transition(.scale(scale: 0.85).combined(with: .opacity))
             }

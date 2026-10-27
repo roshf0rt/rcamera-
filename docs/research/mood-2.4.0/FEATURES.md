@@ -28,7 +28,7 @@
 | Съёмка с задержкой без задержки (zero shutter lag, responsive capture) | `isZeroShutterLagSupported`, `isResponsiveCaptureSupported`, `setFastCapturePrioritization` | не сделано | в нашей схеме фото идёт через 4:3-формат; нужна отдельная проверка |
 | Отключение звука затвора | `isShutterSoundSuppressionSupported` | не сделано | в iOS звук отключается не везде, не проверено |
 | Портретный режим (фото с глубиной, блюр фона) | `BokehPipeline`, `setDepthDataDelivery…`, режим P | добавлено | `CIDepthBlurEffect` по карте глубины, выбор ƒ-числа; живого блюра в видоискателе нет; без проверки на устройстве |
-| Объективы-стили (LUMA и ещё 6) | `LensPresets.bundle` | не сделано | зависит от глубины; параметры описаны в `DATA_MODEL.md` |
+| Объективы-стили (LUMA и ещё 6) | `LensPresets.bundle` | добавлено | форму боке рисует `lensBokeh` по параметрам из `DATA_MODEL.md` |
 | HDR gain map (Ultra HDR) | `CIHdrGainMapFromImage`, `GainMapToIsoMapFilter`, `setAutomaticallyAdjustsVideoHDREnabled`, `hdrHeadroom` | не сделано | нужен вывод gain map в JPEG/HEIC через ImageIO |
 | Виджет на экране блокировки | `LockedWidgetExtension.appex` | не сделано | отдельный таргет WidgetKit |
 | Locked-расширение | `LockedExtension.appex` | не сделано | отдельный таргет; назначение уточнить |

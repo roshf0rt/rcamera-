@@ -2,8 +2,8 @@ import Foundation
 
 /// The seven lens looks of mood.camera, for portrait photos. Each one sets vignetting, the glow of
 /// highlights, the lateral colour fringing and the bokeh character. Parameters are from mood.camera 2.4.0
-/// (docs/research/mood-2.4.0/DATA_MODEL.md). The app draws the portrait blur with Core Image's depth blur, so
-/// the bokeh shape (blades, cat's eye, swirl) is approximated by the glow and vignetting only.
+/// (docs/research/mood-2.4.0/DATA_MODEL.md). `LensKernel` turns the bokeh parameters (blades, rim, cat's eye,
+/// ovality, swirl) into the sample pattern of the portrait blur, so each lens blurs in its own shape.
 public enum LensStyle: String, CaseIterable, Codable, Sendable {
     case solis
     case lumar
@@ -169,6 +169,11 @@ public enum LensStyle: String, CaseIterable, Codable, Sendable {
         case .animor: 0
         case .hexon: 0.06
         }
+    }
+
+    /// How much the bright points swell into bokeh balls: more for ringed lenses and for glowing ones.
+    public var highlightBoost: Double {
+        0.25 + 0.6 * max(0, rim) + 0.5 * highlightSpread
     }
 
     /// Writes this lens's fringing into a look, so the photo's own colour fringing follows the lens.

@@ -376,43 +376,86 @@ final class LensStyleTests: XCTestCase {
         XCTAssertEqual(LensStyle.hexon.bladeCount, 6)
     }
 
-    func testBokehLightsAreStableAndInsideTheFrame() {
-        let lights = LensBokeh.lights()
-        XCTAssertEqual(lights, LensBokeh.lights())
-        XCTAssertEqual(lights.count, 34)
-        for light in lights {
-            XCTAssertTrue((-0.05 ... 1.05).contains(light.x))
-            XCTAssertTrue((-0.05 ... 1.05).contains(light.y))
-            XCTAssertGreaterThan(light.radius, 0)
-        }
-    }
-
-    func testBokehShapesFollowTheLens() {
-        let centre = LensBokeh.Light(x: 0.5, y: 0.5, radius: 0.1, red: 1, green: 1, blue: 1, brightness: 1)
-        let corner = LensBokeh.Light(x: 0.95, y: 0.95, radius: 0.1, red: 1, green: 1, blue: 1, brightness: 1)
-        let clean = LensBokeh.shape(of: centre, lens: .solis)
-        XCTAssertEqual(clean.radialScale, 1, accuracy: 1e-9)
-        XCTAssertEqual(clean.tangentialScale, 1, accuracy: 1e-9)
-        XCTAssertNil(clean.catsEyeCut)
-        let swirled = LensBokeh.shape(of: corner, lens: .petzval)
-        XCTAssertLessThan(swirled.radialScale, 1, "cat's eye squeezes towards the edge")
-        XCTAssertGreaterThan(swirled.tangentialScale, 1.3, "swirl stretches around the centre")
-        XCTAssertNotNil(swirled.catsEyeCut)
-        let oval = LensBokeh.shape(of: centre, lens: .animor)
-        XCTAssertGreaterThan(oval.tangentialScale, 1.4, "anamorphic is tall at the centre")
-    }
-
-    func testBokehProfiles() {
-        // Soap bubbles: hollow centre, bright rim.
-        XCTAssertLessThan(LensBokeh.profile(0.2, lens: .trinity), LensBokeh.profile(0.95, lens: .trinity))
-        // Dreamy: full in the middle, fading to nothing at the edge.
-        XCTAssertEqual(LensBokeh.profile(0, lens: .lumar), 1)
-        XCTAssertLessThan(LensBokeh.profile(0.99, lens: .lumar), 0.05)
-        for lens in LensStyle.allCases {
-            for t in stride(from: 0.0, through: 1.0, by: 0.05) {
-                XCTAssertTrue((0 ... 1).contains(LensBokeh.profile(t, lens: lens)), "\(lens) \(t)")
+    func testRoundLensesStayInsideTheDisc() {
+        for lens in [LensStyle.solis, .trinity, .helion] {
+            for index in 0 ..< LensKernel.sampleCount {
+                guard let tap = LensKernel.tap(index: index, rotation: 0.4, lens: lens, spot: .centre) else {
+                    return XCTFail("a round lens cuts nothing at the centre")
+                }
+                let reach = (tap.offset.x * tap.offset.x + tap.offset.y * tap.offset.y).squareRoot()
+                XCTAssertLessThanOrEqual(reach, 1.0001, "\(lens) \(index)")
             }
         }
+    }
+
+    func testHexagonLensFillsASixSidedShape() {
+        let hexagon = LensKernel.signature(of: .hexon)
+        let round = LensKernel.signature(of: .solis)
+        // The corners of the hexagon reach past the disc, the flats stay inside it.
+        XCTAssertGreaterThan(hexagon.cornerness, 1.03)
+        XCTAssertLessThan(round.cornerness, 1.0001)
+        for index in 0 ..< LensKernel.sampleCount {
+            let tap = LensKernel.tap(index: index, rotation: 0, lens: .hexon, spot: .centre)!
+            let angle = atan2(tap.offset.y, tap.offset.x)
+            let sector = Float.pi / 3
+            let local = angle - sector * (angle / sector).rounded(.down) - sector / 2
+            let reach = (tap.offset.x * tap.offset.x + tap.offset.y * tap.offset.y).squareRoot()
+            let limit = LensKernel.polygonFill(blades: 6) * cos(sector / 2) / cos(local)
+            XCTAssertLessThanOrEqual(reach, limit + 1e-4)
+        }
+    }
+
+    func testCatsEyeCutsSamplesOnlyTowardsTheEdge() {
+        let centre = LensKernel.signature(of: .petzval)
+        XCTAssertGreaterThan(centre.cutShare, 0.1, "Petzval clips its bokeh at the edge")
+        XCTAssertEqual(LensKernel.signature(of: .hexon).cutShare, LensKernel.signature(of: .hexon).cutShare)
+        for index in 0 ..< LensKernel.sampleCount {
+            XCTAssertNotNil(LensKernel.tap(index: index, rotation: 0, lens: .petzval, spot: .centre), "no cut at the centre")
+        }
+    }
+
+    func testAnamorphicBokehIsTallAndPetzvalIsWide() {
+        let anamorphic = LensKernel.signature(of: .animor)
+        XCTAssertGreaterThan(anamorphic.height, anamorphic.width * 1.3)
+        let petzval = LensKernel.signature(of: .petzval)
+        XCTAssertGreaterThan(petzval.width, petzval.height)
+    }
+
+    func testRimLensesPutTheirWeightOnTheRim() {
+        // Soap bubbles: a hollow centre, a bright rim.
+        XCTAssertLessThan(LensKernel.ringWeight(rho: 0.2, lens: .trinity), LensKernel.ringWeight(rho: 0.97, lens: .trinity))
+        XCTAssertGreaterThan(LensKernel.signature(of: .trinity).rimShare, 0.5)
+        // Dreamy: strongest in the middle, fading towards the edge.
+        XCTAssertGreaterThan(LensKernel.ringWeight(rho: 0.05, lens: .lumar), LensKernel.ringWeight(rho: 0.98, lens: .lumar) * 3)
+        XCTAssertLessThan(LensKernel.signature(of: .lumar).rimShare, 0.2)
+        for lens in LensStyle.allCases {
+            for rho in stride(from: Float(0), through: 1, by: 0.05) {
+                XCTAssertGreaterThan(LensKernel.ringWeight(rho: rho, lens: lens), 0, "\(lens) \(rho)")
+            }
+        }
+    }
+
+    func testEveryLensDrawsItsBlurDifferently() {
+        let lenses = LensStyle.allCases
+        for (index, first) in lenses.enumerated() {
+            for second in lenses[(index + 1)...] {
+                let a = LensKernel.signature(of: first), b = LensKernel.signature(of: second)
+                let spread = abs(a.width - b.width) + abs(a.height - b.height) + abs(a.rimShare - b.rimShare)
+                    + abs(a.cutShare - b.cutShare) + abs(a.cornerness - b.cornerness)
+                XCTAssertGreaterThan(spread, 0.03, "\(first) and \(second) blur alike")
+            }
+        }
+    }
+
+    func testFieldCurvatureAndSwirlGrowTowardsTheCorners() {
+        let corner = LensKernel.Spot(edge: 1, radial: SIMD2(1, 0))
+        XCTAssertEqual(LensKernel.radiusScale(lens: .solis, spot: corner), 1, accuracy: 1e-6)
+        XCTAssertGreaterThan(LensKernel.radiusScale(lens: .petzval, spot: corner), 1.4)
+        XCTAssertEqual(LensKernel.twirlAngle(lens: .solis, radius: 0.5), 0)
+        XCTAssertGreaterThan(LensKernel.twirlAngle(lens: .petzval, radius: 0.5), LensKernel.twirlAngle(lens: .helion, radius: 0.5))
+        let spot = LensKernel.spot(uv: SIMD2(1, 0.5), aspect: 1.2)
+        XCTAssertEqual(spot.edge, 1)
+        XCTAssertEqual(spot.radial.x, 1, accuracy: 1e-6)
     }
 
     func testApplyWritesFringingIntoTheLook() {

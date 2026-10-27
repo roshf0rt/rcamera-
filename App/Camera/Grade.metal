@@ -58,6 +58,14 @@ struct GradeParams {
     float swirl;
     float lensVignette;
     float bokehBoost;     // how much highlights swell into bokeh balls
+    // The lens's bokeh, mirrored in CameraCore/LensKernel.swift: aperture blades, cat's eye, ovality, rim.
+    int blades;           // 0 for a round opening
+    float catsEye;
+    float ovality;
+    float rim;
+    float rimWidth;
+    float fringing;       // red and blue rims of the bokeh drift apart
+    float bokehRadius;    // blur radius in pixels of the small bokeh texture
 };
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
@@ -181,12 +189,31 @@ static float3 gradeColor(float3 source, texture3d<float> lut, constant GradePara
     return mix(regulated, graded, p.filmStrength);
 }
 
-/// The graded picture at reduced size with its highlights swollen, blurred afterwards into the portrait
-/// background. The texture may be squeezed sideways; stretched back it turns round blur into tall ovals.
+/// NaN and infinity test on the bits, which fast math cannot optimise away.
+static inline bool finiteValue(float x) {
+    return (as_type<uint>(x) & 0x7f800000u) != 0x7f800000u;
+}
+
+/// 0 on the subject, 1 on the background, from the depth map, for the crop pixel `outputPoint`.
+/// Holes in the depth map count as the subject, so they stay sharp instead of going black.
+static float portraitMask(texture2d<float> depth, uint2 outputPoint, constant GradeParams &p) {
+    float2 sp = (float2(sourcePoint(outputPoint, p)) + 0.5) / float2(float(p.sourceWidth), float(p.sourceHeight));
+    float2 duv = p.depthRotated != 0 ? sp : float2(sp.y, 1.0 - sp.x);
+    float d = depth.sample(linearClamp, duv).r;
+    if (!finiteValue(d)) {
+        d = p.depthFocus;
+    }
+    float mask = saturate((p.depthFocus * 0.85 - d) / max(p.depthFocus * 0.3, 0.0001));
+    return finiteValue(mask) ? mask : 0.0;
+}
+
+/// The graded picture at reduced size with its highlights swollen into bokeh balls, and the background
+/// mask in alpha. `lensBokeh` blurs it into the portrait background.
 kernel void bokehSource(texture2d<float, access::read> luma [[texture(0)]],
                         texture2d<float, access::read> chroma [[texture(1)]],
                         texture3d<float> lut [[texture(2)]],
                         texture2d<float, access::write> small [[texture(3)]],
+                        texture2d<float> depth [[texture(4)]],
                         constant GradeParams &p [[buffer(0)]],
                         uint2 gid [[thread_position_in_grid]]) {
     uint w = small.get_width();
@@ -199,7 +226,122 @@ kernel void bokehSource(texture2d<float, access::read> luma [[texture(0)]],
     float3 c = gradeColor(readSource(luma, chroma, sourcePoint(outputPoint, p), p), lut, p);
     float y = dot(c, kLuma);
     c += c * p.bokehBoost * smoothstep(0.55, 1.0, y) * 2.5;
-    small.write(float4(c, 1.0), gid);
+    small.write(float4(c, portraitMask(depth, outputPoint, p)), gid);
+}
+
+/// For saved photos: the photo at reduced size with highlights swollen, and the mask in alpha.
+kernel void packPortrait(texture2d<float, access::read> colour [[texture(0)]],
+                         texture2d<float, access::read> mask [[texture(1)]],
+                         texture2d<float, access::write> small [[texture(2)]],
+                         constant GradeParams &p [[buffer(0)]],
+                         uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= small.get_width() || gid.y >= small.get_height()) {
+        return;
+    }
+    float3 c = max(colour.read(gid).rgb, 0.0);
+    float y = dot(c, kLuma);
+    c += c * p.bokehBoost * smoothstep(0.55, 1.0, y) * 2.5;
+    small.write(float4(c, saturate(mask.read(gid).r)), gid);
+}
+
+/// The scene twisted about the centre, more towards the corners: the swirl of Helios- and Petzval-style lenses.
+static float2 lensTwirl(float2 uv, float aspect, float swirl) {
+    float2 c = (uv - 0.5) * float2(aspect, 1.0);
+    float a = swirl * 1.2 * dot(c, c);
+    float s = sin(a);
+    float k = cos(a);
+    float2 turned = float2(c.x * k - c.y * s, c.x * s + c.y * k);
+    return turned / float2(aspect, 1.0) + 0.5;
+}
+
+constant int kBokehTaps = 96;
+
+/// The portrait background: every pixel gathers 96 samples laid out the way the lens draws a point of light.
+/// Blades make polygons, the rim a bright ring with a hollow centre or a soft fade, the cat's eye clips the
+/// bokeh towards the edges, ovality stretches it, swirl twists it. Samples on the subject count for little,
+/// so the subject does not bleed into the background. Mirrors `LensKernel.tap`.
+kernel void lensBokeh(texture2d<float> source [[texture(0)]],
+                      texture2d<float, access::write> result [[texture(1)]],
+                      constant GradeParams &p [[buffer(0)]],
+                      uint2 gid [[thread_position_in_grid]]) {
+    uint w = result.get_width();
+    uint h = result.get_height();
+    if (gid.x >= w || gid.y >= h) {
+        return;
+    }
+    float2 size = float2(float(w), float(h));
+    float aspect = size.x / size.y;
+    float2 uv = (float2(gid) + 0.5) / size;
+    float4 here = source.sample(linearClamp, uv);
+    if (here.a < 0.02) {
+        result.write(float4(here.rgb, 1.0), gid);
+        return;
+    }
+
+    float2 centred = (uv - 0.5) * float2(aspect, 1.0);
+    float distanceFromCentre = length(centred);
+    float edge = saturate(distanceFromCentre / 0.55);
+    float2 radial = distanceFromCentre > 0.0001 ? centred / distanceFromCentre : float2(0.0, 1.0);
+    float2 tangent = float2(-radial.y, radial.x);
+    // Near the subject's edge the blur starts small, so the outline does not halo.
+    float radius = p.bokehRadius * mix(0.3, 1.0, smoothstep(0.0, 0.7, here.a)) * (1.0 + 0.45 * p.swirl * edge * edge);
+
+    float catsShift = p.catsEye * pow(edge, 1.5) * 0.9;
+    float stretch = 1.0 + 0.7 * p.swirl * edge;
+    float ovalScale = max(0.3, 1.0 + 0.9 * p.ovality);
+    float2 oval = float2(rsqrt(ovalScale), sqrt(ovalScale));
+    float bladeCount = float(max(p.blades, 3));
+    float sector = 6.2831853 / bladeCount;
+    float polygonFill = sqrt(3.1415927 / (0.5 * bladeCount * sin(sector)));
+    float fringe = 0.12 * p.fringing;
+    // A different turn of the pattern at every pixel hides its structure.
+    float rotation = fract(52.9829189 * fract(dot(float2(gid), float2(0.06711056, 0.00583715)))) * 6.2831853;
+
+    float3 sum = float3(0.0);
+    float total = 0.0;
+    for (int i = 0; i < kBokehTaps; i++) {
+        float rho = sqrt((float(i) + 0.5) / float(kBokehTaps));
+        float theta = float(i) * 2.3999632 + rotation;
+        float2 u = rho * float2(cos(theta), sin(theta));
+
+        float weight;
+        if (p.rim >= 0.0) {
+            weight = 1.0 + (0.25 + 3.0 * smoothstep(1.0 - p.rimWidth, 1.0, rho) - 1.0) * p.rim;
+        } else {
+            weight = 1.0 + (exp(-2.5 * rho * rho) - 1.0) * -p.rim;
+        }
+        if (p.blades >= 3) {
+            float angle = atan2(u.y, u.x);
+            float inSector = angle - sector * floor(angle / sector) - 0.5 * sector;
+            float k = cos(0.5 * sector) / cos(inSector);
+            u *= k * polygonFill;
+            weight *= k * k;
+        }
+        if (catsShift > 0.01) {
+            float2 halfShift = radial * (catsShift * 0.5);
+            if (length(u - halfShift) > 1.0 || length(u + halfShift) > 1.0) {
+                continue;
+            }
+        }
+        if (stretch != 1.0) {
+            u = radial * dot(u, radial) + tangent * (dot(u, tangent) * stretch);
+        }
+        u *= oval;
+
+        float2 offset = u * radius / size;
+        float4 s = source.sample(linearClamp, lensTwirl(uv + offset, aspect, p.swirl));
+        float3 c = s.rgb;
+        if (fringe > 0.01) {
+            // Red from a little further out and blue from a little further in: rims fringed like a real lens.
+            c.r = source.sample(linearClamp, lensTwirl(uv + offset * (1.0 + fringe), aspect, p.swirl)).r;
+            c.b = source.sample(linearClamp, lensTwirl(uv + offset * (1.0 - fringe), aspect, p.swirl)).b;
+        }
+        float w8 = weight * (s.a + 0.02);
+        sum += c * w8;
+        total += w8;
+    }
+    float3 colour = total > 0.0001 ? sum / total : here.rgb;
+    result.write(float4(max(colour, 0.0), 1.0), gid);
 }
 
 /// Highlight mask at reduced size. Each thread samples the graded color at the middle of its block.
@@ -221,11 +363,6 @@ kernel void halationMask(texture2d<float, access::read> luma [[texture(0)]],
     float k = saturate(7.5 * t);
     float m = k * k * (3.0 - 2.0 * k) * t * t;
     mask.write(float4(m, m, m, 1.0), gid);
-}
-
-/// NaN and infinity test on the bits, which fast math cannot optimise away.
-static inline bool finiteValue(float x) {
-    return (as_type<uint>(x) & 0x7f800000u) != 0x7f800000u;
 }
 
 kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
@@ -256,25 +393,12 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
     float2 uv = (float2(gid) + 0.5) / float2(float(p.width), float(p.height));
 
     if (p.hasPortrait != 0) {
-        float2 sp = (float2(sourcePoint(gid, p)) + 0.5) / float2(float(p.sourceWidth), float(p.sourceHeight));
-        float2 duv = p.depthRotated != 0 ? sp : float2(sp.y, 1.0 - sp.x);
-        float d = depth.sample(linearClamp, duv).r;
-        // Holes in the depth map count as the subject, so they stay sharp instead of going black.
-        if (!finiteValue(d)) {
-            d = p.depthFocus;
-        }
-        float mask = saturate((p.depthFocus * 0.85 - d) / max(p.depthFocus * 0.3, 0.0001));
-        if (!finiteValue(mask)) {
-            mask = 0.0;
-        }
-        float2 centred = uv - 0.5;
-        float r = length(centred * float2(float(p.width) / float(p.height), 1.0));
-        float a = p.swirl * 1.1 * r * r;
-        float2 turned = float2(centred.x * cos(a) - centred.y * sin(a), centred.x * sin(a) + centred.y * cos(a));
-        float3 background = bokeh.sample(linearClamp, turned + 0.5).rgb;
+        float mask = portraitMask(depth, gid, p);
+        float3 background = bokeh.sample(linearClamp, uv).rgb;
         if (finiteValue(background.r) && finiteValue(background.g) && finiteValue(background.b)) {
             color = mix(color, saturate(background), mask);
         }
+        float2 centred = uv - 0.5;
         color *= 1.0 - p.lensVignette * 0.9 * smoothstep(0.3, 0.95, length(centred) * 1.414);
     }
 

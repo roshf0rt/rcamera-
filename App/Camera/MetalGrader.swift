@@ -53,6 +53,27 @@ private struct GradeParams {
     var swirl: Float = 0
     var lensVignette: Float = 0
     var bokehBoost: Float = 0
+    var blades: Int32 = 0
+    var catsEye: Float = 0
+    var ovality: Float = 0
+    var rim: Float = 0
+    var rimWidth: Float = 0
+    var fringing: Float = 0
+    var bokehRadius: Float = 0
+
+    /// How `lens` draws the background, with a blur radius of `radius` pixels in the small bokeh texture.
+    mutating func setLens(_ lens: LensStyle, radius: Float) {
+        swirl = Float(lens.swirl)
+        lensVignette = Float(lens.vignette)
+        bokehBoost = Float(lens.highlightBoost)
+        blades = Int32(lens.bladeCount)
+        catsEye = Float(lens.catsEye)
+        ovality = Float(lens.ovality)
+        rim = Float(lens.rim)
+        rimWidth = Float(lens.rimWidth)
+        fringing = Float(lens.fringing)
+        bokehRadius = radius
+    }
 }
 
 /// The live portrait background for one frame: the depth map and how the lens draws it.
@@ -64,13 +85,7 @@ struct PortraitPass {
     var focus: Float
     /// 1 at f/2.8, stronger wide open.
     var strength: Float
-    var swirl: Float
-    /// Below 1 squeezes the blur sideways, for tall anamorphic ovals.
-    var squeeze: Float
-    var vignette: Float
-    var boost: Float
-    /// Bigger for soft, dreamy lenses.
-    var softness: Float
+    var lens: LensStyle
 }
 
 /// Applies a `FilmLook` on the GPU in one pass, like Lampa's Ironstone: camera pixel, LUT, halation, grain.
@@ -85,8 +100,10 @@ final class MetalGrader: @unchecked Sendable {
     private let gradeState: MTLComputePipelineState
     private let maskState: MTLComputePipelineState
     private let bokehState: MTLComputePipelineState
+    private let lensState: MTLComputePipelineState
+    private let packState: MTLComputePipelineState
     private let emptyColor: MTLTexture
-    private var bokehCache: [Int: (raw: MTLTexture, blurred: MTLTexture)] = [:]
+    private var bokehCache: [Int: BokehTargets] = [:]
     private let textureCache: CVMetalTextureCache
     private let grainTextures: [MTLTexture]
     private let emptyLUT: MTLTexture
@@ -106,9 +123,13 @@ final class MetalGrader: @unchecked Sendable {
               let gradeFunction = library.makeFunction(name: "grade"),
               let maskFunction = library.makeFunction(name: "halationMask"),
               let bokehFunction = library.makeFunction(name: "bokehSource"),
+              let lensFunction = library.makeFunction(name: "lensBokeh"),
+              let packFunction = library.makeFunction(name: "packPortrait"),
               let gradeState = try? device.makeComputePipelineState(function: gradeFunction),
               let maskState = try? device.makeComputePipelineState(function: maskFunction),
-              let bokehState = try? device.makeComputePipelineState(function: bokehFunction)
+              let bokehState = try? device.makeComputePipelineState(function: bokehFunction),
+              let lensState = try? device.makeComputePipelineState(function: lensFunction),
+              let packState = try? device.makeComputePipelineState(function: packFunction)
         else { return nil }
 
         var cache: CVMetalTextureCache?
@@ -134,6 +155,8 @@ final class MetalGrader: @unchecked Sendable {
         self.gradeState = gradeState
         self.maskState = maskState
         self.bokehState = bokehState
+        self.lensState = lensState
+        self.packState = packState
         self.emptyColor = emptyColor
         self.textureCache = cache
         self.grainTextures = grains
@@ -275,28 +298,27 @@ final class MetalGrader: @unchecked Sendable {
         var bokehTexture = emptyColor
         if let portrait,
            let depth = texture(from: portrait.depth, plane: nil, format: .r16Float, holders: &holders),
-           let targets = bokehTargets(width: crop.width, height: crop.height, squeeze: portrait.squeeze, cached: cachedMasks),
+           let targets = bokehTargets(width: crop.width, height: crop.height, cached: cachedMasks),
            let encoder = commandBuffer.makeComputeCommandEncoder() {
             params.hasPortrait = 1
             params.depthRotated = portrait.depthRotated ? 1 : 0
             params.sourceWidth = Int32(CVPixelBufferGetWidth(source))
             params.sourceHeight = Int32(CVPixelBufferGetHeight(source))
             params.depthFocus = portrait.focus
-            params.swirl = portrait.swirl
-            params.lensVignette = portrait.vignette
-            params.bokehBoost = portrait.boost
+            let radius = Self.bokehRadius(width: targets.raw.width, height: targets.raw.height, strength: portrait.strength)
+            params.setLens(portrait.lens, radius: radius)
             encoder.setComputePipelineState(bokehState)
             encoder.setTexture(luma, index: 0)
             encoder.setTexture(chroma, index: 1)
             encoder.setTexture(lut ?? emptyLUT, index: 2)
             encoder.setTexture(targets.raw, index: 3)
+            encoder.setTexture(depth, index: 4)
             encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
             dispatch(encoder, state: bokehState, width: targets.raw.width, height: targets.raw.height)
             encoder.endEncoding()
-            let sigma = max(1, Float(min(targets.raw.width, targets.raw.height)) * 0.018 * portrait.strength * portrait.softness)
-            blur(sigma: (sigma * 4).rounded() / 4, cached: cachedMasks).encode(commandBuffer: commandBuffer, sourceTexture: targets.raw, destinationTexture: targets.blurred)
+            encodeLensBokeh(commandBuffer, from: targets.raw, through: targets.gathered, into: targets.smooth, params: &params, cached: cachedMasks)
             depthTexture = depth
-            bokehTexture = targets.blurred
+            bokehTexture = targets.smooth
         }
 
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return false }
@@ -391,9 +413,16 @@ final class MetalGrader: @unchecked Sendable {
         return (raw, blurred)
     }
 
-    /// The portrait background at a quarter of the frame, narrower still for anamorphic lenses.
-    private func bokehTargets(width: Int, height: Int, squeeze: Float, cached: Bool) -> (raw: MTLTexture, blurred: MTLTexture)? {
-        let targetWidth = max(8, Int(Float(width / 4) * squeeze))
+    /// The textures of the portrait background at a quarter of the frame: the graded picture with the mask
+    /// in alpha, the lens's gather of it, and that gather lightly smoothed.
+    private struct BokehTargets {
+        var raw: MTLTexture
+        var gathered: MTLTexture
+        var smooth: MTLTexture
+    }
+
+    private func bokehTargets(width: Int, height: Int, cached: Bool) -> BokehTargets? {
+        let targetWidth = max(8, width / 4)
         let targetHeight = max(8, height / 4)
         let key = targetWidth << 16 | targetHeight
         if cached {
@@ -405,14 +434,97 @@ final class MetalGrader: @unchecked Sendable {
         descriptor.usage = [.shaderRead, .shaderWrite]
         descriptor.storageMode = .private
         guard let raw = device.makeTexture(descriptor: descriptor),
-              let blurred = device.makeTexture(descriptor: descriptor)
+              let gathered = device.makeTexture(descriptor: descriptor),
+              let smooth = device.makeTexture(descriptor: descriptor)
         else { return nil }
+        let targets = BokehTargets(raw: raw, gathered: gathered, smooth: smooth)
         if cached {
             lock.lock()
-            bokehCache[key] = (raw, blurred)
+            bokehCache[key] = targets
             lock.unlock()
         }
-        return (raw, blurred)
+        return targets
+    }
+
+    /// Blur radius in pixels of the small bokeh texture: 4.5% of its short side at f/2.8.
+    private static func bokehRadius(width: Int, height: Int, strength: Float) -> Float {
+        Float(min(width, height)) * 0.045 * strength
+    }
+
+    /// The lens's gather of `raw` into `gathered`, then a light blur into `smooth` that hides the sample pattern.
+    private func encodeLensBokeh(_ commandBuffer: MTLCommandBuffer, from raw: MTLTexture, through gathered: MTLTexture, into smooth: MTLTexture, params: inout GradeParams, cached: Bool) {
+        if let encoder = commandBuffer.makeComputeCommandEncoder() {
+            encoder.setComputePipelineState(lensState)
+            encoder.setTexture(raw, index: 0)
+            encoder.setTexture(gathered, index: 1)
+            encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
+            dispatch(encoder, state: lensState, width: gathered.width, height: gathered.height)
+            encoder.endEncoding()
+        }
+        let sigma = max(0.8, params.bokehRadius * 0.07)
+        blur(sigma: (sigma * 4).rounded() / 4, cached: cached).encode(commandBuffer: commandBuffer, sourceTexture: gathered, destinationTexture: smooth)
+    }
+
+    /// The background of a portrait photo drawn by `lens`: the photo (and its background `mask`, white behind
+    /// the subject) at up to 1280 px goes through the same gather as the viewfinder, and comes back as a
+    /// picture the size of `image` to be laid under the sharp subject.
+    func portraitBackground(image: CIImage, mask: CIImage, lens: LensStyle, strength: Double, context: CIContext) -> CIImage? {
+        let extent = image.extent.integral
+        guard extent.width > 1, extent.height > 1 else { return nil }
+        let scale = min(1, 1280 / max(extent.width, extent.height))
+        let width = max(8, Int(extent.width * scale) & ~1)
+        let height = max(8, Int(extent.height * scale) & ~1)
+        guard let colour = Self.makePixelBuffer(width: width, height: height, format: kCVPixelFormatType_64RGBAHalf),
+              let maskBuffer = Self.makePixelBuffer(width: width, height: height, format: kCVPixelFormatType_32BGRA),
+              let output = Self.makePixelBuffer(width: width, height: height, format: kCVPixelFormatType_64RGBAHalf),
+              let space = CGColorSpace(name: CGColorSpace.extendedSRGB)
+        else { return nil }
+
+        let shrink = CGAffineTransform(translationX: -extent.minX, y: -extent.minY)
+            .concatenating(CGAffineTransform(scaleX: CGFloat(width) / extent.width, y: CGFloat(height) / extent.height))
+        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        context.render(image.transformed(by: shrink), to: colour, bounds: bounds, colorSpace: space)
+        context.render(mask.transformed(by: shrink), to: maskBuffer, bounds: bounds, colorSpace: nil)
+
+        var holders: [CVMetalTexture] = []
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        descriptor.storageMode = .private
+        guard let colourTexture = texture(from: colour, plane: nil, format: .rgba16Float, holders: &holders),
+              let maskTexture = texture(from: maskBuffer, plane: nil, format: .bgra8Unorm, holders: &holders),
+              let outputTexture = texture(from: output, plane: nil, format: .rgba16Float, holders: &holders),
+              let packed = device.makeTexture(descriptor: descriptor),
+              let gathered = device.makeTexture(descriptor: descriptor),
+              let smooth = device.makeTexture(descriptor: descriptor),
+              let commandBuffer = queue.makeCommandBuffer()
+        else { return nil }
+
+        var params = GradeParams()
+        params.setLens(lens, radius: Self.bokehRadius(width: width, height: height, strength: Float(strength)))
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
+        encoder.setComputePipelineState(packState)
+        encoder.setTexture(colourTexture, index: 0)
+        encoder.setTexture(maskTexture, index: 1)
+        encoder.setTexture(packed, index: 2)
+        encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
+        dispatch(encoder, state: packState, width: width, height: height)
+        encoder.endEncoding()
+        encodeLensBokeh(commandBuffer, from: packed, through: gathered, into: smooth, params: &params, cached: false)
+        // The pixel buffer's texture is not made for writing by a blur, so the result is copied into it.
+        if let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.copy(from: smooth, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                      sourceSize: MTLSize(width: width, height: height, depth: 1),
+                      to: outputTexture, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+            blit.endEncoding()
+        }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        withExtendedLifetime(holders) {}
+        guard commandBuffer.status == .completed else { return nil }
+
+        return CIImage(cvPixelBuffer: output, options: [.colorSpace: space])
+            .transformed(by: CGAffineTransform(scaleX: extent.width / CGFloat(width), y: extent.height / CGFloat(height)))
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
     }
 
     /// The glow spreads about 1.5% of the short side, whatever the resolution.
