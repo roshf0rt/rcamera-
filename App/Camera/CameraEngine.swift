@@ -106,7 +106,7 @@ final class CameraEngine {
         settings = new
         if new.videoFormat != old.videoFormat, !isRecording {
             send(.updateVideoConfiguration(new.videoFormat))
-        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.photoResolution != old.photoResolution), !isRecording {
+        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.photoResolution != old.photoResolution), !isRecording {
             Task { await applyConfig() }
         } else {
             reapplyIfAppleLogChanged()
@@ -284,6 +284,7 @@ final class CameraEngine {
             digitalZoom: digitalZoom,
             exposureBias: evBias,
             wantsRAW: settings.capturesRAW,
+            rawFormat: settings.rawFormat,
             photoResolution: settings.photoResolution
         )
         let info = await controller.apply(config)
@@ -357,7 +358,7 @@ final class CameraEngine {
         let mirror = mirrorsOutput
         let aspect = settings.aspect
         let portrait = settings.portrait
-        controller.capturePhoto(flash: settings.flash, wantsRAW: settings.capturesRAW, portrait: portrait) { [weak self] outcome in
+        controller.capturePhoto(flash: settings.flash, wantsRAW: settings.capturesRAW, rawFormat: settings.rawFormat, portrait: portrait) { [weak self] outcome in
             Task { @MainActor in
                 guard let self else { return }
                 self.isCapturing = false

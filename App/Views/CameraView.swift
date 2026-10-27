@@ -85,7 +85,7 @@ struct CameraView: View {
                         .background(Color.black.opacity(0.55))
                         .background(.ultraThinMaterial)
                         .frame(width: geo.size.width)
-                        .offset(y: geo.size.height - controlsHeight - 120)
+                        .offset(y: geo.size.height - controlsHeight - 112)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
 
@@ -404,7 +404,7 @@ struct CameraView: View {
                 }
                 .frame(width: 58, height: 58)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.7), lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.15), lineWidth: 1))
             }
             .buttonStyle(.plain)
             .frame(width: 72, alignment: .leading)
@@ -424,24 +424,27 @@ struct CameraView: View {
 
     private var presetButton: some View {
         let preset = model.selectedPreset
+        let style = PresetCardStyle.of(preset)
         return Button { withAnimation(.easeOut(duration: 0.2)) { showPresets.toggle(); showOptions = false } } label: {
-            ZStack(alignment: .bottom) {
-                PresetArtView(preset: preset)
-                LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
-                Text(preset.name.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
+            ZStack(alignment: .bottomLeading) {
+                PresetSwatch(preset: preset, corner: 14)
+                Text(preset.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(style.light ? Color.black : Color.white)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .padding(.horizontal, 4)
-                    .padding(.bottom, 5)
+                    .minimumScaleFactor(0.5)
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
             }
             .frame(width: 58, height: 58)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(showPresets ? Theme.accent : Color.white.opacity(0.3), lineWidth: showPresets ? 2 : 1))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(showPresets ? Theme.accent : Color.white.opacity(0.15), lineWidth: showPresets ? 2 : 1)
+            )
             .frame(width: 64, height: 64)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Presets, \(preset.name)")
     }
 
     private func modeRow(engine: CameraEngine) -> some View {

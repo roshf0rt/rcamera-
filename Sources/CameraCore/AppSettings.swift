@@ -63,6 +63,20 @@ public enum DigitalZoomStop: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// Which RAW the camera keeps. ProRAW is Apple's merged, tone-mapped DNG; Bayer is the single sensor frame,
+/// flatter and noisier, closer to a classic camera RAW.
+public enum RAWFormat: String, CaseIterable, Codable, Sendable {
+    case proRAW
+    case bayer
+
+    public var label: String {
+        switch self {
+        case .proRAW: "ProRAW"
+        case .bayer: "Bayer RAW"
+        }
+    }
+}
+
 /// The dynamic-range control on the camera screen: keep the preset's value, or force one of the five steps.
 public enum DynamicRangeChoice: String, CaseIterable, Codable, Sendable {
     case preset
@@ -107,6 +121,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var isLevelEnabled = false
     public var mirrorFrontCamera = true
     public var capturesRAW = true
+    /// Photos are developed from this RAW when one is captured (flash off, not portrait).
+    public var rawFormat: RAWFormat = .proRAW
     public var savesLocation = true
     public var digitalZoomStop: DigitalZoomStop = .none
     /// Quick toggles on the camera screen. The amounts come from the selected preset.
@@ -145,7 +161,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
-        case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, savesLocation, digitalZoomStop
+        case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, rawFormat, savesLocation, digitalZoomStop
         case grainEnabled, halationEnabled, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle, photoResolution
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, revision
     }
@@ -163,6 +179,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         isLevelEnabled = (try? c.decode(Bool.self, forKey: .isLevelEnabled)) ?? isLevelEnabled
         mirrorFrontCamera = (try? c.decode(Bool.self, forKey: .mirrorFrontCamera)) ?? mirrorFrontCamera
         capturesRAW = (try? c.decode(Bool.self, forKey: .capturesRAW)) ?? capturesRAW
+        rawFormat = (try? c.decode(RAWFormat.self, forKey: .rawFormat)) ?? rawFormat
         savesLocation = (try? c.decode(Bool.self, forKey: .savesLocation)) ?? savesLocation
         digitalZoomStop = (try? c.decode(DigitalZoomStop.self, forKey: .digitalZoomStop)) ?? digitalZoomStop
         grainEnabled = (try? c.decode(Bool.self, forKey: .grainEnabled)) ?? grainEnabled

@@ -93,9 +93,8 @@ struct PresetEditorView: View {
     private var nameBar: some View {
         HStack(spacing: 12) {
             if let preset {
-                PresetArtView(preset: preset, override: nil)
+                PresetSwatch(preset: preset)
                     .frame(width: 56, height: 40)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             TextField("Name", text: $name)
                 .font(.system(size: 20, weight: .semibold))

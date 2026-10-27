@@ -269,60 +269,58 @@ struct EVBubble: View {
     }
 }
 
-/// The panel under the "..." button. Photo mode: Flash, Timer, Aspect, Frame. Video mode: FPS, Resolution, Stabilization.
+/// The panel under the "..." button, a grid of four fixed-width cells per row so labels never wrap.
+/// Photo: Flash, Timer, Aspect, Frame, Range, Portrait, Size. Video: FPS, Resolution, Range, Stabilization.
 struct OptionsPanel: View {
     let mode: CaptureMode
     let settings: AppSettings
     let update: ((inout AppSettings) -> Void) -> Void
     let openDynamicRange: () -> Void
 
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 4)
+
     var body: some View {
-        HStack {
+        LazyVGrid(columns: columns, spacing: 14) {
             if mode == .photo { photoOptions } else { videoOptions }
         }
-        .padding(.vertical, 20)
-        .frame(maxWidth: .infinity)
-        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 24))
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
         .padding(.horizontal, 8)
+        .padding(.vertical, 14)
+        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(.horizontal, 10)
     }
 
     @ViewBuilder
     private var photoOptions: some View {
         option(title: "Flash", active: settings.flash != .off, action: { update { $0.flash = $0.flash.next } }) {
-            Image(systemName: flashSymbol).font(.system(size: 26))
+            Image(systemName: flashSymbol).font(.system(size: 22))
         }
-        option(title: "Timer", active: settings.timer != .off, action: { update { $0.timer = $0.timer.next } }) {
-            ZStack {
-                Image(systemName: "timer").font(.system(size: 26))
-                if settings.timer != .off {
-                    Text("\(settings.timer.seconds)").font(.system(size: 11, weight: .bold)).offset(y: 3)
-                }
-            }
+        option(title: settings.timer == .off ? "Timer" : "\(settings.timer.seconds)s", active: settings.timer != .off, action: { update { $0.timer = $0.timer.next } }) {
+            Image(systemName: "timer").font(.system(size: 22))
         }
         option(title: "Aspect", active: false, action: { update { $0.aspect = $0.aspect.next } }) {
             ZStack {
-                Image(systemName: "viewfinder").font(.system(size: 34, weight: .light))
-                Text(settings.aspect.label).font(.system(size: 11, weight: .semibold))
+                Image(systemName: "viewfinder").font(.system(size: 28, weight: .light))
+                Text(settings.aspect.label).font(.system(size: 9, weight: .semibold))
             }
         }
-        option(title: "Frame", active: settings.frame != .off, action: { update { $0.frame = $0.frame.next } }) {
-            Image(systemName: "rectangle.inset.filled").font(.system(size: 26))
+        option(title: settings.frame == .off ? "Frame" : settings.frame.label, active: settings.frame != .off, action: { update { $0.frame = $0.frame.next } }) {
+            Image(systemName: "rectangle.inset.filled").font(.system(size: 22))
         }
         dynamicRangeOption
         option(title: "Portrait", active: settings.portrait, action: { update { $0.portrait.toggle() } }) {
-            Image(systemName: "person.crop.circle").font(.system(size: 26))
+            Image(systemName: "person.crop.circle").font(.system(size: 22))
         }
-        option(title: "Resolution", active: settings.photoResolution != .mp12, action: { update { $0.photoResolution = $0.photoResolution.next } }) {
-            Text(settings.photoResolution.label).font(.system(size: 20, weight: .semibold))
+        option(title: "Size", active: settings.photoResolution != .mp12, action: { update { $0.photoResolution = $0.photoResolution.next } }) {
+            Text(settings.photoResolution.label).font(.system(size: 16, weight: .semibold))
         }
     }
 
     private var dynamicRangeOption: some View {
-        option(title: "Dynamic range", active: settings.dynamicRange != .preset, action: openDynamicRange) {
-            VStack(spacing: 2) {
-                Text("DR").font(.system(size: 18, weight: .bold))
-                Text(settings.dynamicRange.label).font(.system(size: 10, weight: .semibold))
+        option(title: "Range", active: settings.dynamicRange != .preset, action: openDynamicRange) {
+            VStack(spacing: 1) {
+                Text("DR").font(.system(size: 15, weight: .bold))
+                Text(settings.dynamicRange.label).font(.system(size: 8, weight: .semibold))
             }
         }
     }
@@ -330,21 +328,22 @@ struct OptionsPanel: View {
     @ViewBuilder
     private var videoOptions: some View {
         option(title: "FPS", active: false, action: { update { $0.videoFPS = Self.nextFPS($0.videoFPS) } }) {
-            Text("\(settings.videoFPS)").font(.system(size: 24, weight: .semibold))
+            Text("\(settings.videoFPS)").font(.system(size: 18, weight: .semibold))
         }
         option(title: "Resolution", active: false, action: {
             update { $0.videoResolution = $0.videoResolution == .hd1080 ? .uhd4K : .hd1080 }
         }) {
-            Text(settings.videoResolution.label).font(.system(size: 24, weight: .semibold))
+            Text(settings.videoResolution.label).font(.system(size: 18, weight: .semibold))
         }
         dynamicRangeOption
-        option(title: "Stabilization", active: false, action: { update { $0.videoStabilization = $0.videoStabilization.next } }) {
+        option(title: "Stabilize", active: settings.videoStabilization != .off, action: { update { $0.videoStabilization = $0.videoStabilization.next } }) {
             Text(settings.videoStabilization.label)
-                .font(.system(size: 14, weight: .bold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(settings.videoStabilization == .off ? 0.1 : 0.28)))
-                .foregroundStyle(settings.videoStabilization == .off ? Theme.secondaryText : .white)
+                .font(.system(size: 12, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(settings.videoStabilization == .off ? 0.1 : 0.28)))
         }
     }
 
@@ -363,48 +362,49 @@ struct OptionsPanel: View {
 
     private func option<Icon: View>(title: String, active: Bool, action: @escaping () -> Void, @ViewBuilder icon: () -> Icon) -> some View {
         Button(action: action) {
-            VStack(spacing: 10) {
-                icon().frame(height: 38)
-                Text(title).font(.system(size: 16, weight: .medium))
+            VStack(spacing: 6) {
+                icon().frame(height: 30)
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
             .foregroundStyle(active ? Theme.accent : .white)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 }
 
-/// The strip under the top bar for the dynamic-range control: one tap picks a step.
+/// The strip under the top bar for the dynamic-range control: one tap picks a step. Equal cells, one line.
 struct DynamicRangeStrip: View {
     let selected: DynamicRangeChoice
     let pick: (DynamicRangeChoice) -> Void
 
     var body: some View {
-        HStack(spacing: 18) {
-            Image(systemName: "rectangle.dashed")
-                .font(.system(size: 22))
-                .frame(width: 52, height: 52)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.chrome))
+        HStack(spacing: 4) {
             ForEach(DynamicRangeChoice.allCases, id: \.self) { choice in
                 Button { pick(choice) } label: {
                     Text(choice.label)
-                        .font(.system(size: 15, weight: .medium))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(choice == selected ? Theme.accent : .clear, lineWidth: 1)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .foregroundStyle(choice == selected ? Theme.accent : .white.opacity(0.7))
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(choice == selected ? Color.white.opacity(0.14) : .clear)
                         )
-                        .foregroundStyle(choice == selected ? Theme.accent : Theme.secondaryText)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-        .background(Color.black.opacity(0.6))
-        .background(.ultraThinMaterial)
+        .padding(6)
+        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.horizontal, 10)
     }
 }
 

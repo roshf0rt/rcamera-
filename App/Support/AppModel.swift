@@ -18,8 +18,6 @@ final class AppModel {
     private(set) var presets: [Preset]
     private(set) var captures: [CaptureRecord]
     private(set) var processingCount = 0
-    /// Card picture and words for each preset, built from its LUT (see `LUTCardArt`, `LUTProfile`).
-    private(set) var presetArt: [String: PresetArt] = [:]
     var alert: String?
 
     @ObservationIgnored private let presetLibrary: PresetLibrary
@@ -58,7 +56,6 @@ final class AppModel {
             Task { @MainActor in self?.engine.shutterTapped() }
         }
         pushLooks()
-        refreshArt()
     }
 
     /// Adds a custom preset as a copy of the selected one, and selects it so it can be edited right away.
@@ -67,7 +64,6 @@ final class AppModel {
         do {
             let added = try presetLibrary.addCustom(copying: source)
             presets = presetLibrary.presets
-            refreshArt(for: [added.id])
             selectPreset(added.id)
         } catch {
             alert = error.localizedDescription
@@ -80,7 +76,6 @@ final class AppModel {
             try presetLibrary.removeCustom(id: id)
             presets = presetLibrary.presets
             lookCache = lookCache.filter { !$0.key.hasPrefix("\(id)|") }
-            presetArt[id] = nil
             if settings.selectedPresetID == id, let first = presets.first { selectPreset(first.id) }
         } catch {
             alert = error.localizedDescription
@@ -190,27 +185,6 @@ final class AppModel {
     private func invalidateLooks(for presetID: String) {
         lookCache = lookCache.filter { !$0.key.hasPrefix("\(presetID)|") }
         if presetID == settings.selectedPresetID { pushLooks() }
-        refreshArt(for: [presetID])
-    }
-
-    /// Parses the photo LUT (or the video one) of each preset off the main thread and keeps only its card art.
-    private func refreshArt(for ids: [String]? = nil) {
-        let targets = (ids ?? presets.map(\.id)).map { id in
-            (id, presetLibrary.lutURL(for: id, slot: .photo) ?? presetLibrary.lutURL(for: id, slot: .video), Self.previewURL(for: id))
-        }
-        Task {
-            for (id, url, preview) in targets {
-                presetArt[id] = await Task.detached(priority: .utility) {
-                    PresetArt.make(lut: Self.parseLUT(url), previewURL: preview)
-                }.value
-            }
-        }
-    }
-
-    /// `Previews/preset-<n>.jpg` in the bundle, if the picture was added.
-    nonisolated static func previewURL(for presetID: String) -> URL? {
-        Bundle.main.url(forResource: presetID, withExtension: "png", subdirectory: "Previews")
-            ?? Bundle.main.url(forResource: presetID, withExtension: "jpg", subdirectory: "Previews")
     }
 
     nonisolated static func parseLUT(_ url: URL?) -> LUT3D? {

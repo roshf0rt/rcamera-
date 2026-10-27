@@ -35,6 +35,8 @@ private struct GradeParams {
     var highlights: Float = 0
     var fade: Float = 0
     var shoulderKnee: Float = 1
+    var shadowLift: Float = 0
+    var crush: Float = 0
     var saturation: Float = 1
     var hueCos: Float = 1
     var hueSin: Float = 0
@@ -130,6 +132,10 @@ final class MetalGrader: @unchecked Sendable {
             guard let texture = texture(from: source, plane: nil, format: .bgra8Unorm, holders: &holders) else { return false }
             luma = texture
             chroma = texture
+        case kCVPixelFormatType_64RGBAHalf:
+            guard let texture = texture(from: source, plane: nil, format: .rgba16Float, holders: &holders) else { return false }
+            luma = texture
+            chroma = texture
         case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
             guard let y = texture(from: source, plane: 0, format: .r16Unorm, holders: &holders),
                   let c = texture(from: source, plane: 1, format: .rg16Unorm, holders: &holders)
@@ -142,7 +148,8 @@ final class MetalGrader: @unchecked Sendable {
         default:
             return false
         }
-        guard let destination = texture(from: output, plane: nil, format: .bgra8Unorm, holders: &holders),
+        let outputFormat: MTLPixelFormat = CVPixelBufferGetPixelFormatType(output) == kCVPixelFormatType_64RGBAHalf ? .rgba16Float : .bgra8Unorm
+        guard let destination = texture(from: output, plane: nil, format: outputFormat, holders: &holders),
               destination.width == crop.width, destination.height == crop.height
         else { return false }
 
@@ -186,6 +193,8 @@ final class MetalGrader: @unchecked Sendable {
         params.highlights = Float(regulators.highlights)
         params.fade = Float(regulators.fade)
         params.shoulderKnee = Float(regulators.shoulderKnee)
+        params.shadowLift = Float(regulators.shadowLift)
+        params.crush = Float(regulators.crush)
         params.saturation = Float(regulators.saturation)
         params.hueCos = Float(regulators.hueCos)
         params.hueSin = Float(regulators.hueSin)
@@ -244,33 +253,41 @@ final class MetalGrader: @unchecked Sendable {
         return commandBuffer.status == .completed
     }
 
-    /// Grades a still image. The image is rendered to sRGB first, the space the LUTs expect.
+    /// Largest still graded in half float. Above it (48 MP) two half-float buffers would cost over 700 MB,
+    /// so those are graded in 8 bits like the viewfinder.
+    static let halfFloatPixelLimit = 25_000_000
+
+    /// Grades a still image. The image is rendered with the sRGB curve first, the encoding the LUTs expect.
+    /// Up to `halfFloatPixelLimit` it is rendered in half float and extended sRGB: shadows keep their
+    /// gradations and a developed RAW keeps its highlights above white for the dynamic-range roll-off.
     func grade(image: CIImage, look: FilmLook, context: CIContext) -> CIImage? {
         let extent = image.extent.integral
         let width = Int(extent.width) & ~1
         let height = Int(extent.height) & ~1
+        let halfFloat = width * height <= Self.halfFloatPixelLimit
+        let format = halfFloat ? kCVPixelFormatType_64RGBAHalf : kCVPixelFormatType_32BGRA
         guard width > 0, height > 0,
-              let input = Self.makePixelBuffer(width: width, height: height),
-              let output = Self.makePixelBuffer(width: width, height: height),
-              let sRGB = CGColorSpace(name: CGColorSpace.sRGB)
+              let input = Self.makePixelBuffer(width: width, height: height, format: format),
+              let output = Self.makePixelBuffer(width: width, height: height, format: format),
+              let space = CGColorSpace(name: halfFloat ? CGColorSpace.extendedSRGB : CGColorSpace.sRGB)
         else { return nil }
 
         let placed = image.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
-        context.render(placed, to: input, bounds: CGRect(x: 0, y: 0, width: width, height: height), colorSpace: sRGB)
+        context.render(placed, to: input, bounds: CGRect(x: 0, y: 0, width: width, height: height), colorSpace: space)
         let crop = CropRect(x: 0, y: 0, width: width, height: height)
         guard grade(source: input, crop: crop, mirror: false, look: look, into: output, cachedMasks: false) else { return nil }
-        return CIImage(cvPixelBuffer: output, options: [.colorSpace: sRGB])
+        return CIImage(cvPixelBuffer: output, options: [.colorSpace: space])
     }
 
     // MARK: Helpers
 
-    static func makePixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+    static func makePixelBuffer(width: Int, height: Int, format: OSType = kCVPixelFormatType_32BGRA) -> CVPixelBuffer? {
         let attributes: [String: Any] = [
             kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
             kCVPixelBufferMetalCompatibilityKey as String: true,
         ]
         var buffer: CVPixelBuffer?
-        CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &buffer)
+        CVPixelBufferCreate(nil, width, height, format, attributes as CFDictionary, &buffer)
         return buffer
     }
 

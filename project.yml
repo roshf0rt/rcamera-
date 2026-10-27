@@ -15,10 +15,7 @@ targets:
       - path: App
         excludes:
           - Resources/LUTs/**
-          - Resources/Previews/**
       - path: App/Resources/LUTs
-        type: folder
-      - path: App/Resources/Previews
         type: folder
     dependencies:
       - package: RCamera

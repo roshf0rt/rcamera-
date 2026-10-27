@@ -23,6 +23,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var digitalZoom: Double
         var exposureBias: Double
         var wantsRAW: Bool
+        var rawFormat: RAWFormat
         var photoResolution: PhotoResolution
     }
 
@@ -198,14 +199,14 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             currentFormatIndex = formatPlan.index
             currentAppleLog = formatPlan.appleLog
             setDepthFormat(on: device)
-            configurePhotoOutput(device: device, resolution: config.photoResolution)
+            configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat)
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
             setPixelFormat(tenBit: formatPlan.appleLog)
         }
 
         // A new photo size does not need a new format, so it is applied on every configuration.
-        if !structural { configurePhotoOutput(device: device, resolution: config.photoResolution) }
+        if !structural { configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat) }
 
         // RAW is what Redevelop works from. If the chosen format has none, fall back to the photo preset once.
         if structural, config.mode == .photo, config.wantsRAW, position == .back, formatPlan.index != nil,
@@ -321,8 +322,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// 12 MP photos (or the closest the format offers) and ProRAW where the format supports it.
-    private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution) {
+    /// 12 MP photos (or the closest the format offers), and ProRAW where the format supports it unless Bayer RAW is wanted.
+    private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution, rawFormat: RAWFormat) {
         let dimensions = device.activeFormat.supportedMaxPhotoDimensions
         let limit = resolution.pixelLimit ?? Int.max
         let fitting = dimensions.filter { Int($0.width) * Int($0.height) <= limit }
@@ -331,8 +332,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             let current = photoOutput.maxPhotoDimensions
             if current.width != best.width || current.height != best.height { photoOutput.maxPhotoDimensions = best }
         }
-        if photoOutput.isAppleProRAWSupported != photoOutput.isAppleProRAWEnabled {
-            photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
+        let proRAW = photoOutput.isAppleProRAWSupported && rawFormat == .proRAW
+        if proRAW != photoOutput.isAppleProRAWEnabled {
+            photoOutput.isAppleProRAWEnabled = proRAW
         }
         if photoOutput.isDepthDataDeliverySupported != photoOutput.isDepthDataDeliveryEnabled {
             photoOutput.isDepthDataDeliveryEnabled = photoOutput.isDepthDataDeliverySupported
@@ -511,14 +513,15 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     // MARK: Photo
 
     /// `portrait` asks for a depth map with the photo. RAW is skipped then, because depth is delivered with the processed image.
-    func capturePhoto(flash: FlashMode, wantsRAW: Bool, portrait: Bool, completion: @escaping @Sendable (PhotoOutcome) -> Void) {
+    func capturePhoto(flash: FlashMode, wantsRAW: Bool, rawFormat: RAWFormat, portrait: Bool, completion: @escaping @Sendable (PhotoOutcome) -> Void) {
         sessionQueue.async {
             let codec: AVVideoCodecType = self.photoOutput.availablePhotoCodecTypes.contains(.hevc) ? .hevc : .jpeg
             let settings: AVCapturePhotoSettings
             let rawTypes = self.photoOutput.availableRawPhotoPixelFormatTypes
-            // ProRAW carries Apple's own tone mapping, so it develops much closer to the camera's look than Bayer RAW.
-            let rawType = rawTypes.first { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }
-                ?? rawTypes.first { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
+            // ProRAW carries Apple's merge and tone mapping; Bayer RAW is the plain sensor frame. Either falls back to the other.
+            let proRAW = rawTypes.first { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }
+            let bayer = rawTypes.first { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
+            let rawType = rawFormat == .bayer ? bayer ?? proRAW : proRAW ?? bayer
             if wantsRAW, !portrait, flash == .off, let rawType {
                 settings = AVCapturePhotoSettings(rawPixelFormatType: rawType, processedFormat: [AVVideoCodecKey: codec])
                 settings.photoQualityPrioritization = .speed

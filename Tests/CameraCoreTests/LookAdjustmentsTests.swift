@@ -37,17 +37,47 @@ final class LookAdjustmentsTests: XCTestCase {
         XCTAssertGreaterThan(ToneMath.regulate(SIMD3(0.6, 0.6, 0.6), look).x, 0.6)
     }
 
-    func testRollOffKeepsHighlightsBelowOneAndMonotonic() {
+    func testExtendedRangeRollsHeadroomUnderWhiteAndStaysMonotonic() {
         var look = LookAdjustments.neutral
-        look.dynamicRange = 0.5
+        look.dynamicRange = 1.5
         var previous = -1.0
-        for step in 0 ... 20 {
+        // Half-float photos can carry highlights above 1; they must stay distinct instead of clipping.
+        for step in 0 ... 40 {
             let value = ToneMath.regulate(SIMD3(Double(step) / 20, 0, 0), look).x
-            XCTAssertLessThanOrEqual(value, 1)
+            XCTAssertLessThan(value, 1)
             XCTAssertGreaterThanOrEqual(value, previous)
             previous = value
         }
-        XCTAssertLessThan(ToneMath.regulate(SIMD3(1, 1, 1), look).x, 1)
+        XCTAssertGreaterThan(ToneMath.regulate(SIMD3(1.5, 1.5, 1.5), look).x, ToneMath.regulate(SIMD3(1, 1, 1), look).x)
+        XCTAssertGreaterThan(ToneMath.regulate(SIMD3(0.15, 0.15, 0.15), look).x, 0.15, "shadows lift")
+        XCTAssertEqual(ToneMath.regulate(SIMD3(0, 0, 0), look).x, 0, accuracy: 1e-12, "black stays black")
+    }
+
+    func testHighRangeIsNeutralAndClipsHeadroom() {
+        let curve = DynamicRangeCurve(1)
+        XCTAssertEqual([curve.knee, curve.shadowLift, curve.crush], [1, 0, 0])
+        for x in stride(from: 0.0, through: 1.0, by: 0.1) {
+            XCTAssertEqual(curve.apply(x), x, accuracy: 1e-12)
+        }
+        XCTAssertEqual(ToneMath.regulate(SIMD3(1.4, 1.4, 1.4), .neutral).x, 1)
+    }
+
+    func testLowRangeCrushesShadowsAndHighlights() {
+        var look = LookAdjustments.neutral
+        look.dynamicRange = 0
+        XCTAssertLessThan(ToneMath.regulate(SIMD3(0.2, 0.2, 0.2), look).x, 0.2)
+        XCTAssertGreaterThan(ToneMath.regulate(SIMD3(0.8, 0.8, 0.8), look).x, 0.8)
+        XCTAssertEqual(ToneMath.regulate(SIMD3(0.5, 0.5, 0.5), look).x, 0.5, accuracy: 1e-12)
+        XCTAssertEqual(ToneMath.regulate(SIMD3(1, 1, 1), look).x, 1, accuracy: 1e-12)
+    }
+
+    func testRangeStepsGetFlatterAsTheyGoUp() {
+        let steps = [0, 1.0 / 3, 2.0 / 3, 1, 1.5]
+        let shadow = steps.map { DynamicRangeCurve($0).apply(0.2) }
+        let white = steps.map { DynamicRangeCurve($0).apply(1.0) }
+        XCTAssertEqual(shadow, shadow.sorted(), "shadows open up step by step")
+        XCTAssertEqual(white.prefix(4).map { ($0 * 1e9).rounded() }, [1e9, 1e9, 1e9, 1e9])
+        XCTAssertLessThan(white[4], 1, "only EXT+ pulls white down to make room for headroom")
     }
 
     func testRegulatedOutputStaysInRange() {
@@ -161,6 +191,8 @@ final class RegulatorUniformsTests: XCTestCase {
         XCTAssertEqual(u.exposure, 1)
         XCTAssertEqual(u.contrast, 1)
         XCTAssertEqual(u.shoulderKnee, 1)
+        XCTAssertEqual(u.shadowLift, 0)
+        XCTAssertEqual(u.crush, 0)
         XCTAssertEqual(u.saturation, 1)
         XCTAssertFalse(u.hasHue)
         XCTAssertEqual(u.filmStrength, 1)

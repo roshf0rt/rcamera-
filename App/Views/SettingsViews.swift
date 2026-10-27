@@ -15,12 +15,11 @@ struct SettingsView: View {
                             PresetEditorView(presetID: preset.id)
                         } label: {
                             HStack(spacing: 12) {
-                                PresetArtView(preset: preset)
+                                PresetSwatch(preset: preset, corner: 7)
                                     .frame(width: 52, height: 34)
-                                    .clipShape(RoundedRectangle(cornerRadius: 7))
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(preset.name)
-                                    PresetTags(preset: preset, limit: 3)
+                                    Text(PresetCardStyle.of(preset).subtitle)
                                         .font(.system(size: 12))
                                         .foregroundStyle(Theme.secondaryText)
                                 }
@@ -34,6 +33,11 @@ struct SettingsView: View {
                     Toggle("Level", isOn: model.binding(\.isLevelEnabled))
                     Toggle("Mirror front camera", isOn: model.binding(\.mirrorFrontCamera))
                     Toggle("Capture RAW", isOn: model.binding(\.capturesRAW))
+                    if model.settings.capturesRAW {
+                        Picker("RAW format", selection: model.binding(\.rawFormat)) {
+                            ForEach(RAWFormat.allCases, id: \.self) { Text($0.label).tag($0) }
+                        }
+                    }
                     Toggle("Save location", isOn: model.binding(\.savesLocation))
                     Toggle("Volume buttons take photos", isOn: model.binding(\.volumeShutter))
                         .onChange(of: model.settings.volumeShutter) { _, on in

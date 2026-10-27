@@ -2,8 +2,13 @@ import Foundation
 
 /// CPU copy of the regulator maths in `App/Camera/Grade.metal`. The shader runs in the app; this copy
 /// is tested here, so the formulas stay in range and neutral values stay an identity.
-/// Order: exposure, white balance, shadows/midtones/highlights, contrast, fade, highlight roll-off,
+/// Order: exposure, white balance, shadows/midtones/highlights, contrast, fade, dynamic range,
 /// saturation and mute, hue. The LUT comes after this.
+///
+/// Photos are graded in half float, so a developed RAW can arrive with highlights above 1. Dynamic range
+/// decides what happens to them: HIGH (1) leaves the picture as it is and clips above white; EXT+ (1.5)
+/// lifts the shadows and rolls everything above a knee, headroom included, softly under white, which is
+/// the flat, wide "RAW" look; MED, LOW and ZERO bend an S-curve that crushes shadows and highlights.
 public enum ToneMath {
     /// Same luma weights as the Lampa-style grader in the shader.
     static let luma = SIMD3<Double>(0.299, 0.587, 0.114)
@@ -18,7 +23,8 @@ public enum ToneMath {
         c = SIMD3(tone(c.x, look), tone(c.y, look), tone(c.z, look))
         c = (c - 0.5) * look.contrast + 0.5
         c = c * (1 - 0.25 * look.fade) + 0.12 * look.fade
-        c = SIMD3(shoulder(c.x, look.dynamicRange), shoulder(c.y, look.dynamicRange), shoulder(c.z, look.dynamicRange))
+        let range = DynamicRangeCurve(look.dynamicRange)
+        c = SIMD3(range.apply(c.x), range.apply(c.y), range.apply(c.z))
 
         let y = c.x * luma.x + c.y * luma.y + c.z * luma.z
         c = SIMD3(y, y, y) + (c - SIMD3(y, y, y)) * (look.saturation * (1 - 0.6 * look.mute))
@@ -36,14 +42,6 @@ public enum ToneMath {
         let midWeight = 4 * x * inverse
         let highlightWeight = x * x
         return x + 0.15 * (look.shadows * shadowWeight + look.midpoint * midWeight + look.highlights * highlightWeight)
-    }
-
-    /// Soft roll-off above a knee. A dynamic range of 1 or more leaves values alone.
-    static func shoulder(_ x: Double, _ dynamicRange: Double) -> Double {
-        let knee = min(1, 0.5 + 0.5 * dynamicRange)
-        guard knee < 1, x > knee else { return x }
-        let span = 1 - knee
-        return knee + span * (1 - exp(-(x - knee) / span))
     }
 
     /// Rotates chroma in YIQ space, which keeps luma unchanged.
@@ -66,6 +64,39 @@ public enum ToneMath {
     }
 }
 
+/// The dynamic-range regulator as three numbers the shader also reads. 1 is neutral.
+public struct DynamicRangeCurve: Equatable, Sendable {
+    /// Where the highlight roll-off starts; 1 means no roll-off.
+    public var knee: Double
+    /// How much the shadows are lifted, 0 for none.
+    public var shadowLift: Double
+    /// How far the tone bends towards an S-curve, 0 for none.
+    public var crush: Double
+
+    public init(_ dynamicRange: Double) {
+        let wide = max(0, min(dynamicRange, 1.5) - 1) * 2
+        let narrow = max(0, 1 - max(dynamicRange, 0))
+        knee = 1 - 0.3 * wide
+        shadowLift = 0.5 * wide
+        crush = 0.6 * narrow
+    }
+
+    public func apply(_ x: Double) -> Double {
+        var value = x
+        let t = min(max(value, 0), 1)
+        value += shadowLift * t * (1 - t) * (1 - t) * (1 - t)
+        if knee < 1, value > knee {
+            let span = 1 - knee
+            value = knee + span * (1 - exp(-(value - knee) / span))
+        }
+        if crush > 0 {
+            let u = min(max(value, 0), 1)
+            value += crush * (u * u * (3 - 2 * u) - value)
+        }
+        return value
+    }
+}
+
 /// The values the shader reads for one look, derived once on the CPU. The mapping lives here, next to
 /// the tests, so the shader only ever sees final numbers.
 public struct RegulatorUniforms: Equatable, Sendable {
@@ -79,6 +110,8 @@ public struct RegulatorUniforms: Equatable, Sendable {
     public var fade: Double
     /// Roll-off knee, 1 when there is no roll-off.
     public var shoulderKnee: Double
+    public var shadowLift: Double
+    public var crush: Double
     /// Saturation with mute already folded in.
     public var saturation: Double
     public var hueCos: Double
@@ -101,7 +134,10 @@ public struct RegulatorUniforms: Equatable, Sendable {
         midpoint = look.midpoint
         highlights = look.highlights
         fade = look.fade
-        shoulderKnee = min(1, 0.5 + 0.5 * look.dynamicRange)
+        let range = DynamicRangeCurve(look.dynamicRange)
+        shoulderKnee = range.knee
+        shadowLift = range.shadowLift
+        crush = range.crush
         saturation = look.saturation * (1 - 0.6 * look.mute)
         let angle = look.hue * Double.pi / 180
         hueCos = cos(angle)

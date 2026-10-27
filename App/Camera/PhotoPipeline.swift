@@ -56,7 +56,10 @@ enum PhotoPipeline {
               let rawLuma = meanLuma(rawImage),
               let processedLuma = meanLuma(processed)
         else { return 0 }
-        return min(max(log2(processedLuma / rawLuma), -3), 3)
+        // The camera's own image is brighter mostly because its local tone mapping lifts the shadows.
+        // Matching that with global exposure would push the highlights far past white, so RAW is
+        // brightened by at most 1 EV; darkening is not limited.
+        return min(max(log2(processedLuma / rawLuma), -3), 1)
     }
 
     static func finish(_ image: CIImage, look: FilmLook, aspect: AspectOption, mirror: Bool) -> CIImage {
@@ -83,7 +86,10 @@ enum PhotoPipeline {
 
     private static func encode(_ image: CIImage, rawExposureOffset: Double) -> Developed? {
         let quality = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
-        guard let heic = context.heifRepresentation(of: image, format: .RGBA8, colorSpace: displayP3, options: [quality: 0.92]) else {
+        // 10-bit HEIC keeps the half-float grade's gradations; 8 bits is the fallback.
+        guard let heic = (try? context.heif10Representation(of: image, colorSpace: displayP3, options: [quality: 0.92]))
+            ?? context.heifRepresentation(of: image, format: .RGBA8, colorSpace: displayP3, options: [quality: 0.92])
+        else {
             return nil
         }
         let longSide = max(image.extent.width, image.extent.height)
@@ -95,7 +101,9 @@ enum PhotoPipeline {
         return Developed(heic: heic, thumbnail: thumbnail, rawExposureOffset: rawExposureOffset)
     }
 
-    /// Builds the saved photo at capture time. Prefers the processed image; falls back to RAW when that is all there is.
+    /// Builds the saved photo at capture time. With a RAW it develops the RAW, as Lampa does, so the picture
+    /// skips the camera's local tone mapping and keeps the sensor's range; the processed image only sets the
+    /// exposure. Without one (flash, portrait, RAW off) it grades the processed image.
     static func develop(
         raw: Data?,
         processed: Data?,
@@ -111,10 +119,10 @@ enum PhotoPipeline {
     ) -> Developed? {
         let offset = (raw != nil && processed != nil) ? rawExposureOffset(raw: raw!, processed: processed!) : 0
         let base: CIImage?
-        if let processed {
+        if let raw, let developed = rawImage(raw, exposure: offset) {
+            base = developed
+        } else if let processed {
             base = processedImage(processed)
-        } else if let raw {
-            base = rawImage(raw, exposure: 0)
         } else {
             base = nil
         }

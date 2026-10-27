@@ -13,7 +13,7 @@ struct GradeParams {
     int width;
     int height;
     int mirror;
-    int inputKind;      // 0 = BGRA, 1 = 10-bit video-range BT.2020 Y'CbCr (Apple Log)
+    int inputKind;      // 0 = RGBA (8-bit, or half float with values above 1), 1 = 10-bit video-range BT.2020 Y'CbCr (Apple Log)
     int chromaShiftX;
     int chromaShiftY;
     int hasLUT;
@@ -39,6 +39,8 @@ struct GradeParams {
     float highlights;
     float fade;
     float shoulderKnee;   // 1 = no roll-off
+    float shadowLift;     // dynamic range above HIGH
+    float crush;          // dynamic range below HIGH
     float saturation;     // already multiplied by (1 - 0.6 * mute)
     float hueCos;
     float hueSin;
@@ -95,7 +97,7 @@ static float3 readFiltered(texture2d<float, access::read> luma,
                       + readSource(luma, chroma, sourcePoint(offsetPoint(gid, int2(-1, 0), p), p), p)
                       + readSource(luma, chroma, sourcePoint(offsetPoint(gid, int2(0, 1), p), p), p)
                       + readSource(luma, chroma, sourcePoint(offsetPoint(gid, int2(0, -1), p), p), p);
-        c = saturate(c + p.sharpness * (c - around * 0.25));
+        c = max(c + p.sharpness * (c - around * 0.25), 0.0);
     }
     if (p.fringe > 0.0) {
         // Red spreads outwards and blue inwards, more towards the corners.
@@ -113,12 +115,21 @@ static float toneRegion(float x, constant GradeParams &p) {
     return x + 0.15 * (p.shadows * inverse * inverse + p.midpoint * 4.0 * x * inverse + p.highlights * x * x);
 }
 
-static float shoulder(float x, float knee) {
-    if (knee >= 1.0 || x <= knee) {
-        return x;
+/// `DynamicRangeCurve.apply`: lift the shadows, roll everything above the knee (headroom included)
+/// softly under white, or bend towards an S-curve.
+static float dynamicRange(float x, constant GradeParams &p) {
+    float t = saturate(x);
+    float inverse = 1.0 - t;
+    x += p.shadowLift * t * inverse * inverse * inverse;
+    if (p.shoulderKnee < 1.0 && x > p.shoulderKnee) {
+        float span = 1.0 - p.shoulderKnee;
+        x = p.shoulderKnee + span * (1.0 - exp(-(x - p.shoulderKnee) / span));
     }
-    float span = 1.0 - knee;
-    return knee + span * (1.0 - exp(-(x - knee) / span));
+    if (p.crush > 0.0) {
+        float u = saturate(x);
+        x += p.crush * (u * u * (3.0 - 2.0 * u) - x);
+    }
+    return x;
 }
 
 /// The manual regulators, in the order `ToneMath.regulate` runs them.
@@ -130,7 +141,7 @@ static float3 regulate(float3 c, constant GradeParams &p) {
     c = float3(toneRegion(c.r, p), toneRegion(c.g, p), toneRegion(c.b, p));
     c = (c - 0.5) * p.contrast + 0.5;
     c = c * (1.0 - 0.25 * p.fade) + 0.12 * p.fade;
-    c = float3(shoulder(c.r, p.shoulderKnee), shoulder(c.g, p.shoulderKnee), shoulder(c.b, p.shoulderKnee));
+    c = float3(dynamicRange(c.r, p), dynamicRange(c.g, p), dynamicRange(c.b, p));
     float y = dot(c, kLuma);
     c = y + (c - y) * p.saturation;
     if (p.hasHue != 0) {
