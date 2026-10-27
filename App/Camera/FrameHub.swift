@@ -21,7 +21,13 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     let displayLayer = AVSampleBufferDisplayLayer()
 
     private let queue: DispatchQueue
-    private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    /// No color management at all: frame values go through the LUT exactly as the camera delivered them,
+    /// and the output keeps them. Apple Log frames stay log until the LUT decodes them.
+    private let ciContext = CIContext(options: [
+        .workingColorSpace: NSNull(),
+        .outputColorSpace: NSNull(),
+        .cacheIntermediates: false,
+    ])
     private let lock = NSLock()
 
     private var look = FilmLook.identity
@@ -103,10 +109,10 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
 
         // Core Image's origin is bottom-left.
         let rect = CGRect(x: crop.x, y: sourceHeight - crop.y - crop.height, width: crop.width, height: crop.height)
-        var image = CIImage(cvPixelBuffer: source)
+        var image = CIImage(cvPixelBuffer: source, options: [.colorSpace: NSNull()])
             .cropped(to: rect)
             .transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
-        image = look.apply(to: image)
+        image = look.apply(to: image, raw: true)
         if mirror {
             image = image.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: -CGFloat(crop.width), y: 0))
         }

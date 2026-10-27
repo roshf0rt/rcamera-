@@ -140,6 +140,8 @@ struct EVWheel: View {
     @Binding var value: Double
     @Binding var isActive: Bool
     var overlaid = false
+    /// Keeps the ruler open, for screens where the wheel is the main control.
+    var pinnedOpen = false
 
     @State private var dragStartValue: Double?
     @State private var rawValue: Double?
@@ -149,18 +151,19 @@ struct EVWheel: View {
 
     var body: some View {
         GeometryReader { geo in
-            let width = isActive ? geo.size.width - 24 : 176
+            let open = isActive || pinnedOpen
+            let width = open ? geo.size.width - (pinnedOpen ? 0 : 24) : 176
             ZStack {
-                Capsule().fill(overlaid ? Color.black.opacity(0.4) : Color(white: 0.12))
-                    .background(overlaid ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color.clear), in: Capsule())
-                if isActive { ruler(width: width) } else { compact }
+                Capsule().fill(Color.black.opacity(overlaid ? 0.4 : 0.3))
+                    .background(.ultraThinMaterial, in: Capsule())
+                if open { ruler(width: width) } else { compact }
             }
             .frame(width: width, height: 46)
             .contentShape(Capsule())
             .position(x: geo.size.width / 2, y: 23)
             .gesture(drag)
             .simultaneousGesture(TapGesture(count: 2).onEnded { reset() })
-            .animation(.easeOut(duration: 0.2), value: isActive)
+            .animation(.easeOut(duration: 0.2), value: open)
             .sensoryFeedback(.selection, trigger: value)
         }
         .frame(height: 46)

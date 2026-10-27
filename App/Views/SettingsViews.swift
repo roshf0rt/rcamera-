@@ -53,7 +53,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Video")
                 } footer: {
-                    Text("Cinematic stabilization delays the viewfinder. Apple Log needs a supported iPhone and a preset with an Apple Log LUT; otherwise normal video is recorded.")
+                    Text("Apple Log is used by default when the iPhone supports it and the preset has an Apple Log LUT; otherwise normal video is recorded. Cinematic stabilization delays the viewfinder.")
                 }
                 .disabled(model.engine.isRecording)
 
@@ -80,6 +80,7 @@ struct PresetEditorView: View {
 
     @State private var name = ""
     @State private var grain = 0.0
+    @State private var halation = 0.0
     @State private var loaded = false
     @State private var importSlot: LUTSlot?
     @State private var importing = false
@@ -93,13 +94,9 @@ struct PresetEditorView: View {
             Section("Name") {
                 TextField("Name", text: $name).onSubmit(save)
             }
-            Section("Grain") {
-                HStack {
-                    Slider(value: $grain, in: 0 ... 1) { editing in
-                        if !editing { save() }
-                    }
-                    Text("\(Int(grain * 100))%").monospacedDigit().frame(width: 48, alignment: .trailing)
-                }
+            Section("Film") {
+                slider("Grain", value: $grain)
+                slider("Halation", value: $halation)
             }
             Section {
                 ForEach(LUTSlot.allCases, id: \.self) { slot in
@@ -126,6 +123,7 @@ struct PresetEditorView: View {
             loaded = true
             name = preset.name
             grain = preset.grain
+            halation = preset.halation
         }
         .onDisappear(perform: save)
         .background {
@@ -147,6 +145,16 @@ struct PresetEditorView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(message ?? "")
+        }
+    }
+
+    private func slider(_ title: String, value: Binding<Double>) -> some View {
+        HStack {
+            Text(title).frame(width: 84, alignment: .leading)
+            Slider(value: value, in: 0 ... 1) { editing in
+                if !editing { save() }
+            }
+            Text("\(Int(value.wrappedValue * 100))%").monospacedDigit().frame(width: 48, alignment: .trailing)
         }
     }
 
@@ -183,6 +191,7 @@ struct PresetEditorView: View {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updated.name = trimmed.isEmpty ? updated.name : trimmed
         updated.grain = grain
+        updated.halation = halation
         guard updated != preset else { return }
         model.updatePreset(updated)
     }

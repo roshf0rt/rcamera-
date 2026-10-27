@@ -80,7 +80,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var videoResolution: VideoResolution = .hd1080
     public var videoFPS = 30
     public var videoStabilization: VideoStabilization = .standard
-    public var appleLogVideo = false
+    public var appleLogVideo = true
+    /// Bumped when defaults change; older files adopt the new defaults once.
+    public var revision = AppSettings.currentRevision
+
+    public static let currentRevision = 2
 
     public init() {}
 
@@ -92,7 +96,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, savesLocation, digitalZoomStop
-        case videoResolution, videoFPS, videoStabilization, appleLogVideo
+        case videoResolution, videoFPS, videoStabilization, appleLogVideo, revision
     }
 
     /// Missing or unreadable keys keep their defaults, so older settings files keep working.
@@ -113,11 +117,17 @@ public struct AppSettings: Codable, Equatable, Sendable {
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo
+        revision = (try? c.decode(Int.self, forKey: .revision)) ?? 0
         if let stabilization = try? c.decode(VideoStabilization.self, forKey: .videoStabilization) {
             videoStabilization = stabilization
         } else if let legacy = try? c.decode(Bool.self, forKey: .videoStabilization) {
             videoStabilization = legacy ? .standard : .off
         }
+        if revision < 2 {
+            // Apple Log became the default for video in revision 2.
+            appleLogVideo = true
+        }
+        revision = Self.currentRevision
     }
 }
 

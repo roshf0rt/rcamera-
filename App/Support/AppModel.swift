@@ -135,7 +135,7 @@ final class AppModel {
         let key = "\(preset.id)|\(slot.rawValue)"
         if let cached = lookCache[key] { return cached }
         let lut = try? presetLibrary.loadLUT(for: preset.id, slot: slot)
-        let look = FilmLook(lut: lut, grain: preset.grain)
+        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation)
         lookCache[key] = look
         return look
     }
@@ -199,7 +199,6 @@ final class AppModel {
                     raw: photo.raw,
                     processed: photo.processed,
                     look: look,
-                    pushPull: 0,
                     aspect: photo.aspect,
                     mirror: photo.mirror
                 )
@@ -217,7 +216,8 @@ final class AppModel {
                 presetID: preset.id,
                 aspect: photo.aspect,
                 hasRAW: hasRAW,
-                placeName: place
+                placeName: place,
+                rawExposureOffset: developed.rawExposureOffset
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
@@ -281,9 +281,10 @@ final class AppModel {
         else { return false }
         let look = look(for: preset, slot: .photo)
         let aspect = record.aspect
+        let offset = record.rawExposureOffset
 
         let developed = await Task.detached(priority: .userInitiated) {
-            PhotoPipeline.develop(raw: raw, processed: nil, look: look, pushPull: pushPull, aspect: aspect, mirror: false)
+            PhotoPipeline.redevelop(raw: raw, look: look, pushPull: pushPull, rawExposureOffset: offset, aspect: aspect)
         }.value
         guard let developed else { return false }
 

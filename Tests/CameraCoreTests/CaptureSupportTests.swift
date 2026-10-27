@@ -241,7 +241,25 @@ final class SettingsMigrationTests: XCTestCase {
         XCTAssertFalse(settings.isGridEnabled)
         XCTAssertEqual(settings.videoStabilization, .off)
         XCTAssertEqual(settings.digitalZoomStop, .none)
-        XCTAssertFalse(settings.appleLogVideo)
+        XCTAssertTrue(settings.appleLogVideo, "Apple Log became the default in revision 2")
+    }
+
+    func testRevisionTwoKeepsAnExplicitAppleLogChoice() throws {
+        let json = #"{"appleLogVideo":false,"revision":2}"#
+        XCTAssertFalse(try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8)).appleLogVideo)
+    }
+
+    func testCaptureIndexFromEarlierReleaseStillLoads() throws {
+        let json = """
+        [{"id":"8F1A5C0E-2B7D-4C41-9E64-3D2F6B1A7C90","date":"2026-10-27T05:00:00Z","kind":"photo",
+          "presetID":"preset-1","evPushPull":0,"aspect":"4:3","hasRAW":true,"isFavorite":false}]
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let records = try decoder.decode([CaptureRecord].self, from: Data(json.utf8))
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records[0].rawExposureOffset, 0)
+        XCTAssertNil(records[0].placeName)
     }
 
     func testLegacyTrueStabilizationBecomesStandard() throws {

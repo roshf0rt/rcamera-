@@ -23,6 +23,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var hasRAW: Bool
     public var placeName: String?
     public var isFavorite: Bool
+    /// EV offset that makes a developed RAW match the camera's own processed image in brightness.
+    public var rawExposureOffset: Double
 
     public init(
         id: UUID = UUID(),
@@ -33,7 +35,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         aspect: AspectOption = .ratio4x3,
         hasRAW: Bool = false,
         placeName: String? = nil,
-        isFavorite: Bool = false
+        isFavorite: Bool = false,
+        rawExposureOffset: Double = 0
     ) {
         self.id = id
         self.date = date
@@ -44,6 +47,26 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.hasRAW = hasRAW
         self.placeName = placeName
         self.isFavorite = isFavorite
+        self.rawExposureOffset = rawExposureOffset
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset
+    }
+
+    /// Index files from earlier releases lack newer keys; they keep their captures.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        date = try c.decode(Date.self, forKey: .date)
+        kind = try c.decode(CaptureKind.self, forKey: .kind)
+        presetID = try c.decode(String.self, forKey: .presetID)
+        evPushPull = (try? c.decode(Double.self, forKey: .evPushPull)) ?? 0
+        aspect = (try? c.decode(AspectOption.self, forKey: .aspect)) ?? .ratio4x3
+        hasRAW = (try? c.decode(Bool.self, forKey: .hasRAW)) ?? false
+        placeName = try? c.decode(String?.self, forKey: .placeName)
+        isFavorite = (try? c.decode(Bool.self, forKey: .isFavorite)) ?? false
+        rawExposureOffset = (try? c.decode(Double.self, forKey: .rawExposureOffset)) ?? 0
     }
 }
 

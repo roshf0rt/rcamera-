@@ -44,6 +44,8 @@ final class CameraEngine {
     var phase: CameraPhase { machine.phase }
     var mode: CaptureMode { machine.configuration.mode }
     var lens: LensID { machine.configuration.lens }
+    /// True while the session is switching between photo and video, which briefly freezes the viewfinder.
+    var isSwitchingMode: Bool { phase == .reconfiguringMode }
     var isRecording: Bool { [.startingRecording, .videoRecording, .finishingRecording, .reconfiguringLensInRecording].contains(phase) }
 
     @ObservationIgnored let controller = CaptureSessionController()
@@ -134,9 +136,10 @@ final class CameraEngine {
                 digitalZoom = previousZoom
                 return
             }
-        } else {
-            controller.setZoom(stop.digitalZoom)
         }
+        // The back cameras are one virtual device, so changing lens is only a zoom change. Apply it at once
+        // instead of waiting for the session to be reconfigured.
+        controller.setZoom(lens: stop.lens, digital: stop.digitalZoom)
         zoomFactor = stop.digitalZoom
         activeStop = stop
     }
@@ -145,7 +148,7 @@ final class CameraEngine {
         digitalZoom = max(1, factor)
         zoomFactor = digitalZoom
         activeStop = nil
-        controller.setZoom(digitalZoom)
+        controller.setZoom(lens: lens, digital: digitalZoom)
     }
 
     func flipCamera() {

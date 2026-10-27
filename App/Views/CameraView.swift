@@ -25,28 +25,56 @@ struct CameraView: View {
         let engine = model.engine
         GeometryReader { geo in
             let width = geo.size.width - side * 2
+            let screenWidth = geo.size.width
+            let screenHeight = geo.size.height
+            let previewTop = geo.safeAreaInsets.top + 20
+            let isVideo = engine.mode == .video
             let videoRatio = CGFloat(16.0 / 9.0)
             let photoRatio = CGFloat(model.settings.aspect.portraitHeightOverWidth)
-            let desired: CGFloat = engine.mode == .video ? width * videoRatio : width * photoRatio
-            let reserved: CGFloat = showPresets ? 252 : (engine.mode == .video ? 74 : 232)
-            let previewHeight = max(200, min(desired, geo.size.height - 52 - reserved))
+            let desired: CGFloat = isVideo ? width * videoRatio : width * photoRatio
+            // Photo: keep clear of the zoom chips. Video: reach just below the shutter ring, which sits on the picture.
+            let lowestEdge: CGFloat = showPresets ? screenHeight - 312 : (isVideo ? screenHeight - 80 : screenHeight - 257)
+            let previewHeight = max(200, min(desired, lowestEdge - previewTop))
 
-            ZStack(alignment: .top) {
-                Color.black.ignoresSafeArea()
+            ZStack {
+                Color.black
 
-                VStack(spacing: 8) {
-                    topBar
-                    viewfinder(engine: engine, size: CGSize(width: width, height: previewHeight))
-                    Spacer(minLength: 0)
+                topBar
+                    .frame(width: screenWidth)
+                    .position(x: screenWidth / 2, y: previewTop - 19)
+
+                viewfinder(engine: engine, size: CGSize(width: width, height: previewHeight))
+                    .position(x: screenWidth / 2, y: previewTop + previewHeight / 2)
+
+                if showPresets {
+                    PresetPicker()
+                        .frame(width: screenWidth, height: 100)
+                        .position(x: screenWidth / 2, y: screenHeight - 250)
+                        .transition(.opacity)
+                } else {
+                    zoomRow(engine: engine)
+                        .frame(width: screenWidth, height: 54)
+                        .position(x: screenWidth / 2, y: screenHeight - 284)
+                    EVWheel(
+                        value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
+                        isActive: $evActive,
+                        overlaid: isVideo
+                    )
+                    .frame(width: screenWidth, height: 46)
+                    .position(x: screenWidth / 2, y: screenHeight - 213)
                 }
 
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    bottomControls(engine: engine)
-                }
+                shutterRow(engine: engine)
+                    .frame(width: screenWidth)
+                    .position(x: screenWidth / 2, y: screenHeight - 134)
+                modeRow(engine: engine)
+                    .frame(width: screenWidth)
+                    .position(x: screenWidth / 2, y: screenHeight - 52)
             }
-            .frame(width: geo.size.width, height: geo.size.height)
+            .frame(width: screenWidth, height: screenHeight)
         }
+        .ignoresSafeArea()
+        .background(Color.black.ignoresSafeArea())
         .overlay { if engine.access == .denied { accessDenied } }
         .fullScreenCover(isPresented: $showGallery) { GalleryView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
@@ -134,10 +162,14 @@ struct CameraView: View {
                     .foregroundStyle(.white)
                     .shadow(radius: 8)
             }
+            if engine.isSwitchingMode {
+                Rectangle().fill(.ultraThinMaterial).transition(.opacity)
+            }
             if engine.isRecording { recordingBadge(engine: engine) }
             if showOptions { optionsPanel }
             if showPresets { collapseButton }
         }
+        .animation(.easeInOut(duration: 0.15), value: engine.isSwitchingMode)
         .frame(width: size.width, height: size.height)
         .background(Color(white: 0.06))
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -208,29 +240,6 @@ struct CameraView: View {
     }
 
     // MARK: Bottom controls
-
-    private func bottomControls(engine: CameraEngine) -> some View {
-        VStack(spacing: 0) {
-            if showPresets {
-                PresetPicker()
-                    .padding(.bottom, 16)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else {
-                zoomRow(engine: engine)
-                EVWheel(
-                    value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
-                    isActive: $evActive,
-                    overlaid: engine.mode == .video
-                )
-                .padding(.top, 16)
-                .padding(.bottom, 18)
-            }
-            shutterRow(engine: engine)
-            modeRow(engine: engine)
-                .padding(.top, 12)
-        }
-        .padding(.bottom, 4)
-    }
 
     private func zoomRow(engine: CameraEngine) -> some View {
         ZStack {
@@ -368,7 +377,7 @@ struct CameraView: View {
                 .foregroundStyle(engine.mode == mode ? Theme.accent : Theme.secondaryText)
         }
         .buttonStyle(.plain)
-        .disabled(engine.isRecording)
+        .disabled(engine.isRecording || engine.isSwitchingMode)
     }
 
     private var accessDenied: some View {

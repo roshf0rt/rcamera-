@@ -91,10 +91,9 @@ final class PresetLibraryTests: XCTestCase {
     func testDefaultsHaveTenNamedPresets() throws {
         let library = try PresetLibrary(storageDirectory: makeTempDirectory())
         XCTAssertEqual(library.presets.count, 10)
-        XCTAssertEqual(library.presets.first?.name, "JaneSu")
-        XCTAssertEqual(library.presets[1].name, "JaneSu 2")
-        XCTAssertEqual(library.presets[2].name, "Пресет 3")
+        XCTAssertEqual(library.presets.map(\.name), ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet"])
         XCTAssertEqual(library.presets.last?.id, "preset-10")
+        XCTAssertTrue(library.presets.allSatisfy { $0.grain > 0 }, "presets start with film grain")
         XCTAssertFalse(library.hasLUT(for: "preset-1"))
     }
 
@@ -236,20 +235,57 @@ final class PresetLibraryTests: XCTestCase {
         XCTAssertEqual(try library.loadLUT(for: "preset-2")?.size, 4)
     }
 
-    func testOldPlaceholderNamesAreUpdatedButEditedNamesStay() throws {
+    func testOldInstallAdoptsNewNamesAndDefaultLooksButKeepsEdits() throws {
         let dir = try makeTempDirectory()
         let storage = dir.appendingPathComponent("lib")
         try FileManager.default.createDirectory(at: storage, withIntermediateDirectories: true)
-        // What the first release wrote: placeholder names for every preset, one renamed by the user.
+        // What the first releases wrote: placeholder names, no grain, one preset renamed by the user.
         var old = (1 ... 10).map { Preset(id: "preset-\($0)", name: "Пресет \($0)", accentIndex: $0 - 1) }
+        old[1].name = "JaneSu 2"
         old[3].name = "Мой пресет"
+        old[5].grain = 0.8
         try JSONEncoder().encode(old).write(to: storage.appendingPathComponent("presets.json"))
 
         let library = try PresetLibrary(storageDirectory: storage)
         XCTAssertEqual(library.presets[0].name, "JaneSu")
-        XCTAssertEqual(library.presets[1].name, "JaneSu 2")
-        XCTAssertEqual(library.presets[2].name, "Пресет 3")
+        XCTAssertEqual(library.presets[1].name, "Carbon")
+        XCTAssertEqual(library.presets[2].name, "Clear")
         XCTAssertEqual(library.presets[3].name, "Мой пресет")
+        XCTAssertGreaterThan(library.presets[0].grain, 0)
+        XCTAssertEqual(library.presets[5].grain, 0.8, "a grain value the user set stays")
+
+        // The migration runs once: a later edit back to zero grain is respected.
+        var edited = library.presets[0]
+        edited.grain = 0
+        edited.halation = 0
+        try library.update(edited)
+        let reloaded = try PresetLibrary(storageDirectory: storage)
+        XCTAssertEqual(reloaded.presets[0].grain, 0)
+    }
+
+    func testPresetFileWithoutHalationStillLoads() throws {
+        let dir = try makeTempDirectory()
+        let storage = dir.appendingPathComponent("lib")
+        try FileManager.default.createDirectory(at: storage, withIntermediateDirectories: true)
+        try #"[{"id":"preset-1","name":"X","grain":0.2,"accentIndex":0}]"#.write(
+            to: storage.appendingPathComponent("presets.json"), atomically: true, encoding: .utf8)
+        try "2".write(to: storage.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
+        let library = try PresetLibrary(storageDirectory: storage)
+        XCTAssertEqual(library.presets.first?.name, "X")
+        XCTAssertEqual(library.presets.first?.halation, 0)
+    }
+
+    func testPhotoFallsBackToVideoLUTAndBack() throws {
+        let dir = try makeTempDirectory()
+        let cube = dir.appendingPathComponent("a.cube")
+        try writeCube(size: 3, to: cube)
+        let library = try PresetLibrary(storageDirectory: dir.appendingPathComponent("lib"))
+
+        // A preset with only a Standard LUT (like Clear) still works for photos.
+        try library.importLUT(from: cube, for: "preset-3", slot: .video)
+        XCTAssertEqual(try library.loadLUT(for: "preset-3", slot: .photo)?.size, 3)
+        XCTAssertFalse(library.hasLUT(for: "preset-3", slot: .photo))
+        XCTAssertNil(try library.loadLUT(for: "preset-3", slot: .appleLog))
     }
 }
 
