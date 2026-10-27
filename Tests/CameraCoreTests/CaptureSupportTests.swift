@@ -173,3 +173,33 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(SettingsStore(url: url).load(), AppSettings())
     }
 }
+
+final class VideoGapFillerTests: XCTestCase {
+    func testSmallGapIsLeftAlone() {
+        // 30 fps at timescale 600: one frame is 20 ticks, four frames is 80.
+        XCTAssertEqual(VideoGapFiller.fillTimes(last: 0, current: 20, timescale: 600, fps: 30), [])
+        XCTAssertEqual(VideoGapFiller.fillTimes(last: 0, current: 80, timescale: 600, fps: 30), [])
+    }
+
+    func testGapJustOverThresholdRepeatsFrames() {
+        let times = VideoGapFiller.fillTimes(last: 0, current: 100, timescale: 600, fps: 30)
+        XCTAssertEqual(times, [20, 40, 60, 80])
+    }
+
+    func testRepeatedFramesStayBeforeTheRealOne() {
+        let times = VideoGapFiller.fillTimes(last: 1000, current: 1200, timescale: 600, fps: 30)
+        XCTAssertTrue(times.allSatisfy { $0 > 1000 && $0 < 1200 })
+        XCTAssertEqual(times, Array(stride(from: 1020, through: 1180, by: 20)))
+    }
+
+    func testVeryLongGapIsCapped() {
+        let times = VideoGapFiller.fillTimes(last: 0, current: 600 * 60, timescale: 600, fps: 30)
+        XCTAssertEqual(times.count, VideoGapFiller.maxInsertedFrames)
+    }
+
+    func testInvalidInputsGiveNoFrames() {
+        XCTAssertEqual(VideoGapFiller.fillTimes(last: 0, current: 1000, timescale: 600, fps: 0), [])
+        XCTAssertEqual(VideoGapFiller.fillTimes(last: 0, current: 1000, timescale: 0, fps: 30), [])
+        XCTAssertEqual(VideoGapFiller.fillTimes(last: 0, current: 1000, timescale: 10, fps: 30), [])
+    }
+}

@@ -1,4 +1,5 @@
 import AVFoundation
+import CameraCore
 
 enum RecorderError: Error {
     case cannotAddInput
@@ -16,6 +17,9 @@ final class VideoRecorder {
     private let audioInput: AVAssetWriterInput?
     private var sessionStarted = false
     private var startTime = CMTime.invalid
+    private let fps: Int
+    private var lastBuffer: CVPixelBuffer?
+    private var lastTime = CMTime.invalid
 
     init(url: URL, width: Int, height: Int, fps: Int, audioSettings: [String: Any]?) throws {
         try? FileManager.default.removeItem(at: url)
@@ -52,6 +56,7 @@ final class VideoRecorder {
         }
 
         self.url = url
+        self.fps = fps
         self.writer = writer
         self.videoInput = videoInput
         self.adaptor = adaptor
@@ -69,10 +74,27 @@ final class VideoRecorder {
             sessionStarted = true
             started = true
         }
+        fillGap(before: time)
         if videoInput.isReadyForMoreMediaData {
             adaptor.append(buffer, withPresentationTime: time)
         }
+        lastBuffer = buffer
+        lastTime = time
         return started
+    }
+
+    /// When the camera dropped frames, repeats the previous frame so the video does not stall.
+    private func fillGap(before time: CMTime) {
+        guard let lastBuffer, lastTime.isValid, time.timescale == lastTime.timescale else { return }
+        let times = VideoGapFiller.fillTimes(
+            last: lastTime.value,
+            current: time.value,
+            timescale: time.timescale,
+            fps: fps
+        )
+        for ticks in times where videoInput.isReadyForMoreMediaData {
+            adaptor.append(lastBuffer, withPresentationTime: CMTime(value: ticks, timescale: time.timescale))
+        }
     }
 
     func appendAudio(_ sampleBuffer: CMSampleBuffer) {
