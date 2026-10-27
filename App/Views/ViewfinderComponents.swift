@@ -498,9 +498,12 @@ struct ApertureShape: Shape {
     func path(in rect: CGRect) -> Path {
         let centre = CGPoint(x: rect.midX, y: rect.midY)
         let radius = min(rect.width, rect.height) / 2
+        let count = Double(sides)
         let points = (0 ..< sides).map { side -> CGPoint in
-            let angle = rotation.radians + Double(side) * 2 * .pi / Double(sides) - .pi / 2
-            return CGPoint(x: centre.x + radius * cos(angle), y: centre.y + radius * sin(angle))
+            let angle: Double = rotation.radians + Double(side) * 2 * Double.pi / count - Double.pi / 2
+            let x: CGFloat = centre.x + radius * CGFloat(cos(angle))
+            let y: CGFloat = centre.y + radius * CGFloat(sin(angle))
+            return CGPoint(x: x, y: y)
         }
         let edge = 2 * radius * sin(.pi / CGFloat(sides))
         let corner = max(0.5, roundness * edge * 0.5)

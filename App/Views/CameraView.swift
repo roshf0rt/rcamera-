@@ -316,7 +316,7 @@ struct CameraView: View {
                 count: stops.count,
                 index: stopIndex,
                 began: { withAnimation(Self.panelSpring) { apertureOpen = true; showLenses = false } },
-                changed: { model.updateSettings { $0.portraitFNumber = stops[$0] } },
+                changed: { index in model.updateSettings { $0.portraitFNumber = stops[index] } },
                 ended: { withAnimation(Self.panelSpring) { apertureOpen = false } },
                 tapped: { model.updateSettings { $0.portraitFNumber = stops[(stopIndex + 1) % stops.count] } }
             ))
