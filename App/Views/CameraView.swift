@@ -450,17 +450,10 @@ struct CameraView: View {
             if engine.showsSwitchBlur {
                 Rectangle().fill(.ultraThinMaterial).transition(.opacity)
             }
-            if engine.mode == .video, let readout = engine.cineReadout {
+            if engine.mode == .video, let cine = engine.cineState {
                 VStack {
                     HStack {
-                        HStack(spacing: 6) {
-                            Text("180°").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.accent)
-                            Text(readout).font(.system(size: 12, weight: .medium, design: .monospaced))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.black.opacity(0.45)))
+                        CineIndicator(state: cine)
                         Spacer()
                     }
                     Spacer()
@@ -760,6 +753,49 @@ struct EffectToggle: View {
         }
         .buttonStyle(.plain)
         .sensoryFeedback(.selection, trigger: isOn)
+    }
+}
+
+/// The cine light: green when the shutter sits on its cinematic reference and the picture is exposed
+/// right, amber while it settles, red when the light forced the shutter off the rule, with the reason.
+struct CineIndicator: View {
+    let state: CaptureSessionController.CineState
+
+    private var color: Color {
+        switch state.status {
+        case .cinematic: Color(red: 0.25, green: 0.9, blue: 0.4)
+        case .settling: Color(red: 1, green: 0.78, blue: 0.2)
+        case .tooBright, .tooDark: Color(red: 1, green: 0.27, blue: 0.23)
+        }
+    }
+
+    private var label: String {
+        switch state.status {
+        case .cinematic, .settling: "180°"
+        case .tooBright(let stops): String(format: "ND %.1f", max(stops, 0.1))
+        case .tooDark: "LOW LIGHT"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+                .shadow(color: color.opacity(0.9), radius: 4)
+            Text(label)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(color)
+            Text(state.readout)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .contentTransition(.numericText())
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(Color.black.opacity(0.5)))
+        .overlay(Capsule().strokeBorder(color.opacity(0.5), lineWidth: 1))
+        .animation(.easeOut(duration: 0.25), value: state)
     }
 }
 

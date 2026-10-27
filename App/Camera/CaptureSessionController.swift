@@ -25,6 +25,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var wantsRAW: Bool
         var rawFormat: RAWFormat
         var photoResolution: PhotoResolution
+        /// Portrait photo mode: stream depth for the live background blur.
+        var portrait: Bool = false
     }
 
     struct DeviceInfo: Sendable {
@@ -54,6 +56,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private let photoOutput = AVCapturePhotoOutput()
     private let previewOutput = AVCaptureVideoDataOutput()
     private let recordOutput = AVCaptureVideoDataOutput()
+    private let depthOutput = AVCaptureDepthDataOutput()
+    private let depthQueue = DispatchQueue(label: "rcamera.depth", qos: .userInteractive)
+    private var depthOutputAdded = false
 
     private let audioSession = AVCaptureSession()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -245,6 +250,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
         configureDevice(config, device: device)
         configureConnections(config)
+        updateDepthOutput(enabled: config.portrait && config.mode == .photo && position == .back, device: device)
 
         if !session.isRunning { session.startRunning() }
 
@@ -268,8 +274,16 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var cineTimer: DispatchSourceTimer?
     private var cineFPS = 24
     private var userLocked = false
-    /// Called on the main queue with "1/48 · ISO 320", or nil when the loop stops.
-    var onCineReadout: (@Sendable (String?) -> Void)?
+    /// What the cine loop shows: shutter and ISO, and how they stand against the cinematic rule.
+    struct CineState: Equatable, Sendable {
+        var readout: String
+        var status: CineExposure.Status
+    }
+
+    /// Called on the main queue with the loop's state, or nil when it stops.
+    var onCineState: (@Sendable (CineState?) -> Void)?
+    /// Mains frequency where the phone is, for flicker-free shutter times.
+    private let mainsHz = CineExposure.mainsFrequency(regionCode: Locale.current.region?.identifier)
 
     /// Starts or stops cinematic auto exposure (`CineExposure`) for video at `fps`.
     func setCineExposure(_ enabled: Bool, fps: Int) {
@@ -290,13 +304,14 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                     device.exposureMode = .continuousAutoExposure
                     device.unlockForConfiguration()
                 }
-                let report = self.onCineReadout
+                self.lastCineState = nil
+                let report = self.onCineState
                 DispatchQueue.main.async { report?(nil) }
             }
         }
     }
 
-    private var lastCineReadout: String?
+    private var lastCineState: CineState?
 
     private func cineTick() {
         guard !userLocked, let device = videoInput?.device, device.isExposureModeSupported(.custom) else { return }
@@ -309,7 +324,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         )
         let current = CineExposure.Setting(iso: Double(device.iso), duration: device.exposureDuration.seconds)
         guard current.duration > 0, current.iso > 0 else { return }
-        let next = CineExposure.next(current: current, offset: Double(device.exposureTargetOffset), fps: cineFPS, limits: limits)
+        let step = CineExposure.step(current: current, offset: Double(device.exposureTargetOffset), fps: cineFPS, limits: limits, mainsHz: mainsHz)
+        let next = step.setting
         let changed = abs(next.iso - current.iso) / current.iso > 0.01 || abs(next.duration - current.duration) / current.duration > 0.01
         if changed || device.exposureMode != .custom {
             do {
@@ -324,11 +340,11 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 return
             }
         }
-        let readout = CineExposure.readout(next)
-        if readout != lastCineReadout {
-            lastCineReadout = readout
-            let report = onCineReadout
-            DispatchQueue.main.async { report?(readout) }
+        let state = CineState(readout: CineExposure.readout(next), status: step.status)
+        if state != lastCineState {
+            lastCineState = state
+            let report = onCineState
+            DispatchQueue.main.async { report?(state) }
         }
     }
 
@@ -385,6 +401,34 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
         installedControlsDevice = device
         installedPickerTitles = controlPickers.map(\.titles)
+    }
+
+    /// Streams depth to the hub while portrait mode is on; the connection is simply switched off otherwise.
+    private func updateDepthOutput(enabled: Bool, device: AVCaptureDevice) {
+        let wanted = enabled && device.activeDepthDataFormat != nil
+        if wanted, !depthOutputAdded {
+            session.beginConfiguration()
+            if session.canAddOutput(depthOutput) {
+                session.addOutput(depthOutput)
+                depthOutput.isFilteringEnabled = true
+                depthOutput.alwaysDiscardsLateDepthData = true
+                depthOutput.setDelegate(hub, callbackQueue: depthQueue)
+                depthOutputAdded = true
+            }
+            session.commitConfiguration()
+        }
+        guard depthOutputAdded, let connection = depthOutput.connection(with: .depthData) else {
+            hub.setPortraitDepthAvailable(false)
+            return
+        }
+        if connection.isEnabled != wanted { connection.isEnabled = wanted }
+        var rotated = false
+        if connection.isVideoRotationAngleSupported(90) {
+            if connection.videoRotationAngle != 90 { connection.videoRotationAngle = 90 }
+            rotated = true
+        }
+        hub.setDepthRotated(rotated)
+        hub.setPortraitDepthAvailable(wanted)
     }
 
     private func installOutputsIfNeeded() {

@@ -48,8 +48,8 @@ final class CameraEngine {
     private(set) var rawAvailable = false
     /// Frame rates the camera runs, by video width.
     private(set) var frameRates: [Int: [Int]] = [:]
-    /// Shutter and ISO while cine exposure runs, e.g. "1/48 · ISO 320".
-    private(set) var cineReadout: String?
+    /// Shutter, ISO and status while cine exposure runs.
+    private(set) var cineState: CaptureSessionController.CineState?
     private(set) var appleLogActive = false
     /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
     private(set) var showsSwitchBlur = false
@@ -115,7 +115,7 @@ final class CameraEngine {
         settings = new
         if new.videoFormat != old.videoFormat, !isRecording {
             send(.updateVideoConfiguration(new.videoFormat))
-        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.photoResolution != old.photoResolution), !isRecording {
+        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.portrait != old.portrait || new.photoResolution != old.photoResolution), !isRecording {
             Task { await applyConfig() }
         } else {
             reapplyIfAppleLogChanged()
@@ -132,9 +132,9 @@ final class CameraEngine {
 
     /// Cine exposure runs in video mode when the setting is on.
     private func syncCineExposure() {
-        if controller.onCineReadout == nil {
-            controller.onCineReadout = { [weak self] text in
-                Task { @MainActor in self?.cineReadout = text }
+        if controller.onCineState == nil {
+            controller.onCineState = { [weak self] state in
+                Task { @MainActor in self?.cineState = state }
             }
         }
         controller.setCineExposure(settings.cineExposure && mode == .video, fps: settings.videoFPS)
@@ -305,7 +305,8 @@ final class CameraEngine {
             exposureBias: evBias,
             wantsRAW: settings.capturesRAW,
             rawFormat: settings.rawFormat,
-            photoResolution: settings.photoResolution
+            photoResolution: settings.photoResolution,
+            portrait: settings.portrait && machine.configuration.mode == .photo
         )
         let info = await controller.apply(config)
         focalLengths = info.focalLengths
@@ -350,6 +351,21 @@ final class CameraEngine {
             logLook: mode == .video ? looks.appleLog : nil,
             aspect: mode == .photo ? settings.aspect : .ratio16x9,
             mirror: mirrorsOutput
+        )
+        controller.hub.setPortrait(portraitLook)
+    }
+
+    /// How the chosen lens and f-number draw the live portrait background; nil outside portrait photos.
+    private var portraitLook: FrameHub.PortraitLook? {
+        guard settings.portrait, mode == .photo, lens != .front else { return nil }
+        let style = settings.lensStyle
+        return FrameHub.PortraitLook(
+            strength: Float(PortraitAperture.blurStrength(fNumber: settings.portraitFNumber)),
+            swirl: Float(style.swirl),
+            squeeze: Float(1 / (1 + 0.5 * max(0, style.ovality))),
+            vignette: Float(style.vignette),
+            boost: Float(0.3 + 0.7 * max(0, style.rim)),
+            softness: style.rim < 0 ? 1.4 : 1
         )
     }
 

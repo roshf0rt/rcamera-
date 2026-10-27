@@ -45,6 +45,32 @@ private struct GradeParams {
     var bloom: Float = 0
     var sharpness: Float = 0
     var fringe: Float = 0
+    var hasPortrait: Int32 = 0
+    var depthRotated: Int32 = 0
+    var sourceWidth: Int32 = 1
+    var sourceHeight: Int32 = 1
+    var depthFocus: Float = 1
+    var swirl: Float = 0
+    var lensVignette: Float = 0
+    var bokehBoost: Float = 0
+}
+
+/// The live portrait background for one frame: the depth map and how the lens draws it.
+struct PortraitPass {
+    var depth: CVPixelBuffer
+    /// The depth map is portrait like the frames (its connection was turned); otherwise landscape.
+    var depthRotated: Bool
+    /// The subject's disparity, from the middle of the depth map.
+    var focus: Float
+    /// 1 at f/2.8, stronger wide open.
+    var strength: Float
+    var swirl: Float
+    /// Below 1 squeezes the blur sideways, for tall anamorphic ovals.
+    var squeeze: Float
+    var vignette: Float
+    var boost: Float
+    /// Bigger for soft, dreamy lenses.
+    var softness: Float
 }
 
 /// Applies a `FilmLook` on the GPU in one pass, like Lampa's Ironstone: camera pixel, LUT, halation, grain.
@@ -58,6 +84,9 @@ final class MetalGrader: @unchecked Sendable {
     private let queue: MTLCommandQueue
     private let gradeState: MTLComputePipelineState
     private let maskState: MTLComputePipelineState
+    private let bokehState: MTLComputePipelineState
+    private let emptyColor: MTLTexture
+    private var bokehCache: [Int: (raw: MTLTexture, blurred: MTLTexture)] = [:]
     private let textureCache: CVMetalTextureCache
     private let grainTextures: [MTLTexture]
     private let emptyLUT: MTLTexture
@@ -76,8 +105,10 @@ final class MetalGrader: @unchecked Sendable {
               let library = device.makeDefaultLibrary(),
               let gradeFunction = library.makeFunction(name: "grade"),
               let maskFunction = library.makeFunction(name: "halationMask"),
+              let bokehFunction = library.makeFunction(name: "bokehSource"),
               let gradeState = try? device.makeComputePipelineState(function: gradeFunction),
-              let maskState = try? device.makeComputePipelineState(function: maskFunction)
+              let maskState = try? device.makeComputePipelineState(function: maskFunction),
+              let bokehState = try? device.makeComputePipelineState(function: bokehFunction)
         else { return nil }
 
         var cache: CVMetalTextureCache?
@@ -91,14 +122,19 @@ final class MetalGrader: @unchecked Sendable {
             grains.append(texture)
         }
 
+        let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
+        colorDescriptor.usage = .shaderRead
         guard let emptyLUT = Self.makeEmptyLUT(device: device),
-              let emptyMask = Self.makeTexture2D(device: device, values: [0], size: 1)
+              let emptyMask = Self.makeTexture2D(device: device, values: [0], size: 1),
+              let emptyColor = device.makeTexture(descriptor: colorDescriptor)
         else { return nil }
 
         self.device = device
         self.queue = queue
         self.gradeState = gradeState
         self.maskState = maskState
+        self.bokehState = bokehState
+        self.emptyColor = emptyColor
         self.textureCache = cache
         self.grainTextures = grains
         self.emptyLUT = emptyLUT
@@ -120,7 +156,8 @@ final class MetalGrader: @unchecked Sendable {
         into output: CVPixelBuffer,
         cachedMasks: Bool = true,
         previous: FilmLook? = nil,
-        previousMix: Float = 0
+        previousMix: Float = 0,
+        portrait: PortraitPass? = nil
     ) -> Bool {
         var params = GradeParams()
         var holders: [CVMetalTexture] = []
@@ -234,6 +271,36 @@ final class MetalGrader: @unchecked Sendable {
             params.bloom = 0
         }
 
+        var depthTexture = emptyMask
+        var bokehTexture = emptyColor
+        if let portrait,
+           let depth = texture(from: portrait.depth, plane: nil, format: .r16Float, holders: &holders),
+           let targets = bokehTargets(width: crop.width, height: crop.height, squeeze: portrait.squeeze, cached: cachedMasks),
+           let encoder = commandBuffer.makeComputeCommandEncoder() {
+            params.hasPortrait = 1
+            params.depthRotated = portrait.depthRotated ? 1 : 0
+            params.sourceWidth = Int32(CVPixelBufferGetWidth(source))
+            params.sourceHeight = Int32(CVPixelBufferGetHeight(source))
+            params.depthFocus = portrait.focus
+            params.swirl = portrait.swirl
+            params.lensVignette = portrait.vignette
+            params.bokehBoost = portrait.boost
+            encoder.setComputePipelineState(bokehState)
+            encoder.setTexture(luma, index: 0)
+            encoder.setTexture(chroma, index: 1)
+            encoder.setTexture(lut ?? emptyLUT, index: 2)
+            encoder.setTexture(targets.raw, index: 3)
+            encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
+            dispatch(encoder, state: bokehState, width: targets.raw.width, height: targets.raw.height)
+            encoder.endEncoding()
+            let sigma = max(1, Float(min(targets.raw.width, targets.raw.height)) * 0.018 * portrait.strength * portrait.softness)
+            let blur = MPSImageGaussianBlur(device: device, sigma: sigma)
+            blur.edgeMode = .clamp
+            blur.encode(commandBuffer: commandBuffer, sourceTexture: targets.raw, destinationTexture: targets.blurred)
+            depthTexture = depth
+            bokehTexture = targets.blurred
+        }
+
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return false }
         encoder.setComputePipelineState(gradeState)
         encoder.setTexture(luma, index: 0)
@@ -243,6 +310,8 @@ final class MetalGrader: @unchecked Sendable {
         encoder.setTexture(grain, index: 4)
         encoder.setTexture(destination, index: 5)
         encoder.setTexture(previousLUT ?? emptyLUT, index: 6)
+        encoder.setTexture(depthTexture, index: 7)
+        encoder.setTexture(bokehTexture, index: 8)
         encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
         dispatch(encoder, state: gradeState, width: crop.width, height: crop.height)
         encoder.endEncoding()
@@ -319,6 +388,30 @@ final class MetalGrader: @unchecked Sendable {
         if cached {
             lock.lock()
             maskCache[key] = (raw, blurred)
+            lock.unlock()
+        }
+        return (raw, blurred)
+    }
+
+    /// The portrait background at a quarter of the frame, narrower still for anamorphic lenses.
+    private func bokehTargets(width: Int, height: Int, squeeze: Float, cached: Bool) -> (raw: MTLTexture, blurred: MTLTexture)? {
+        let targetWidth = max(8, Int(Float(width / 4) * squeeze))
+        let targetHeight = max(8, height / 4)
+        let key = targetWidth << 16 | targetHeight
+        if cached {
+            lock.lock()
+            defer { lock.unlock() }
+            if let existing = bokehCache[key] { return existing }
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: targetWidth, height: targetHeight, mipmapped: false)
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        descriptor.storageMode = .private
+        guard let raw = device.makeTexture(descriptor: descriptor),
+              let blurred = device.makeTexture(descriptor: descriptor)
+        else { return nil }
+        if cached {
+            lock.lock()
+            bokehCache[key] = (raw, blurred)
             lock.unlock()
         }
         return (raw, blurred)

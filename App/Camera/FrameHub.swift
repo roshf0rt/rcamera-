@@ -9,7 +9,18 @@ import QuartzCore
 /// With two video outputs (iOS 16+ on most devices) the viewfinder stream is unstabilized, so it has no
 /// delay, and a second stream carries stabilized frames for the recording only. Lampa does the same
 /// ("stream stabilization" and "recorder stabilization"). With one output, that output does both.
-final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
+final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate,
+    AVCaptureDepthDataOutputDelegate, @unchecked Sendable {
+    /// How the selected lens draws the live portrait background. Nil when portrait mode is off.
+    struct PortraitLook: Equatable {
+        var strength: Float
+        var swirl: Float
+        var squeeze: Float
+        var vignette: Float
+        var boost: Float
+        var softness: Float
+    }
+
     struct Geometry {
         var source: CGSize
         var crop: CropRect
@@ -46,6 +57,10 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         var start: CFTimeInterval
     }
     private var logLook: FilmLook?
+    private var portraitLook: PortraitLook?
+    /// The newest disparity map, with the subject's disparity from its middle.
+    private var depth: (map: CVPixelBuffer, focus: Float)?
+    private var depthRotated = false
     private var aspect: AspectOption = .ratio4x3
     private var mirror = false
     private weak var recordOutput: AVCaptureOutput?
@@ -78,6 +93,64 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         self.aspect = aspect
         self.mirror = mirror
         lock.unlock()
+    }
+
+    /// Turns the live portrait background on (with the lens's look) or off.
+    func setPortrait(_ look: PortraitLook?) {
+        lock.lock()
+        portraitLook = look
+        if look == nil { depth = nil }
+        lock.unlock()
+    }
+
+    /// Clears the last depth map when depth stops coming, so an old map is never used.
+    func setPortraitDepthAvailable(_ available: Bool) {
+        guard !available else { return }
+        lock.lock()
+        depth = nil
+        lock.unlock()
+    }
+
+    /// Whether the depth connection was turned to portrait like the video ones.
+    func setDepthRotated(_ rotated: Bool) {
+        lock.lock()
+        depthRotated = rotated
+        lock.unlock()
+    }
+
+    func depthDataOutput(_ output: AVCaptureDepthDataOutput, didOutput depthData: AVDepthData, timestamp: CMTime, connection: AVCaptureConnection) {
+        let disparity = depthData.depthDataType == kCVPixelFormatType_DisparityFloat16
+            ? depthData
+            : depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat16)
+        let map = disparity.depthDataMap
+        guard let focus = Self.middleDisparity(map) else { return }
+        lock.lock()
+        // Smooth the focus a little so the edge of the blur does not shimmer.
+        let previous = depth?.focus ?? focus
+        depth = (map, previous * 0.7 + focus * 0.3)
+        lock.unlock()
+    }
+
+    /// Mean disparity over the middle fifth of the map, where the portrait subject usually is.
+    private static func middleDisparity(_ map: CVPixelBuffer) -> Float? {
+        CVPixelBufferLockBaseAddress(map, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(map, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(map) else { return nil }
+        let width = CVPixelBufferGetWidth(map), height = CVPixelBufferGetHeight(map)
+        let rowBytes = CVPixelBufferGetBytesPerRow(map)
+        var sum: Float = 0
+        var count = 0
+        for y in stride(from: height * 2 / 5, to: height * 3 / 5, by: 2) {
+            let row = (base + y * rowBytes).assumingMemoryBound(to: Float16.self)
+            for x in stride(from: width * 2 / 5, to: width * 3 / 5, by: 2) {
+                let value = Float(row[x])
+                if value.isFinite, value > 0 {
+                    sum += value
+                    count += 1
+                }
+            }
+        }
+        return count > 0 ? sum / Float(count) : nil
     }
 
     /// The output whose frames are only recorded. Nil when the viewfinder stream is recorded too.
@@ -155,6 +228,14 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
             }
         }
         let aspect = aspect, mirror = mirror
+        let portrait: PortraitPass? = {
+            guard let portraitLook, let depth else { return nil }
+            return PortraitPass(
+                depth: depth.map, depthRotated: depthRotated, focus: depth.focus,
+                strength: portraitLook.strength, swirl: portraitLook.swirl, squeeze: portraitLook.squeeze,
+                vignette: portraitLook.vignette, boost: portraitLook.boost, softness: portraitLook.softness
+            )
+        }()
         let separateRecordStream = recordOutput != nil
         let isRecordStream = separateRecordStream && output === recordOutput
         let wantsRecording = recorder != nil || pending != nil
@@ -168,7 +249,7 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
             return
         }
 
-        guard let rendered = render(source, pool: previewPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror) else { return }
+        guard let rendered = render(source, pool: previewPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror, portrait: portrait) else { return }
         let buffer = rendered.buffer, crop = rendered.crop
         lock.lock()
         geometry = Geometry(source: CGSize(width: CVPixelBufferGetWidth(source), height: CVPixelBufferGetHeight(source)), crop: crop)
@@ -193,11 +274,12 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         previous: FilmLook?,
         previousMix: Float,
         aspect: AspectOption,
-        mirror: Bool
+        mirror: Bool,
+        portrait: PortraitPass? = nil
     ) -> (buffer: CVPixelBuffer, crop: CropRect)? {
         let crop = aspect.cropRect(sourceWidth: CVPixelBufferGetWidth(source), sourceHeight: CVPixelBufferGetHeight(source))
         guard let output = pool.buffer(width: crop.width, height: crop.height) else { return nil }
-        if let grader, grader.grade(source: source, crop: crop, mirror: mirror, look: look, into: output, previous: previous, previousMix: previousMix) {
+        if let grader, grader.grade(source: source, crop: crop, mirror: mirror, look: look, into: output, previous: previous, previousMix: previousMix, portrait: portrait) {
             return (output, crop)
         }
 

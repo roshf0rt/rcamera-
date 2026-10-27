@@ -49,6 +49,15 @@ struct GradeParams {
     float bloom;
     float sharpness;      // negative softens
     float fringe;         // chromatic aberration, 0...4
+    // Live portrait: background from the depth map replaced by the blurred bokeh texture.
+    int hasPortrait;
+    int depthRotated;     // 1 when the depth map is already portrait like the frames
+    int sourceWidth;
+    int sourceHeight;
+    float depthFocus;     // the subject's disparity
+    float swirl;
+    float lensVignette;
+    float bokehBoost;     // how much highlights swell into bokeh balls
 };
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
@@ -172,6 +181,27 @@ static float3 gradeColor(float3 source, texture3d<float> lut, constant GradePara
     return mix(regulated, graded, p.filmStrength);
 }
 
+/// The graded picture at reduced size with its highlights swollen, blurred afterwards into the portrait
+/// background. The texture may be squeezed sideways; stretched back it turns round blur into tall ovals.
+kernel void bokehSource(texture2d<float, access::read> luma [[texture(0)]],
+                        texture2d<float, access::read> chroma [[texture(1)]],
+                        texture3d<float> lut [[texture(2)]],
+                        texture2d<float, access::write> small [[texture(3)]],
+                        constant GradeParams &p [[buffer(0)]],
+                        uint2 gid [[thread_position_in_grid]]) {
+    uint w = small.get_width();
+    uint h = small.get_height();
+    if (gid.x >= w || gid.y >= h) {
+        return;
+    }
+    uint2 outputPoint = uint2(min(uint((float(gid.x) + 0.5) * float(p.width) / float(w)), uint(p.width - 1)),
+                              min(uint((float(gid.y) + 0.5) * float(p.height) / float(h)), uint(p.height - 1)));
+    float3 c = gradeColor(readSource(luma, chroma, sourcePoint(outputPoint, p), p), lut, p);
+    float y = dot(c, kLuma);
+    c += c * p.bokehBoost * smoothstep(0.55, 1.0, y) * 2.5;
+    small.write(float4(c, 1.0), gid);
+}
+
 /// Highlight mask at reduced size. Each thread samples the graded color at the middle of its block.
 kernel void halationMask(texture2d<float, access::read> luma [[texture(0)]],
                          texture2d<float, access::read> chroma [[texture(1)]],
@@ -200,6 +230,8 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
                   texture2d<float> grain [[texture(4)]],
                   texture2d<float, access::write> destination [[texture(5)]],
                   texture3d<float> previousLUT [[texture(6)]],
+                  texture2d<float> depth [[texture(7)]],
+                  texture2d<float> bokeh [[texture(8)]],
                   constant GradeParams &p [[buffer(0)]],
                   uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= uint(p.width) || gid.y >= uint(p.height)) {
@@ -217,6 +249,21 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
     }
 
     float2 uv = (float2(gid) + 0.5) / float2(float(p.width), float(p.height));
+
+    if (p.hasPortrait != 0) {
+        float2 sp = (float2(sourcePoint(gid, p)) + 0.5) / float2(float(p.sourceWidth), float(p.sourceHeight));
+        float2 duv = p.depthRotated != 0 ? sp : float2(sp.y, 1.0 - sp.x);
+        float d = depth.sample(linearClamp, duv).r;
+        float mask = saturate((p.depthFocus * 0.85 - d) / max(p.depthFocus * 0.3, 0.0001));
+        float2 centred = uv - 0.5;
+        float r = length(centred * float2(float(p.width) / float(p.height), 1.0));
+        float a = p.swirl * 1.1 * r * r;
+        float2 turned = float2(centred.x * cos(a) - centred.y * sin(a), centred.x * sin(a) + centred.y * cos(a));
+        float3 background = bokeh.sample(linearClamp, turned + 0.5).rgb;
+        color = mix(color, saturate(background), mask);
+        color *= 1.0 - p.lensVignette * 0.9 * smoothstep(0.3, 0.95, length(centred) * 1.414);
+    }
+
     if (p.halation > 0.0) {
         float m = glow.sample(linearClamp, uv).r;
         float amount = p.halation * saturate(0.77 - dot(color, kLuma)) * m;
