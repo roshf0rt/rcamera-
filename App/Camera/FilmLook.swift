@@ -54,6 +54,11 @@ final class FilmLook: @unchecked Sendable {
         return FilmLook(lut: lut, grain: grain, halation: halation, adjustments: next, upload: upload)
     }
 
+    /// The same LUT with other amounts and regulators, for live editing. The LUT upload is shared.
+    func with(grain: Double, halation: Double, adjustments: LookAdjustments) -> FilmLook {
+        FilmLook(lut: lut, grain: grain, halation: halation, adjustments: adjustments, upload: upload)
+    }
+
     /// The LUT as a 3D half-float texture, red along x. Created on first use.
     func texture(on device: MTLDevice) -> MTLTexture? {
         guard let lut else { return nil }

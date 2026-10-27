@@ -14,6 +14,9 @@ struct CameraView: View {
     @State private var showOptions = false
     @State private var showDynamicRange = false
     @State private var apertureOpen = false
+    @State private var showLenses = false
+    /// The preset name shown over the picture for a moment after a switch.
+    @State private var presetToast: String?
     @State private var editingPresetID: String?
     @State private var showPresets = false
     @State private var showSettings = false
@@ -30,6 +33,8 @@ struct CameraView: View {
     private let topBarHeight: CGFloat = 50
     private let controlsHeight: CGFloat = 196
     private let zoomLineHeight: CGFloat = 56
+    /// One spring for every panel that slides in, so the screen moves as one.
+    static let panelSpring = Animation.spring(response: 0.36, dampingFraction: 0.86)
 
     var body: some View {
         let engine = model.engine
@@ -59,20 +64,39 @@ struct CameraView: View {
                             apertureOpen = false
                         }
                         Button {
-                            model.updateSettings { $0.lensStyle = $0.lensStyle.next }
+                            withAnimation(Self.panelSpring) { showLenses.toggle(); showPresets = false; showOptions = false }
                         } label: {
-                            Text(model.settings.lensStyle.label)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 14)
-                                .frame(height: 38)
-                                .background(Capsule().fill(Color.black.opacity(0.45)))
+                            HStack(spacing: 8) {
+                                LensPreview(lens: model.settings.lensStyle)
+                                    .frame(width: 24, height: 24)
+                                    .clipShape(Circle())
+                                Text(model.settings.lensStyle.label)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .tracking(0.6)
+                            }
+                            .foregroundStyle(showLenses ? Theme.accent : .white)
+                            .padding(.leading, 7)
+                            .padding(.trailing, 14)
+                            .frame(height: 38)
+                            .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableStyle())
                     }
                     .frame(width: geo.size.width, height: 44)
                     .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50)
                     .transition(.opacity)
+                }
+
+                if showLenses, model.settings.portrait, engine.mode == .photo {
+                    LensPicker(selected: model.settings.lensStyle) { lens in
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        withAnimation(Self.panelSpring) { model.updateSettings { $0.lensStyle = lens } }
+                    }
+                    .background(Color.black.opacity(0.55))
+                    .background(.ultraThinMaterial)
+                    .frame(width: geo.size.width)
+                    .offset(y: geo.size.height - controlsHeight - 196)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
 
                 zoomLine(engine: engine)
@@ -102,18 +126,21 @@ struct CameraView: View {
                         settings: model.settings,
                         update: { change in model.updateSettings(change) },
                         openDynamicRange: {
-                            withAnimation(.easeOut(duration: 0.18)) { showOptions = false; showDynamicRange = true }
+                            withAnimation(Self.panelSpring) { showOptions = false; showDynamicRange = true }
                         }
                     )
                     .frame(width: geo.size.width)
                     .offset(y: topBarHeight + 6)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)),
+                        removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing))
+                    ))
                 }
 
                 if showDynamicRange {
                     DynamicRangeStrip(selected: model.settings.dynamicRange) { choice in
                         model.updateSettings { $0.dynamicRange = choice }
-                        withAnimation(.easeOut(duration: 0.18)) { showDynamicRange = false }
+                        withAnimation(Self.panelSpring) { showDynamicRange = false }
                     }
                     .frame(width: geo.size.width)
                     .offset(y: topBarHeight + 6)
@@ -159,7 +186,8 @@ struct CameraView: View {
         .onChange(of: model.settings.isLevelEnabled) { _, enabled in
             enabled ? model.level.start() : model.level.stop()
         }
-        .onChange(of: engine.mode) { _, _ in showOptions = false }
+        .onChange(of: engine.mode) { _, _ in showOptions = false; showLenses = false }
+        .onChange(of: model.settings.portrait) { _, on in if !on { withAnimation(Self.panelSpring) { showLenses = false } } }
     }
 
     private struct Layout {
@@ -226,7 +254,7 @@ struct CameraView: View {
             }
             Spacer(minLength: 0)
 
-            Button { withAnimation(.easeOut(duration: 0.18)) { showOptions.toggle(); showPresets = false } } label: {
+            Button { withAnimation(Self.panelSpring) { showOptions.toggle(); showPresets = false; showLenses = false; showDynamicRange = false } } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(showOptions ? Theme.accent : .white)
@@ -268,6 +296,31 @@ struct CameraView: View {
             if engine.showsSwitchBlur {
                 Rectangle().fill(.ultraThinMaterial).transition(.opacity)
             }
+            if let toast = presetToast {
+                VStack(spacing: 2) {
+                    Text(PresetCardStyle.of(model.selectedPreset).subtitle.uppercased())
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text(toast)
+                        .font(.system(size: 30, weight: .semibold))
+                        .tracking(-0.5)
+                        .foregroundStyle(.white)
+                }
+                .shadow(color: .black.opacity(0.5), radius: 10)
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                .allowsHitTesting(false)
+                .id(toast)
+            }
+        }
+        .animation(Self.panelSpring, value: presetToast)
+        .onChange(of: model.selectedPreset.id) { _, _ in
+            presetToast = model.selectedPreset.name
+        }
+        .task(id: presetToast) {
+            guard presetToast != nil else { return }
+            try? await Task.sleep(for: .seconds(1.1))
+            if !Task.isCancelled { presetToast = nil }
         }
         .animation(.easeInOut(duration: 0.15), value: engine.showsSwitchBlur)
         .background(Color(white: 0.06))
@@ -275,8 +328,8 @@ struct CameraView: View {
         .contentShape(Rectangle())
         .simultaneousGesture(
             SpatialTapGesture().onEnded { value in
-                if showOptions || showPresets {
-                    withAnimation(.easeOut(duration: 0.18)) { showOptions = false; showPresets = false }
+                if showOptions || showPresets || showLenses || showDynamicRange {
+                    withAnimation(Self.panelSpring) { showOptions = false; showPresets = false; showLenses = false; showDynamicRange = false }
                     return
                 }
                 focusMarker = FocusPoint(location: value.location)
@@ -313,9 +366,9 @@ struct CameraView: View {
         if abs(dy) > abs(dx) * 1.4, abs(dy) > 60 {
             if dy < 0 {
                 guard !showPresets else { return }
-                withAnimation(.easeOut(duration: 0.2)) { showPresets = true; showOptions = false }
-            } else if showPresets || showOptions {
-                withAnimation(.easeOut(duration: 0.2)) { showPresets = false; showOptions = false }
+                withAnimation(Self.panelSpring) { showPresets = true; showOptions = false; showLenses = false }
+            } else if showPresets || showOptions || showLenses || showDynamicRange {
+                withAnimation(Self.panelSpring) { showPresets = false; showOptions = false; showLenses = false; showDynamicRange = false }
             } else {
                 showSettings = true
             }
@@ -425,7 +478,7 @@ struct CameraView: View {
     private var presetButton: some View {
         let preset = model.selectedPreset
         let style = PresetCardStyle.of(preset)
-        return Button { withAnimation(.easeOut(duration: 0.2)) { showPresets.toggle(); showOptions = false } } label: {
+        return Button { withAnimation(Self.panelSpring) { showPresets.toggle(); showOptions = false; showLenses = false } } label: {
             ZStack(alignment: .bottomLeading) {
                 PresetSwatch(preset: preset, corner: 14)
                 Text(preset.name)

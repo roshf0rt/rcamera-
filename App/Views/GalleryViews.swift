@@ -45,6 +45,23 @@ struct GalleryView: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
     var body: some View {
+        ZStack {
+            library
+            if let id = selection {
+                CaptureViewer(startID: id) {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) { selection = nil }
+                }
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .scale(scale: 0.94)),
+                    removal: .opacity
+                ))
+                .zIndex(1)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var library: some View {
         NavigationStack {
             Group {
                 if model.captures.isEmpty {
@@ -58,14 +75,16 @@ struct GalleryView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 3) {
                             ForEach(model.captures) { record in
-                                Button { selection = record.id } label: {
+                                Button {
+                                    withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { selection = record.id }
+                                } label: {
                                     Color.clear
                                         .aspectRatio(1, contentMode: .fit)
                                         .overlay { CaptureThumbnail(record: record) }
                                         .overlay(alignment: .bottomLeading) { badges(for: record) }
                                         .clipped()
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(PressableStyle(scale: 0.96))
                                 .contextMenu {
                                     Button { model.toggleFavorite(record) } label: {
                                         Label(record.isFavorite ? "Unfavorite" : "Favorite", systemImage: record.isFavorite ? "heart.slash" : "heart")
@@ -100,11 +119,7 @@ struct GalleryView: View {
                     Button { dismiss() } label: { Image(systemName: "chevron.down") }
                 }
             }
-            .navigationDestination(item: $selection) { id in
-                CaptureDetailView(recordID: id) { selection = $0 }
-            }
         }
-        .preferredColorScheme(.dark)
     }
 
     private func badges(for record: CaptureRecord) -> some View {
@@ -119,155 +134,185 @@ struct GalleryView: View {
     }
 }
 
-struct CaptureDetailView: View {
+/// The full-screen viewer over the library. Captures page sideways; dragging down shrinks the photo and
+/// fades the black behind it, and letting go past the threshold closes the viewer, like Photos.
+struct CaptureViewer: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let recordID: UUID
-    /// Opens another capture in place, for swiping sideways through the library.
-    var open: (UUID) -> Void = { _ in }
+    let startID: UUID
+    let close: () -> Void
 
+    @State private var current: UUID?
+    @State private var dragY: CGFloat = 0
+    /// Decided once per drag: true for a downward drag that should close, false for anything else.
+    @State private var closingDrag: Bool?
+    @State private var zoomed = false
     @State private var showRedevelop = false
     @State private var confirmDelete = false
-    @State private var image: UIImage?
-    @State private var player: AVPlayer?
-    /// A zoomed photo pans instead of swiping, so swipes wait until it is back at fit.
-    @State private var zoomed = false
 
-    private var record: CaptureRecord? { model.captures.first { $0.id == recordID } }
+    private var record: CaptureRecord? { model.captures.first { $0.id == (current ?? startID) } }
 
     var body: some View {
-        Group {
+        let progress = min(max(dragY / 320, 0), 1)
+        ZStack {
+            Color.black.opacity(1 - progress).ignoresSafeArea()
+
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(model.captures) { item in
+                        CapturePage(
+                            record: item,
+                            isCurrent: item.id == (current ?? startID),
+                            zoomed: $zoomed,
+                            askDelete: { confirmDelete = true }
+                        )
+                        .containerRelativeFrame([.horizontal, .vertical])
+                        .id(item.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $current)
+            .scrollIndicators(.hidden)
+            .scrollDisabled(zoomed || dragY > 0)
+            .ignoresSafeArea()
+            .offset(y: dragY)
+            .scaleEffect(1 - 0.25 * progress)
+            .simultaneousGesture(dismissDrag)
+
             if let record {
-                content(record)
-            } else {
-                Color.black.onAppear { dismiss() }
+                chrome(record)
+                    .opacity(1 - min(1, progress * 2.5))
             }
         }
-        .background(Color.black.ignoresSafeArea())
-        .navigationBarBackButtonHidden()
-        .toolbar(.hidden, for: .navigationBar)
-    }
-
-    /// Swipe down goes back to the grid, swipe left and right move to the neighbouring capture.
-    private func swipe(_ value: DragGesture.Value, _ record: CaptureRecord) {
-        let dx = value.translation.width, dy = value.translation.height
-        if dy > 90, dy > abs(dx) * 1.4 {
-            dismiss()
-        } else if abs(dx) > 70, abs(dx) > abs(dy) * 1.4 {
-            // The library is newest first: a swipe left goes to an older capture.
-            let all = model.captures
-            guard let index = all.firstIndex(where: { $0.id == record.id }) else { return }
-            let target = dx < 0 ? index + 1 : index - 1
-            if all.indices.contains(target) { open(all[target].id) }
+        .onAppear { current = startID }
+        .onChange(of: model.captures.map(\.id)) { _, ids in
+            if ids.isEmpty { close() }
+        }
+        .sensoryFeedback(.selection, trigger: current)
+        .fullScreenCover(isPresented: $showRedevelop) {
+            if let record { RedevelopView(recordID: record.id) }
+        }
+        .confirmationDialog("Delete this capture?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { deleteCurrent() }
         }
     }
 
-    private func content(_ record: CaptureRecord) -> some View {
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                guard !zoomed else { return }
+                if closingDrag == nil {
+                    let dx = value.translation.width, dy = value.translation.height
+                    closingDrag = dy > 0 && dy > abs(dx) * 1.2
+                }
+                guard closingDrag == true else { return }
+                dragY = max(0, value.translation.height)
+            }
+            .onEnded { value in
+                defer { closingDrag = nil }
+                guard closingDrag == true else { return }
+                if value.translation.height > 110 || value.predictedEndTranslation.height > 420 {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    close()
+                } else {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) { dragY = 0 }
+                }
+            }
+    }
+
+    /// Deletes the shown capture and moves to its neighbour, or closes when it was the last one.
+    private func deleteCurrent() {
+        guard let record else { return }
+        let all = model.captures
+        let index = all.firstIndex { $0.id == record.id } ?? 0
+        let neighbour = all.indices.contains(index + 1) ? all[index + 1].id : (index > 0 ? all[index - 1].id : nil)
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            model.delete(record)
+            current = neighbour
+        }
+        if neighbour == nil { close() }
+    }
+
+    private func chrome(_ record: CaptureRecord) -> some View {
         VStack(spacing: 0) {
             header(record)
             HStack {
                 Text(badge(for: record))
-                    .font(.system(size: 14, design: .monospaced))
+                    .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Theme.chrome))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
                 Spacer()
             }
             .padding(.horizontal, 14)
-            .padding(.top, 8)
-
-            Spacer(minLength: 0)
-            media(record)
+            .padding(.top, 4)
             Spacer(minLength: 0)
             bottomBar(record)
-        }
-        .task(id: "\(record.id)-\(record.presetID)-\(record.evPushPull)") {
-            if record.kind == .video {
-                player = AVPlayer(url: model.url(.video, for: record))
-            } else {
-                let url = model.url(.processed, for: record)
-                image = await Task.detached { UIImage(contentsOfFile: url.path) }.value
-            }
-        }
-        .contentShape(Rectangle())
-        .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { value in
-            if !zoomed { swipe(value, record) }
-        })
-        .fullScreenCover(isPresented: $showRedevelop) { RedevelopView(recordID: record.id) }
-        .confirmationDialog("Delete this capture?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                model.delete(record)
-                dismiss()
-            }
         }
     }
 
     private func header(_ record: CaptureRecord) -> some View {
         HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "arrow.left").font(.system(size: 22, weight: .medium)).frame(width: 44, height: 44)
+            Button(action: close) {
+                Image(systemName: "chevron.down").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44)
             }
+            .buttonStyle(PressableStyle())
             Spacer()
             VStack(spacing: 2) {
                 if let place = record.placeName {
-                    Text(place).foregroundStyle(Theme.secondaryText)
+                    Text(place)
                 }
-                Text(Self.dateText(record.date)).foregroundStyle(Theme.secondaryText)
+                Text(Self.dateText(record.date))
             }
-            .font(.system(size: 14, design: .monospaced))
+            .font(.system(size: 13, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.75))
             Spacer()
             ShareLink(item: model.url(record.kind == .video ? .video : .processed, for: record)) {
-                Image(systemName: "square.and.arrow.up").font(.system(size: 22)).frame(width: 44, height: 44)
+                Image(systemName: "square.and.arrow.up").font(.system(size: 20)).frame(width: 44, height: 44)
             }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 8)
-    }
-
-    @ViewBuilder
-    private func media(_ record: CaptureRecord) -> some View {
-        if record.kind == .video {
-            if let player {
-                VideoPlayer(player: player).aspectRatio(9.0 / 16.0, contentMode: .fit)
-            } else {
-                ProgressView()
-            }
-        } else if let image {
-            ZoomableImage(image: image, isZoomed: $zoomed)
-                .onLongPressGesture(minimumDuration: 0.6) { confirmDelete = true }
-        } else {
-            ProgressView()
-        }
+        .background(LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom).ignoresSafeArea())
     }
 
     private func bottomBar(_ record: CaptureRecord) -> some View {
         HStack {
             Button { model.toggleFavorite(record) } label: {
-                Image(systemName: record.isFavorite ? "heart.fill" : "heart").font(.system(size: 26)).frame(width: 52, height: 52)
+                Image(systemName: record.isFavorite ? "heart.fill" : "heart")
+                    .font(.system(size: 24))
+                    .frame(width: 52, height: 52)
+                    .contentTransition(.symbolEffect(.replace))
             }
             .foregroundStyle(record.isFavorite ? Theme.accent : .white)
+            .buttonStyle(PressableStyle())
+            .sensoryFeedback(.impact(weight: .light), trigger: record.isFavorite)
             Spacer()
             if model.canRedevelop(record) {
                 Button { showRedevelop = true } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "square.stack.3d.up.fill")
-                        Text("Redevelop").font(.system(size: 20, weight: .medium))
+                        Text("Redevelop").font(.system(size: 18, weight: .semibold))
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 24)
-                    .frame(height: 56)
-                    .background(Capsule().fill(Theme.chrome))
+                    .padding(.horizontal, 22)
+                    .frame(height: 52)
+                    .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
                 }
+                .buttonStyle(PressableStyle())
             }
             Spacer()
             Button { confirmDelete = true } label: {
-                Image(systemName: "trash").font(.system(size: 24)).frame(width: 52, height: 52)
+                Image(systemName: "trash").font(.system(size: 22)).frame(width: 52, height: 52)
             }
             .foregroundStyle(.white)
+            .buttonStyle(PressableStyle())
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom).ignoresSafeArea())
     }
 
     private func badge(for record: CaptureRecord) -> String {
@@ -280,6 +325,56 @@ struct CaptureDetailView: View {
         if Calendar.current.isDateInToday(date) { return "Today, \(time)" }
         if Calendar.current.isDateInYesterday(date) { return "Yesterday, \(time)" }
         return date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+/// One capture in the viewer. The photo loads when the page comes near; video plays only on the shown page.
+private struct CapturePage: View {
+    @Environment(AppModel.self) private var model
+    let record: CaptureRecord
+    let isCurrent: Bool
+    @Binding var zoomed: Bool
+    let askDelete: () -> Void
+
+    @State private var image: UIImage?
+    @State private var player: AVPlayer?
+    @State private var localZoom = false
+
+    var body: some View {
+        ZStack {
+            if record.kind == .video {
+                if let player {
+                    VideoPlayer(player: player).aspectRatio(9.0 / 16.0, contentMode: .fit)
+                } else {
+                    ProgressView().tint(.white)
+                }
+            } else if let image {
+                ZoomableImage(image: image, isZoomed: $localZoom)
+                    .onLongPressGesture(minimumDuration: 0.6) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        askDelete()
+                    }
+                    .transition(.opacity)
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: "\(record.id)-\(record.presetID)-\(record.evPushPull)") {
+            if record.kind == .video {
+                player = AVPlayer(url: model.url(.video, for: record))
+            } else {
+                let url = model.url(.processed, for: record)
+                let loaded = await Task.detached { UIImage(contentsOfFile: url.path) }.value
+                withAnimation(.easeOut(duration: 0.2)) { image = loaded }
+            }
+        }
+        .onChange(of: isCurrent) { _, shown in
+            if !shown { player?.pause() }
+        }
+        .onChange(of: localZoom) { _, value in
+            if isCurrent { zoomed = value }
+        }
     }
 }
 

@@ -91,6 +91,86 @@ public enum LensStyle: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    /// One line about the bokeh, for the lens picker.
+    public var summary: String {
+        switch self {
+        case .solis: "Clean, round, modern"
+        case .lumar: "Soft, dreamy, no edges"
+        case .trinity: "Soap bubbles with bright rims"
+        case .helion: "Round with edge swirl"
+        case .petzval: "Heavy swirl and fringing"
+        case .animor: "Tall anamorphic ovals"
+        case .hexon: "Six-bladed hexagons"
+        }
+    }
+
+    /// Aperture blades, 0 for a round opening.
+    public var bladeCount: Int {
+        self == .hexon ? 6 : 0
+    }
+
+    /// How much the bokeh is clipped into a cat's eye towards the frame edges, 0...1.
+    public var catsEye: Double {
+        switch self {
+        case .solis: 0.30
+        case .lumar: 0.20
+        case .trinity: 0.30
+        case .helion: 0.69
+        case .petzval: 0.79
+        case .animor: 0.70
+        case .hexon: 0.16
+        }
+    }
+
+    /// Stretch of the bokeh: positive is taller, negative wider.
+    public var ovality: Double {
+        switch self {
+        case .lumar: 0.07
+        case .petzval: -0.2
+        case .animor: 1.0
+        default: 0
+        }
+    }
+
+    /// Bokeh rim: positive is a bright ring with a hollow centre, negative a soft edge.
+    public var rim: Double {
+        switch self {
+        case .solis: 0.05
+        case .lumar: -0.95
+        case .trinity: 0.91
+        case .helion: 0.27
+        case .petzval: 0.60
+        case .animor: 0.20
+        case .hexon: 0.03
+        }
+    }
+
+    /// Width of that rim, 0...1 of the radius.
+    public var rimWidth: Double {
+        switch self {
+        case .solis: 0.55
+        case .lumar: 0.90
+        case .trinity: 0.16
+        case .helion: 0.24
+        case .petzval: 0.57
+        case .animor: 0.20
+        case .hexon: 0.45
+        }
+    }
+
+    /// Swirl of the background around the centre, 0...1.
+    public var swirl: Double {
+        switch self {
+        case .solis: 0
+        case .lumar: 0.15
+        case .trinity: 0.06
+        case .helion: 0.77
+        case .petzval: 1.0
+        case .animor: 0
+        case .hexon: 0.06
+        }
+    }
+
     /// Writes this lens's fringing into a look, so the photo's own colour fringing follows the lens.
     public func apply(to adjustments: inout LookAdjustments) {
         adjustments.chromaticAberration = LookAdjustments.clamp(fringing * 2, 0, 4)

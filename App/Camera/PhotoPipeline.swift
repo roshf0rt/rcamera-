@@ -330,6 +330,37 @@ enum PhotoPipeline {
         return buffer
     }
 
+    /// Any photo (camera file, library pick) scaled to `longSide`, as a preview base.
+    static func previewBase(data: Data, longSide: CGFloat = 1000) -> CVPixelBuffer? {
+        processedImage(data).flatMap { previewBase(image: $0, longSide: longSide) }
+    }
+
+    static func previewBase(image: CIImage, longSide: CGFloat = 1000) -> CVPixelBuffer? {
+        let extent = image.extent
+        guard !extent.isEmpty, !extent.isInfinite else { return nil }
+        let factor = min(1, longSide / max(extent.width, extent.height))
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: factor, y: factor))
+        let rect = scaled.extent.integral
+        let placed = scaled.transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+        let width = Int(rect.width) & ~1, height = Int(rect.height) & ~1
+        guard width > 0, height > 0, let buffer = MetalGrader.makePixelBuffer(width: width, height: height) else { return nil }
+        context.render(placed, to: buffer, bounds: CGRect(x: 0, y: 0, width: width, height: height), colorSpace: sRGB)
+        return buffer
+    }
+
+    /// The built-in test scene for the preset editor: sky, sun, greens, skin tones and shadows, ungraded.
+    static func sampleScene(width: Int = 1000, height: Int = 750) -> CVPixelBuffer? {
+        let pixels = LUTCardArt.render(lut: nil, width: width, height: height)
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData),
+              let cgImage = CGImage(
+                  width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                  space: sRGB, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                  provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent
+              )
+        else { return nil }
+        return previewBase(image: CIImage(cgImage: cgImage), longSide: CGFloat(max(width, height)))
+    }
+
     /// Grades a preview base with a look. A few milliseconds on the GPU.
     static func gradePreview(_ base: CVPixelBuffer, look: FilmLook) -> UIImage? {
         let width = CVPixelBufferGetWidth(base), height = CVPixelBufferGetHeight(base)

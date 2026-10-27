@@ -361,6 +361,57 @@ final class LensStyleTests: XCTestCase {
         }
     }
 
+    func testBokehParametersStayInTheirRanges() {
+        for lens in LensStyle.allCases {
+            XCTAssertTrue((0 ... 1).contains(lens.catsEye), "\(lens)")
+            XCTAssertTrue((-1 ... 1).contains(lens.ovality), "\(lens)")
+            XCTAssertTrue((-1 ... 1).contains(lens.rim), "\(lens)")
+            XCTAssertTrue((0 ... 1).contains(lens.rimWidth), "\(lens)")
+            XCTAssertTrue((0 ... 1).contains(lens.swirl), "\(lens)")
+            XCTAssertFalse(lens.summary.isEmpty)
+        }
+        XCTAssertEqual(LensStyle.hexon.bladeCount, 6)
+    }
+
+    func testBokehLightsAreStableAndInsideTheFrame() {
+        let lights = LensBokeh.lights()
+        XCTAssertEqual(lights, LensBokeh.lights())
+        XCTAssertEqual(lights.count, 34)
+        for light in lights {
+            XCTAssertTrue((-0.05 ... 1.05).contains(light.x))
+            XCTAssertTrue((-0.05 ... 1.05).contains(light.y))
+            XCTAssertGreaterThan(light.radius, 0)
+        }
+    }
+
+    func testBokehShapesFollowTheLens() {
+        let centre = LensBokeh.Light(x: 0.5, y: 0.5, radius: 0.1, red: 1, green: 1, blue: 1, brightness: 1)
+        let corner = LensBokeh.Light(x: 0.95, y: 0.95, radius: 0.1, red: 1, green: 1, blue: 1, brightness: 1)
+        let clean = LensBokeh.shape(of: centre, lens: .solis)
+        XCTAssertEqual(clean.radialScale, 1, accuracy: 1e-9)
+        XCTAssertEqual(clean.tangentialScale, 1, accuracy: 1e-9)
+        XCTAssertNil(clean.catsEyeCut)
+        let swirled = LensBokeh.shape(of: corner, lens: .petzval)
+        XCTAssertLessThan(swirled.radialScale, 1, "cat's eye squeezes towards the edge")
+        XCTAssertGreaterThan(swirled.tangentialScale, 1.3, "swirl stretches around the centre")
+        XCTAssertNotNil(swirled.catsEyeCut)
+        let oval = LensBokeh.shape(of: centre, lens: .animor)
+        XCTAssertGreaterThan(oval.tangentialScale, 1.4, "anamorphic is tall at the centre")
+    }
+
+    func testBokehProfiles() {
+        // Soap bubbles: hollow centre, bright rim.
+        XCTAssertLessThan(LensBokeh.profile(0.2, lens: .trinity), LensBokeh.profile(0.95, lens: .trinity))
+        // Dreamy: full in the middle, fading to nothing at the edge.
+        XCTAssertEqual(LensBokeh.profile(0, lens: .lumar), 1)
+        XCTAssertLessThan(LensBokeh.profile(0.99, lens: .lumar), 0.05)
+        for lens in LensStyle.allCases {
+            for t in stride(from: 0.0, through: 1.0, by: 0.05) {
+                XCTAssertTrue((0 ... 1).contains(LensBokeh.profile(t, lens: lens)), "\(lens) \(t)")
+            }
+        }
+    }
+
     func testApplyWritesFringingIntoTheLook() {
         var look = LookAdjustments.neutral
         LensStyle.petzval.apply(to: &look)

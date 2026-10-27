@@ -6,6 +6,14 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
+    /// "0.1.0 (build 57)": the build is the CI run number, so every IPA can be told apart.
+    static var version: String {
+        let info = Bundle.main.infoDictionary
+        let marketing = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(marketing) (build \(build))"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -71,7 +79,10 @@ struct SettingsView: View {
                 .disabled(model.engine.isRecording)
 
                 Section {} footer: {
-                    Text("RAW files are kept for \(CaptureStore.rawRetentionDays) days so you can redevelop photos, then deleted. The processed photo stays.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("RAW files are kept for \(CaptureStore.rawRetentionDays) days so you can redevelop photos, then deleted. The processed photo stays.")
+                        Text("RCamera \(Self.version)").font(.system(size: 12, design: .monospaced))
+                    }
                 }
             }
             .scrollContentBackground(.hidden)
