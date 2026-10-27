@@ -27,7 +27,7 @@
 | App Intent «Take Photo» (Action button, Shortcuts) | `Metadata.appintents` | добавлено | открывает приложение и снимает |
 | Съёмка с задержкой без задержки (zero shutter lag, responsive capture) | `isZeroShutterLagSupported`, `isResponsiveCaptureSupported`, `setFastCapturePrioritization` | не сделано | в нашей схеме фото идёт через 4:3-формат; нужна отдельная проверка |
 | Отключение звука затвора | `isShutterSoundSuppressionSupported` | не сделано | в iOS звук отключается не везде, не проверено |
-| Глубина (LiDAR / TrueDepth) и боке | `BokehPipeline`, `LiveDepthAccumulator`, `setDepthDataDelivery…`, `DepthEffectPreview` | не сделано | большой блок: depth-буфер, маска, блюр по форме объектива; см. ниже |
+| Портретный режим (фото с глубиной, блюр фона) | `BokehPipeline`, `setDepthDataDelivery…`, режим P | добавлено | `CIDepthBlurEffect` по карте глубины, выбор ƒ-числа; живого блюра в видоискателе нет; без проверки на устройстве |
 | Объективы-стили (LUMA и ещё 6) | `LensPresets.bundle` | не сделано | зависит от глубины; параметры описаны в `DATA_MODEL.md` |
 | HDR gain map (Ultra HDR) | `CIHdrGainMapFromImage`, `GainMapToIsoMapFilter`, `setAutomaticallyAdjustsVideoHDREnabled`, `hdrHeadroom` | не сделано | нужен вывод gain map в JPEG/HEIC через ImageIO |
 | Виджет на экране блокировки | `LockedWidgetExtension.appex` | не сделано | отдельный таргет WidgetKit |
@@ -60,6 +60,9 @@
 | Рамка по умолчанию для плёнки и режим Auto | не сделано | |
 | Пэттерны на рамке (`pattern1…6`) | не сделано | ассеты mood не копировались |
 | Рамка на сохранённом фото и при перепроявке | добавлено | в предпросмотре Redevelop рамки нет |
+| Выбор динамического диапазона на экране камеры (PRESET, EXT+, HIGH, MED, LOW, ZERO) | добавлено | полоса под верхней панелью, из меню «…» |
+| Редактор пресета на трёх вкладках (Emulation, Quality, Tone) с полосой регуляторов | добавлено | `PresetEditor.swift` |
+| Карточка «Colour chart» | добавлено | сетка патчей, пересчитанная через текущий look (`ColourChart`) |
 | Рамка на видео | не сделано | |
 
 ## Интерфейс и жесты
@@ -68,7 +71,7 @@
 |---|---|---|
 | Свайп вверх/вниз/влево/вправо | есть | в RCamera есть: вверх — фильтры, вниз — настройки, влево/вправо — фото/видео |
 | Свайпы в просмотре фото | есть | |
-| Экран регуляторов со свайп-контролами (`SwipeControl2`) | не сделано в камере | регуляторы есть в редакторе пресета, не на экране камеры |
+| Экран регуляторов со свайп-контролами (`SwipeControl2`) | частично | регуляторы в редакторе пресета на трёх вкладках; на экране камеры — только DR |
 | Подсказка (info overlay) | не сделано | |
 | Онбординг (3 экрана, `onboarding1…3`) | не сделано | |
 | Ревью-промпт | не нужно | |
