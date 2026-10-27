@@ -284,8 +284,6 @@ struct CameraView: View {
 
     // MARK: Portrait
 
-    private var sortedLenses: [LensStyle] { LensStyle.allCases.sorted { $0.order < $1.order } }
-
     enum Dial: Equatable {
         case aperture
         case lens
