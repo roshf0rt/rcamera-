@@ -32,6 +32,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     /// Whether the saved image has film grain and halation. Redevelop can switch them.
     public var grainEnabled: Bool
     public var halationEnabled: Bool
+    /// Border the saved photo was made with. Redevelop keeps it.
+    public var frame: FrameStyle
 
     public init(
         id: UUID = UUID(),
@@ -45,6 +47,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         isFavorite: Bool = false,
         rawExposureOffset: Double = 0,
         mirrored: Bool = false,
+        frame: FrameStyle = .off,
         grainEnabled: Bool = true,
         halationEnabled: Bool = true
     ) {
@@ -59,12 +62,13 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.isFavorite = isFavorite
         self.rawExposureOffset = rawExposureOffset
         self.mirrored = mirrored
+        self.frame = frame
         self.grainEnabled = grainEnabled
         self.halationEnabled = halationEnabled
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored
+        case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
         case grainEnabled, halationEnabled
     }
 
@@ -82,6 +86,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         isFavorite = (try? c.decode(Bool.self, forKey: .isFavorite)) ?? false
         rawExposureOffset = (try? c.decode(Double.self, forKey: .rawExposureOffset)) ?? 0
         mirrored = (try? c.decode(Bool.self, forKey: .mirrored)) ?? false
+        frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? .off
         grainEnabled = (try? c.decode(Bool.self, forKey: .grainEnabled)) ?? true
         halationEnabled = (try? c.decode(Bool.self, forKey: .halationEnabled)) ?? true
     }

@@ -10,6 +10,7 @@ import UIKit
 @Observable
 final class AppModel {
     let engine: CameraEngine
+    @ObservationIgnored let volumeShutter = VolumeShutter()
     let location = LocationProvider()
     let level = LevelMonitor()
 
@@ -52,8 +53,22 @@ final class AppModel {
         engine.onPhoto = { [weak self] result in self?.ingest(photo: result) }
         engine.onVideo = { [weak self] url in self?.ingest(videoAt: url) }
         engine.onModeChanged = { [weak self] mode in self?.updateSettings { $0.lastCaptureMode = mode } }
+        volumeShutter.onPress = { [weak self] in self?.engine.shutterTapped() }
+        NotificationCenter.default.addObserver(forName: .takePhotoRequested, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.engine.shutterTapped() }
+        }
         pushLooks()
         refreshArt()
+    }
+
+    /// Starts or stops the volume-button shutter. Called when the setting changes and when the camera
+    /// comes to the foreground or goes to the background.
+    func syncVolumeShutter(active: Bool) {
+        if active && settings.volumeShutter {
+            volumeShutter.start()
+        } else {
+            volumeShutter.stop()
+        }
     }
 
     // MARK: Settings
@@ -261,6 +276,7 @@ final class AppModel {
         let keepRAW = settings.capturesRAW
         let grainOn = settings.grainEnabled
         let halationOn = settings.halationEnabled
+        let frame = settings.frame
 
         Task {
             let look = await cameraLook(for: preset, slot: .photo)
@@ -271,7 +287,10 @@ final class AppModel {
                     processed: photo.processed,
                     look: look,
                     aspect: photo.aspect,
-                    mirror: photo.mirror
+                    mirror: photo.mirror,
+                    frame: frame,
+                    label: preset.name,
+                    accentIndex: preset.accentIndex
                 )
             }.value
             processingCount -= 1
@@ -291,7 +310,8 @@ final class AppModel {
                 rawExposureOffset: developed.rawExposureOffset,
                 mirrored: photo.mirror,
                 grainEnabled: grainOn,
-                halationEnabled: halationOn
+                halationEnabled: halationOn,
+                frame: frame
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
@@ -382,7 +402,16 @@ final class AppModel {
         let mirror = record.mirrored
 
         let developed = await Task.detached(priority: .userInitiated) {
-            PhotoPipeline.redevelop(source: source, look: look, pushPull: pushPull, aspect: aspect, mirror: mirror)
+            PhotoPipeline.redevelop(
+                source: source,
+                look: look,
+                pushPull: pushPull,
+                aspect: aspect,
+                mirror: mirror,
+                frame: record.frame,
+                label: preset.name,
+                accentIndex: preset.accentIndex
+            )
         }.value
         guard let developed else { return false }
 

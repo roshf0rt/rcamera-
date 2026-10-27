@@ -35,6 +35,10 @@ struct SettingsView: View {
                     Toggle("Mirror front camera", isOn: model.binding(\.mirrorFrontCamera))
                     Toggle("Capture RAW", isOn: model.binding(\.capturesRAW))
                     Toggle("Save location", isOn: model.binding(\.savesLocation))
+                    Toggle("Volume buttons take photos", isOn: model.binding(\.volumeShutter))
+                        .onChange(of: model.settings.volumeShutter) { _, on in
+                            model.syncVolumeShutter(active: on)
+                        }
                     Picker("Extra zoom stop", selection: model.binding(\.digitalZoomStop)) {
                         ForEach(DigitalZoomStop.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
@@ -86,6 +90,7 @@ struct PresetEditorView: View {
     @State private var name = ""
     @State private var grain = 0.0
     @State private var halation = 0.0
+    @State private var adjustments = LookAdjustments.neutral
     @State private var loaded = false
     @State private var importSlot: LUTSlot?
     @State private var importing = false
@@ -99,9 +104,49 @@ struct PresetEditorView: View {
             Section("Name") {
                 TextField("Name", text: $name).onSubmit(save)
             }
-            Section("Film") {
+            Section {
+                Menu {
+                    ForEach(FilmSpeed.allCases, id: \.self) { speed in
+                        Button(speed.label) {
+                            speed.apply(grain: &grain, to: &adjustments)
+                            save()
+                        }
+                    }
+                } label: {
+                    LabeledContent("Film speed", value: "Set grain, size and sharpness")
+                }
+                Menu {
+                    ForEach(ContrastCurve.allCases, id: \.self) { curve in
+                        Button(curve.label) {
+                            curve.apply(to: &adjustments)
+                            save()
+                        }
+                    }
+                } label: {
+                    LabeledContent("Contrast curve", value: adjustments.curve?.label ?? "None")
+                }
+            } header: {
+                Text("Film")
+            } footer: {
+                Text("Picking a speed or a curve sets its values; every regulator below can still be changed afterwards.")
+            }
+            Section {
                 slider("Grain", value: $grain)
                 slider("Halation", value: $halation)
+            } header: {
+                Text("Amounts")
+            }
+            Section {
+                ForEach(Regulator.allCases, id: \.self) { regulator in
+                    regulatorRow(regulator)
+                }
+                Button("Reset regulators", role: .destructive) {
+                    adjustments = .neutral
+                    save()
+                }
+                .disabled(adjustments.isNeutral)
+            } header: {
+                Text("Regulators")
             }
             Section {
                 ForEach(LUTSlot.allCases, id: \.self) { slot in
@@ -129,6 +174,7 @@ struct PresetEditorView: View {
             name = preset.name
             grain = preset.grain
             halation = preset.halation
+            adjustments = preset.adjustments
         }
         .onDisappear(perform: save)
         .background {
@@ -160,6 +206,27 @@ struct PresetEditorView: View {
                 if !editing { save() }
             }
             Text("\(Int(value.wrappedValue * 100))%").monospacedDigit().frame(width: 48, alignment: .trailing)
+        }
+    }
+
+    private func regulatorRow(_ regulator: Regulator) -> some View {
+        let value = adjustments[keyPath: regulator.keyPath]
+        return HStack {
+            Text(regulator.title).frame(width: 130, alignment: .leading)
+            Slider(
+                value: Binding(
+                    get: { adjustments[keyPath: regulator.keyPath] },
+                    set: { adjustments[keyPath: regulator.keyPath] = $0 }
+                ),
+                in: regulator.range
+            ) { editing in
+                if !editing { save() }
+            }
+            .onTapGesture(count: 2) {
+                adjustments[keyPath: regulator.keyPath] = regulator.neutral
+                save()
+            }
+            Text(regulator.format(value)).monospacedDigit().font(.footnote).frame(width: 84, alignment: .trailing)
         }
     }
 
@@ -197,6 +264,7 @@ struct PresetEditorView: View {
         updated.name = trimmed.isEmpty ? updated.name : trimmed
         updated.grain = grain
         updated.halation = halation
+        updated.adjustments = adjustments
         guard updated != preset else { return }
         model.updatePreset(updated)
     }

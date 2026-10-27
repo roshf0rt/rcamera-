@@ -95,6 +95,7 @@ struct CameraView: View {
                 Task { await activate() }
             } else if phase == .background {
                 engine.stop()
+                model.syncVolumeShutter(active: false)
                 model.location.stop()
                 model.level.stop()
             }
@@ -139,6 +140,7 @@ struct CameraView: View {
     private func activate() async {
         if model.settings.savesLocation { model.location.start() }
         if model.settings.isLevelEnabled { model.level.start() }
+        model.syncVolumeShutter(active: true)
         await model.engine.start()
     }
 
@@ -185,6 +187,11 @@ struct CameraView: View {
     private func viewfinder(engine: CameraEngine, size: CGSize) -> some View {
         ZStack {
             ViewfinderLayerView(layer: engine.displayLayer)
+                .background {
+                    if #available(iOS 18.0, *) {
+                        CameraControlHost { engine.shutterTapped() }
+                    }
+                }
             if model.settings.isGridEnabled { GridOverlay() }
             if model.settings.isLevelEnabled { LevelOverlay(roll: model.level.roll) }
             if let marker = focusMarker {

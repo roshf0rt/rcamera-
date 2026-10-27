@@ -22,9 +22,12 @@ enum Theme {
         [Color(red: 0.10, green: 0.72, blue: 0.90), Color(red: 0.16, green: 0.30, blue: 0.86)],
     ]
 
+    static func colors(_ index: Int) -> [Color] {
+        gradients[((index % gradients.count) + gradients.count) % gradients.count]
+    }
+
     static func gradient(_ index: Int) -> LinearGradient {
-        let colors = gradients[((index % gradients.count) + gradients.count) % gradients.count]
-        return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
+        LinearGradient(colors: colors(index), startPoint: .leading, endPoint: .trailing)
     }
 }
 

@@ -79,6 +79,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Quick toggles on the camera screen. The amounts come from the selected preset.
     public var grainEnabled = true
     public var halationEnabled = true
+    /// Photo border with the preset name. Off by default.
+    public var frame: FrameStyle = .off
+    /// Volume buttons take a photo while the camera is on screen. Off by default.
+    public var volumeShutter = false
 
     public var videoResolution: VideoResolution = .hd1080
     public var videoFPS = 30
@@ -99,7 +103,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, savesLocation, digitalZoomStop
-        case grainEnabled, halationEnabled
+        case grainEnabled, halationEnabled, frame, volumeShutter
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, revision
     }
 
@@ -120,6 +124,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         digitalZoomStop = (try? c.decode(DigitalZoomStop.self, forKey: .digitalZoomStop)) ?? digitalZoomStop
         grainEnabled = (try? c.decode(Bool.self, forKey: .grainEnabled)) ?? grainEnabled
         halationEnabled = (try? c.decode(Bool.self, forKey: .halationEnabled)) ?? halationEnabled
+        frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? frame
+        volumeShutter = (try? c.decode(Bool.self, forKey: .volumeShutter)) ?? volumeShutter
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo

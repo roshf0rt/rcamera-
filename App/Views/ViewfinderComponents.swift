@@ -269,7 +269,7 @@ struct EVBubble: View {
     }
 }
 
-/// The panel under the "..." button. Photo mode: Flash, Timer, Aspect. Video mode: FPS, Resolution, Stabilization.
+/// The panel under the "..." button. Photo mode: Flash, Timer, Aspect, Frame. Video mode: FPS, Resolution, Stabilization.
 struct OptionsPanel: View {
     let mode: CaptureMode
     let settings: AppSettings
@@ -304,6 +304,9 @@ struct OptionsPanel: View {
                 Image(systemName: "viewfinder").font(.system(size: 34, weight: .light))
                 Text(settings.aspect.label).font(.system(size: 11, weight: .semibold))
             }
+        }
+        option(title: "Frame", active: settings.frame != .off, action: { update { $0.frame = $0.frame.next } }) {
+            Image(systemName: "rectangle.inset.filled").font(.system(size: 26))
         }
     }
 

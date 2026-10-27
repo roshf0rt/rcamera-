@@ -186,3 +186,53 @@ final class RegulatorUniformsTests: XCTestCase {
         XCTAssertEqual(u.hueSin, 1, accuracy: 1e-9)
     }
 }
+
+final class RegulatorListTests: XCTestCase {
+    func testEveryRegulatorHasANeutralValueInsideItsRange() {
+        for regulator in Regulator.allCases {
+            XCTAssertTrue(regulator.range.contains(regulator.neutral), "\(regulator) neutral is outside its range")
+        }
+    }
+
+    func testEveryRegulatorIsClampedToItsRange() {
+        for regulator in Regulator.allCases {
+            var look = LookAdjustments.neutral
+            look[keyPath: regulator.keyPath] = regulator.range.upperBound + 100
+            look.clamp()
+            XCTAssertEqual(look[keyPath: regulator.keyPath], regulator.range.upperBound, "\(regulator)")
+        }
+    }
+
+    func testTitlesAreUnique() {
+        let titles = Regulator.allCases.map(\.title)
+        XCTAssertEqual(Set(titles).count, titles.count)
+    }
+
+    func testFormatShowsSignAndUnits() {
+        XCTAssertEqual(Regulator.postExposure.format(0.5), "+0.50 EV")
+        XCTAssertEqual(Regulator.hue.format(-12), "-12°")
+        XCTAssertEqual(Regulator.contrast.format(1.1), "1.10×")
+    }
+}
+
+final class FrameTests: XCTestCase {
+    func testFrameWidthsScaleWithTheShorterEdge() {
+        let layout = FrameLayout.make(width: 4032, height: 3024)
+        XCTAssertEqual(layout.side, 120)
+        XCTAssertEqual(layout.top, 120)
+        XCTAssertEqual(layout.bottom, 360)
+        XCTAssertEqual(layout.canvasWidth(photoWidth: 4032), 4272)
+        XCTAssertEqual(layout.canvasHeight(photoHeight: 3024), 3504)
+    }
+
+    func testTinyImagesStillGetAOnePixelFrame() {
+        let layout = FrameLayout.make(width: 10, height: 10)
+        XCTAssertEqual(layout.side, 1)
+        XCTAssertEqual(layout.bottom, 3)
+    }
+
+    func testFrameStyleCyclesBackToOff() {
+        XCTAssertEqual(FrameStyle.off.next, .gradient)
+        XCTAssertEqual(FrameStyle.gradient.next, .off)
+    }
+}
