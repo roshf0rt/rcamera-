@@ -24,7 +24,9 @@ struct CameraView: View {
         let engine = model.engine
         GeometryReader { geo in
             let width = geo.size.width - side * 2
-            let desired = engine.mode == .video ? width * 16 / 9 : width * model.settings.aspect.portraitHeightOverWidth
+            let videoRatio = CGFloat(16.0 / 9.0)
+            let photoRatio = CGFloat(model.settings.aspect.portraitHeightOverWidth)
+            let desired: CGFloat = engine.mode == .video ? width * videoRatio : width * photoRatio
             let reserved: CGFloat = showPresets ? 252 : (engine.mode == .video ? 74 : 232)
             let previewHeight = max(200, min(desired, geo.size.height - 52 - reserved))
 
