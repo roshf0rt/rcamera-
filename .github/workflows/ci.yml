@@ -31,6 +31,9 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee xcodebuild.log
+      - name: Show compiler errors
+        if: failure()
+        run: grep -E "error:" xcodebuild.log | sort -u | head -80 || true
       - name: Package unsigned IPA
         run: |
           mkdir -p Payload
