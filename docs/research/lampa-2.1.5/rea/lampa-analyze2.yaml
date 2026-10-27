@@ -1,0 +1,495 @@
+evidence_id: ev_d1c3fa8eb8c6bde68c8f3c783166fa58a4e9718695014c9f3feafb5260be7faa
+subject:
+  name: Lampa
+  digest:
+    sha256: 5dc735a206dbd3f65748466e45f501d0c2430d7381b9b0875100ddf44cce2e38
+  local_path: /tmp/claude-0/-home-user-rcamera-/4bab4032-8a89-514d-99a4-5eb8cc10c88d/scratchpad/ipa/x/Payload/Lampa.app/Lampa
+  format: mach-o
+  architecture: arm64
+provider:
+  id: rea-workflow
+  name: REA composed investigation workflow
+  version: "1"
+analysis_profile:
+  provider:
+    id: rea-workflow
+    name: REA composed investigation workflow
+    version: "1"
+  parameters:
+    upstream_analysis_profile:
+      provider:
+        id: ghidra
+        name: Ghidra
+        version: 12.1.4
+      parameters:
+        target_kind: executable
+        target_format: mach-o
+        architecture: arm64
+        available_architectures:
+          - arm64
+        import_mode: ephemeral-source-immutable
+        annotation_policy: atomic-function-entry-metadata-v1
+        load_image_observations: source-mappings-entry-context-v2
+        function_body_evidence: complete-inclusive-ranges-v1
+        function_references: complete-body-and-entry-reference-manager-v2
+        call_relationship_coverage: function-body-call-coverage-v5
+        function_dossier_coverage: observed-facets-and-call-relationships-v1
+        string_inventory_evidence: defined-data-coverage-v1
+        location_resolution: explicit-address-exact-entry-symbol-first-v3
+        procedure_file_offset_resolution: address-first-unique-target-source-mapping-v2
+        instruction_flow_evidence: decoded-return-pcode-v1
+        instruction_references: exact-address-incoming-without-synthetic-entry-v2
+        function_boundary_observations: ghidra-function-boundary-limitations-v4
+        no_return_repair: returning-imports-decoded-return-v2
+        process_launch: inspected-jvm-launch-support-v1
+        jump_table_evidence: typed-case-default-blocks-v1
+        decompiler_jump_loads: true
+        loader: auto-from-header
+        language_id: auto-from-header
+        compiler_spec_id: auto-default
+        analyzer_preset: ghidra-default
+        function_coordinate_context:
+          kind: native-function-coordinate-context-v1
+          selected_image: null
+          mapping_sha256: 55a7964dc0bcdf067484a281c658e6ca8457a49405e0ea9dbd080366ee4c3198
+      digest: 066f9d6c56d7a436e2061afaa7f68aa9085572cd83e3172cf52ecd30a6101bae
+    source_limitations: provider-operation-caveats-v1
+    workflow_revision: 4
+  digest: e768e9505434fd6d0ba5e2d65d0151467c30e0fd11e73c91cca33cbeb3c0af0f
+predicate_type: rea.analysis
+operation: binary_overview
+parameters: {}
+raw_result: null
+normalized_result:
+  document: target-5dc735a206db.bin
+  image_base: "0x100000000"
+  segments:
+    - name: __TEXT
+      start: "0x100000000"
+      end: "0x100004000"
+      length: 16384
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __text
+      start: "0x100004000"
+      end: "0x10040a30c"
+      length: 4219660
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __stubs
+      start: "0x10040a30c"
+      end: "0x10040ef40"
+      length: 19508
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_stubs
+      start: "0x10040ef40"
+      end: "0x100435760"
+      length: 157728
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __init_offsets
+      start: "0x100435760"
+      end: "0x100435768"
+      length: 8
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_methlist
+      start: "0x100435768"
+      end: "0x100452c80"
+      length: 120088
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __const
+      start: "0x100452c80"
+      end: "0x10046e170"
+      length: 111856
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_typeref
+      start: "0x10046e170"
+      end: "0x10047646c"
+      length: 33532
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __constg_swiftt
+      start: "0x10047646c"
+      end: "0x10047f2a0"
+      length: 36404
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_fieldmd
+      start: "0x10047f2a0"
+      end: "0x100488480"
+      length: 37344
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __cstring
+      start: "0x100488480"
+      end: "0x1004cb10c"
+      length: 273548
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_capture
+      start: "0x1004cb10c"
+      end: "0x1004d04d4"
+      length: 21448
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_builtin
+      start: "0x1004d04d4"
+      end: "0x1004d0b00"
+      length: 1580
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_reflstr
+      start: "0x1004d0b00"
+      end: "0x1004dada0"
+      length: 41632
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_assocty
+      start: "0x1004dada0"
+      end: "0x1004db7d0"
+      length: 2608
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_proto
+      start: "0x1004db7d0"
+      end: "0x1004dc26c"
+      length: 2716
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_types
+      start: "0x1004dc26c"
+      end: "0x1004dcb90"
+      length: 2340
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_classname
+      start: "0x1004dcb90"
+      end: "0x1004e3430"
+      length: 26784
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_methname
+      start: "0x1004e3430"
+      end: "0x10051cbb0"
+      length: 235392
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_methtype
+      start: "0x10051cbb0"
+      end: "0x1005263e8"
+      length: 38968
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift_as_entry
+      start: "0x1005263e8"
+      end: "0x10052678c"
+      length: 932
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_protos
+      start: "0x10052678c"
+      end: "0x1005268c4"
+      length: 312
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift_as_ret
+      start: "0x1005268c4"
+      end: "0x100526cfc"
+      length: 1080
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_entry
+      start: "0x100526cfc"
+      end: "0x100526d04"
+      length: 8
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __gcc_except_tab
+      start: "0x100526d04"
+      end: "0x100530b84"
+      length: 40576
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift5_mpenum
+      start: "0x100530b84"
+      end: "0x100530c38"
+      length: 180
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __unwind_info
+      start: "0x100530c38"
+      end: "0x100543408"
+      length: 75728
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __eh_frame
+      start: "0x100543408"
+      end: "0x100554000"
+      length: 68600
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __oslogstring
+      start: "0x100554000"
+      end: "0x100558000"
+      length: 16384
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __got
+      start: "0x100558000"
+      end: "0x10055d0b0"
+      length: 20656
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __const
+      start: "0x10055d0b0"
+      end: "0x100584ca0"
+      length: 162800
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __cfstring
+      start: "0x100584ca0"
+      end: "0x1005a7640"
+      length: 141728
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_classlist
+      start: "0x1005a7640"
+      end: "0x1005a8c00"
+      length: 5568
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_nlclslist
+      start: "0x1005a8c00"
+      end: "0x1005a8c80"
+      length: 128
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_catlist
+      start: "0x1005a8c80"
+      end: "0x1005a8cb8"
+      length: 56
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_nlcatlist
+      start: "0x1005a8cb8"
+      end: "0x1005a8cc0"
+      length: 8
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_protolist
+      start: "0x1005a8cc0"
+      end: "0x1005a9360"
+      length: 1696
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_imageinfo
+      start: "0x1005a9360"
+      end: "0x1005a9368"
+      length: 8
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_arraydata
+      start: "0x1005a9368"
+      end: "0x1005aaf90"
+      length: 7208
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_arrayobj
+      start: "0x1005aaf90"
+      end: "0x1005abdb8"
+      length: 3624
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_dictobj
+      start: "0x1005abdb8"
+      end: "0x1005abed0"
+      length: 280
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_intobj
+      start: "0x1005abed0"
+      end: "0x1005ac680"
+      length: 1968
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __DATA_CONST
+      start: "0x1005ac680"
+      end: "0x1005b0000"
+      length: 14720
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_const
+      start: "0x1005b0000"
+      end: "0x1005ee7b0"
+      length: 255920
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_selrefs
+      start: "0x1005ee7b0"
+      end: "0x1005fa690"
+      length: 48864
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_protorefs
+      start: "0x1005fa690"
+      end: "0x1005fa9c8"
+      length: 824
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_classrefs
+      start: "0x1005fa9c8"
+      end: "0x1005fbd10"
+      length: 4936
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_superrefs
+      start: "0x1005fbd10"
+      end: "0x1005fc6e8"
+      length: 2520
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_ivar
+      start: "0x1005fc6e8"
+      end: "0x1005fdc78"
+      length: 5520
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_data
+      start: "0x1005fdc78"
+      end: "0x100610eb8"
+      length: 78400
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __DATA
+      start: "0x100610eb8"
+      end: "0x100610ec0"
+      length: 8
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __data
+      start: "0x100610ec0"
+      end: "0x1006229c8"
+      length: 72456
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __objc_stublist
+      start: "0x1006229c8"
+      end: "0x1006229d0"
+      length: 8
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift_hooks
+      start: "0x1006229d0"
+      end: "0x100622a88"
+      length: 184
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift51_hooks
+      start: "0x100622a88"
+      end: "0x100622b40"
+      length: 184
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __s_async_hook
+      start: "0x100622b40"
+      end: "0x100622cd0"
+      length: 400
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __swift56_hooks
+      start: "0x100622cd0"
+      end: "0x100622d80"
+      length: 176
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __thread_vars
+      start: "0x100622d80"
+      end: "0x100622e80"
+      length: 256
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __common
+      start: "0x100622e80"
+      end: "0x100623a40"
+      length: 3008
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __bss
+      start: "0x100623a40"
+      end: "0x100624000"
+      length: 1472
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __bss
+      start: "0x100624000"
+      end: "0x100638c60"
+      length: 85088
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __DATA
+      start: "0x100638c60"
+      end: "0x10063c000"
+      length: 13216
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __LINKEDIT
+      start: "0x10063c000"
+      end: "0x100ce4030"
+      length: 6979632
+      image_base: "0x100000000"
+      address_space: ram
+    - name: __LINKEDIT
+      start: "0x100ce4030"
+      end: "0x100ce8000"
+      length: 16336
+      image_base: "0x100000000"
+      address_space: ram
+    - name: EXTERNAL
+      start: "0x100ce8000"
+      end: "0x100d42900"
+      length: 370944
+      image_base: "0x100000000"
+      address_space: ram
+  segment_count: 65
+  procedure_count: 33894
+  string_count: 138148
+confidence: derived
+authority: shipped-artifact
+environment: null
+limitations:
+  - Derived by an REA composed workflow.
+  - "Ghidra (ghidra 12.1.4) read_binary_inventory_summary: Cancelling an active
+    Ghidra request terminates its ephemeral database and discards session
+    annotations. The selected target remains open; the next provider query
+    imports the original artifact again."
+  - "Ghidra (ghidra 12.1.4) read_binary_inventory_summary: Counts use the
+    complete defined-string inventory and the same local/external function
+    inventory as list_strings and list_procedures. They do not establish
+    discovery of undefined strings or unidentified functions."
+  - "Ghidra (ghidra 12.1.4) read_binary_inventory_summary: Default-space
+    addresses use lowercase 0x-prefixed hexadecimal; other address spaces use
+    <percent-encoded-space>:0x<hex>."
+  - "Ghidra (ghidra 12.1.4) read_binary_inventory_summary: Memory-block end
+    addresses are exclusive; segment lengths use those observed address
+    coordinates."
+  - "Ghidra (ghidra 12.1.4) read_binary_inventory_summary: Only Ghidra-defined
+    string Data is observed; packed or undefined string bytes may be absent.
+    Completeness applies to that inventory, and an empty search does not
+    establish that text is absent from the artifact. If an address is known, use
+    read_bytes and xrefs to inspect bytes and references."
+  - "Ghidra (ghidra 12.1.4) read_binary_inventory_summary: The imported Program
+    and temporary project are ephemeral and deleted on close. Annotation
+    operations edit session database metadata; original executable bytes are
+    never written."
+  - "Ghidra (ghidra 12.1.4) read_binary_inventory_summary: The session serves
+    operations only after Ghidra reports default auto-analysis complete;
+    incomplete analysis does not expose partial results."
+relationship_coverage: null
+locations: []
+evidence_links:
+  - ev_01373444e98b14725d4074316a7d9ed5dcbc60b46424e89e17e5ec29cff4f9d1
+caller_input_path: /tmp/claude-0/-home-user-rcamera-/4bab4032-8a89-514d-99a4-5eb8cc10c88d/scratchpad/ipa/x/Payload/Lampa.app/Lampa
