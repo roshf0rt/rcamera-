@@ -9,7 +9,7 @@
 | Источник | Что дал | Надёжность |
 |---|---|---|
 | `Info.plist`, `PlugIns/`, `Extensions/`, `Metadata.appintents` | Идентификаторы, расширения (виджет, Locked-расширение), App Intents | Высокая, прямо из файлов |
-| `CamX` (Mach-O arm64, 12.9 МБ) через REA + Ghidra | Классы ObjC/Swift, импорт Core Image / AVFoundation / Photos / StoreKit / Vision, селекторы | Высокая для имён; тела функций см. `NATIVE.md` |
+| `CamX` (Mach-O arm64, 12.9 МБ) через REA + Ghidra | Классы ObjC/Swift, импорт Core Image / AVFoundation / Photos / StoreKit / Vision, селекторы, обзор сегментов (67) и процедур (58 659) | Высокая для имён; тела функций не декомпилировались, см. `NATIVE.md` |
 | `main.jsbundle` (Hermes HBC, 3.9 МБ) через `hbc-decompiler` | Схема пресета, таблицы скорости плёнки, контраста, рамок, список регуляторов | Средняя: декомпилятор низкоуровневый, числа сверены с литералами в тексте |
 | `LensPresets.bundle/*.json` | Параметры 7 объективов (боке, блики, хром. аберрация) | Высокая, это JSON |
 | `assets/` (LUT `.lutenc`, шейдеры `.mtlenc`, зерно `.grainenc`) | Факт наличия, форматы закрыты (зашифрованы) | Содержимое не разбиралось и не извлекалось |
