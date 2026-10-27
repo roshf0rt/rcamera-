@@ -342,7 +342,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             if !self.audioSession.isRunning { self.audioSession.startRunning() }
             // The first call can take a second or more, so it is done here rather than when recording starts.
             if self.audioSettings == nil, !self.audioSession.inputs.isEmpty {
-                self.audioSettings = self.audioOutput.recommendedAudioSettingsForAssetWriter(writingTo: .mov) as? [String: Any]
+                self.audioSettings = self.audioOutput.recommendedAudioSettingsForAssetWriter(writingTo: .mov)
             }
         }
     }
