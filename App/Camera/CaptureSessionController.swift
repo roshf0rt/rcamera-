@@ -685,8 +685,14 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             let supported = device.activeFormat.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= fps && fps <= $0.maxFrameRate }
             if supported {
                 let duration = CMTime(value: 1, timescale: CMTimeScale(fps))
+                // The photo viewfinder may slow down to 10 fps in the dark, as the system camera does, so
+                // the exposure can run up to 1/10 s instead of 1/30 and a dim room is not black.
+                let slowest = CMTime(value: 1, timescale: 10)
+                let canSlow = config.mode == .photo
+                    && device.activeFormat.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= 10 }
+                let longest = canSlow ? slowest : duration
                 if device.activeVideoMinFrameDuration != duration { device.activeVideoMinFrameDuration = duration }
-                if device.activeVideoMaxFrameDuration != duration { device.activeVideoMaxFrameDuration = duration }
+                if device.activeVideoMaxFrameDuration != longest { device.activeVideoMaxFrameDuration = longest }
             }
 
             device.videoZoomFactor = clampedZoom(zoomFactor(lens: config.lens, digital: config.digitalZoom), for: device)
