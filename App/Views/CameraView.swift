@@ -14,6 +14,7 @@ struct CameraView: View {
     @State private var showOptions = false
     @State private var showDynamicRange = false
     @State private var apertureOpen = false
+    @State private var editingPresetID: String?
     @State private var showPresets = false
     @State private var showSettings = false
     @State private var showGallery = false
@@ -79,7 +80,7 @@ struct CameraView: View {
                     .offset(y: geo.size.height - controlsHeight - zoomLineHeight)
 
                 if showPresets {
-                    PresetPicker()
+                    PresetPicker(onEdit: { editingPresetID = $0 })
                         .padding(.vertical, 10)
                         .background(Color.black.opacity(0.55))
                         .background(.ultraThinMaterial)
@@ -124,6 +125,20 @@ struct CameraView: View {
         .background(Color.black.ignoresSafeArea())
         .overlay { if engine.access == .denied { accessDenied } }
         .fullScreenCover(isPresented: $showGallery) { GalleryView() }
+        .sheet(isPresented: Binding(get: { editingPresetID != nil }, set: { if !$0 { editingPresetID = nil } })) {
+            if let id = editingPresetID {
+                NavigationStack {
+                    PresetEditorView(presetID: id)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { editingPresetID = nil }
+                            }
+                        }
+                }
+                .preferredColorScheme(.dark)
+                .tint(Theme.accent)
+            }
+        }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .alert("RCamera", isPresented: alertBinding) {
             Button("OK", role: .cancel) {}

@@ -61,6 +61,45 @@ final class AppModel {
         refreshArt()
     }
 
+    /// Adds a custom preset as a copy of the selected one, and selects it so it can be edited right away.
+    func addPreset() {
+        guard let source = presets.first(where: { $0.id == settings.selectedPresetID }) ?? presets.first else { return }
+        do {
+            let added = try presetLibrary.addCustom(copying: source)
+            presets = presetLibrary.presets
+            refreshArt(for: [added.id])
+            selectPreset(added.id)
+        } catch {
+            alert = error.localizedDescription
+        }
+    }
+
+    /// Deletes a custom preset. Built-in presets are never removed.
+    func deletePreset(id: String) {
+        do {
+            try presetLibrary.removeCustom(id: id)
+            presets = presetLibrary.presets
+            lookCache = lookCache.filter { !$0.key.hasPrefix("\(id)|") }
+            presetArt[id] = nil
+            if settings.selectedPresetID == id, let first = presets.first { selectPreset(first.id) }
+        } catch {
+            alert = error.localizedDescription
+        }
+    }
+
+    /// Writes a preset's JSON to a file the share sheet can send. Nil when it cannot be written.
+    func exportPreset(id: String) -> URL? {
+        guard let preset = preset(id: id), let data = try? presetLibrary.exportData(for: id) else { return nil }
+        let safeName = preset.name.replacingOccurrences(of: "/", with: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName).rcpreset.json")
+        do {
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
     /// Starts or stops the volume-button shutter. Called when the setting changes and when the camera
     /// comes to the foreground or goes to the background.
     func syncVolumeShutter(active: Bool) {

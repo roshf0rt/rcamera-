@@ -4,6 +4,8 @@ import SwiftUI
 /// The horizontal row of preset cards shown above the shutter.
 struct PresetPicker: View {
     @Environment(AppModel.self) private var model
+    /// Opens the editor for a preset, from the long-press menu.
+    var onEdit: (String) -> Void = { _ in }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -14,7 +16,32 @@ struct PresetPicker: View {
                             model.selectPreset(preset.id)
                         }
                         .id(preset.id)
+                        .contextMenu {
+                            Button { onEdit(preset.id) } label: {
+                                Label("Edit", systemImage: "slider.horizontal.3")
+                            }
+                            if let url = model.exportPreset(id: preset.id) {
+                                ShareLink(item: url) {
+                                    Label("Share", systemImage: "square.and.arrow.up")
+                                }
+                            }
+                            if preset.isCustom {
+                                Button(role: .destructive) { model.deletePreset(id: preset.id) } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
                     }
+                    Button { model.addPreset() } label: {
+                        VStack(spacing: 6) {
+                            Image(systemName: "plus").font(.system(size: 22, weight: .semibold))
+                            Text("New").font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 96, height: 88)
+                        .background(RoundedRectangle(cornerRadius: 14).stroke(Theme.accent.opacity(0.6), lineWidth: 1.2))
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 16)
             }

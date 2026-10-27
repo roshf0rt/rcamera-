@@ -1,6 +1,9 @@
 import Foundation
 
 public struct Preset: Identifiable, Equatable, Codable, Sendable {
+    /// True for presets the user added. Only these can be deleted.
+    public var isCustom: Bool { id.hasPrefix(PresetCatalog.customPrefix) }
+
     public var id: String
     public var name: String
     /// 0...1 film grain amount applied after the LUT.
@@ -70,6 +73,8 @@ public enum LUTSlot: String, CaseIterable, Codable, Sendable {
 
 public enum PresetCatalog {
     public static let defaultCount = 10
+    /// Presets the user adds start with this, so they can be told apart from the built-in ten.
+    public static let customPrefix = "custom-"
     /// Bumped whenever default names or looks change, so older installs can adopt them.
     public static let revision = 3
 
@@ -179,6 +184,38 @@ public final class PresetLibrary {
         updated.grain = min(max(preset.grain, 0), 1)
         updated.halation = min(max(preset.halation, 0), 1)
         presets[index] = updated
+        try save()
+    }
+
+    /// Adds a custom preset that starts as a copy of `source`, with the same look and its own LUT files.
+    @discardableResult
+    public func addCustom(copying source: Preset, name: String = "New Preset") throws -> Preset {
+        var copy = source
+        copy.id = PresetCatalog.customPrefix + UUID().uuidString.lowercased()
+        copy.name = name
+        presets.append(copy)
+        try save()
+        return copy
+    }
+
+    /// Removes a custom preset and its LUT files. Built-in presets cannot be removed.
+    public func removeCustom(id: String) throws {
+        guard let preset = preset(id: id), preset.isCustom else { return }
+        presets.removeAll { $0.id == preset.id }
+        for slot in LUTSlot.allCases {
+            try? removeLUT(for: preset.id, slot: slot)
+        }
+        lutCache = lutCache.filter { !$0.key.hasPrefix("\(preset.id)|") }
+        try save()
+    }
+
+    /// The preset as JSON, for sharing. The LUTs are not included.
+    public func exportData(for id: String) throws -> Data {
+        guard let preset = preset(id: id) else { throw CocoaError(.fileNoSuchFile) }
+        return try JSONEncoder.sortedPretty.encode(preset)
+    }
+
+    private func save() throws {
         let data = try JSONEncoder().encode(presets)
         try data.write(to: storageDirectory.appendingPathComponent("presets.json"), options: .atomic)
     }
@@ -251,5 +288,14 @@ public final class PresetLibrary {
             let url = userLUTDirectory.appendingPathComponent("\(presetID)\(slot.fileSuffix).\(ext)")
             if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
         }
+    }
+}
+
+extension JSONEncoder {
+    /// Readable JSON for files people share.
+    static var sortedPretty: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
     }
 }

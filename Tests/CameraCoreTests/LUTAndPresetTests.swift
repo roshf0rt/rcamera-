@@ -347,3 +347,50 @@ final class LUTToolsTests: XCTestCase {
         XCTAssertThrowsError(try LUT3D.parse(data: Data("LUT_3D_SIZE 2\n0 0\n".utf8), fileExtension: "cube"))
     }
 }
+
+final class CustomPresetTests: XCTestCase {
+    private func makeLibrary() throws -> (PresetLibrary, URL) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("custom-presets-\(UUID().uuidString)")
+        return (try PresetLibrary(storageDirectory: directory), directory)
+    }
+
+    func testAddingCopiesTheSourceLookUnderANewCustomID() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = library.presets[0]
+        let added = try library.addCustom(copying: source)
+        XCTAssertTrue(added.isCustom)
+        XCTAssertNotEqual(added.id, source.id)
+        XCTAssertEqual(added.adjustments, source.adjustments)
+        XCTAssertEqual(library.presets.count, PresetCatalog.defaultCount + 1)
+    }
+
+    func testOnlyCustomPresetsCanBeRemoved() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try library.removeCustom(id: "preset-1")
+        XCTAssertEqual(library.presets.count, PresetCatalog.defaultCount)
+
+        let added = try library.addCustom(copying: library.presets[0])
+        try library.removeCustom(id: added.id)
+        XCTAssertNil(library.preset(id: added.id))
+        XCTAssertEqual(library.presets.count, PresetCatalog.defaultCount)
+    }
+
+    func testCustomPresetsSurviveReopening() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let added = try library.addCustom(copying: library.presets[2], name: "Mine")
+        let reopened = try PresetLibrary(storageDirectory: directory)
+        XCTAssertEqual(reopened.preset(id: added.id)?.name, "Mine")
+    }
+
+    func testExportWritesReadableJSON() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let data = try library.exportData(for: library.presets[0].id)
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(text.contains("\"name\""))
+        XCTAssertTrue(text.contains(library.presets[0].name))
+    }
+}
