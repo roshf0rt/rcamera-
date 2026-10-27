@@ -1,4 +1,4 @@
-public enum CaptureMode: Equatable, Sendable {
+public enum CaptureMode: String, Equatable, Codable, Sendable {
     case photo
     case video
 }
