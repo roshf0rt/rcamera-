@@ -77,7 +77,9 @@ final class AppModel {
         var updated = settings
         change(&updated)
         guard updated != settings else { return }
-        let togglesChanged = updated.grainEnabled != settings.grainEnabled || updated.halationEnabled != settings.halationEnabled
+        let togglesChanged = updated.grainEnabled != settings.grainEnabled
+            || updated.halationEnabled != settings.halationEnabled
+            || updated.dynamicRange != settings.dynamicRange
         settings = updated
         try? settingsStore.save(updated)
         engine.update(settings: updated)
@@ -217,7 +219,9 @@ final class AppModel {
 
     /// The preset's look with the camera-screen grain and halation toggles applied.
     func cameraLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
-        await baseLook(for: preset, slot: slot).with(grain: settings.grainEnabled, halation: settings.halationEnabled)
+        let look = await baseLook(for: preset, slot: slot).with(grain: settings.grainEnabled, halation: settings.halationEnabled)
+        guard let range = settings.dynamicRange.value else { return look }
+        return look.with { $0.dynamicRange = range }
     }
 
     /// Resolves the selected preset in the background, then hands it to the camera. The old look stays on
@@ -277,6 +281,7 @@ final class AppModel {
         let grainOn = settings.grainEnabled
         let halationOn = settings.halationEnabled
         let frame = settings.frame
+        let portraitFNumber = settings.portraitFNumber
 
         Task {
             let look = await cameraLook(for: preset, slot: .photo)
@@ -290,7 +295,9 @@ final class AppModel {
                     mirror: photo.mirror,
                     frame: frame,
                     label: preset.name,
-                    accentIndex: preset.accentIndex
+                    accentIndex: preset.accentIndex,
+                    depth: photo.depth,
+                    fNumber: portraitFNumber
                 )
             }.value
             processingCount -= 1

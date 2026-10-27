@@ -26,6 +26,8 @@ final class CameraEngine {
         var aspect: AspectOption
         var mirror: Bool
         var date: Date
+        /// Set for portrait photos: the depth the blur is built from.
+        var depth: AVDepthData?
     }
 
     private(set) var machine: CameraStateMachine
@@ -353,7 +355,8 @@ final class CameraEngine {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         let mirror = mirrorsOutput
         let aspect = settings.aspect
-        controller.capturePhoto(flash: settings.flash, wantsRAW: settings.capturesRAW) { [weak self] outcome in
+        let portrait = settings.portrait
+        controller.capturePhoto(flash: settings.flash, wantsRAW: settings.capturesRAW, portrait: portrait) { [weak self] outcome in
             Task { @MainActor in
                 guard let self else { return }
                 self.isCapturing = false
@@ -361,7 +364,14 @@ final class CameraEngine {
                     self.message = outcome.error?.localizedDescription ?? "The photo could not be captured."
                     return
                 }
-                self.onPhoto?(PhotoResult(raw: outcome.raw, processed: outcome.processed, aspect: aspect, mirror: mirror, date: Date()))
+                self.onPhoto?(PhotoResult(
+                    raw: outcome.raw,
+                    processed: outcome.processed,
+                    aspect: aspect,
+                    mirror: mirror,
+                    date: Date(),
+                    depth: outcome.depth
+                ))
             }
         }
     }

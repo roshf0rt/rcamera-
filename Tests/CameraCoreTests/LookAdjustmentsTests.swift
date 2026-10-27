@@ -236,3 +236,55 @@ final class FrameTests: XCTestCase {
         XCTAssertEqual(FrameStyle.gradient.next, .off)
     }
 }
+
+final class ColourChartTests: XCTestCase {
+    func testWithoutLUTNeutralLookLeavesPatchesAlone() {
+        for row in ColourChart.patches {
+            for patch in row {
+                let out = ColourChart.grade(patch, look: .neutral, lut: nil)
+                XCTAssertEqual(out.x, patch.x, accuracy: 1e-9)
+                XCTAssertEqual(out.z, patch.z, accuracy: 1e-9)
+            }
+        }
+    }
+
+    func testIdentityLUTKeepsPatchesWithinSamplingError() throws {
+        let identity = try LUT3D.identity(size: 17)
+        for patch in ColourChart.patches[0] {
+            let out = ColourChart.grade(patch, look: .neutral, lut: identity)
+            XCTAssertEqual(out.x, patch.x, accuracy: 0.01)
+        }
+    }
+
+    func testZeroFilmStrengthIgnoresTheLUT() throws {
+        var look = LookAdjustments.neutral
+        look.filmStrength = 0
+        let identity = try LUT3D.identity(size: 2)
+        let mapped = ColourChart.grade(SIMD3(0.2, 0.2, 0.2), look: look, lut: identity)
+        XCTAssertEqual(mapped.x, 0.2, accuracy: 1e-9)
+    }
+
+    func testChartHasSixRowsAndSixteenGreys() {
+        XCTAssertEqual(ColourChart.patches.count, 6)
+        XCTAssertEqual(ColourChart.patches[0].count, 16)
+    }
+}
+
+final class PortraitTests: XCTestCase {
+    func testApertureStopsAreOrderedAndContainTheDefault() {
+        XCTAssertEqual(PortraitAperture.stops, PortraitAperture.stops.sorted())
+        XCTAssertTrue(PortraitAperture.stops.contains(PortraitAperture.standard))
+    }
+
+    func testStoredValueSnapsToTheNearestStop() {
+        XCTAssertEqual(PortraitAperture.nearest(to: 3.1), 2.8)
+        XCTAssertEqual(PortraitAperture.nearest(to: 30), 16)
+    }
+
+    func testSettingsWithOldFilesKeepPortraitOff() throws {
+        let json = #"{"aspect":"ratio4x3"}"#.data(using: .utf8)!
+        let settings = try JSONDecoder().decode(AppSettings.self, from: json)
+        XCTAssertFalse(settings.portrait)
+        XCTAssertEqual(settings.portraitFNumber, 4.0)
+    }
+}

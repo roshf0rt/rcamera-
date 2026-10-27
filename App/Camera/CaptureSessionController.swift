@@ -36,6 +36,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     struct PhotoOutcome: @unchecked Sendable {
         var raw: Data?
         var processed: Data?
+        /// Depth for portrait photos. Nil when the photo was taken without depth.
+        var depth: AVDepthData?
         var error: Error?
     }
 
@@ -194,6 +196,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             }
             currentFormatIndex = formatPlan.index
             currentAppleLog = formatPlan.appleLog
+            setDepthFormat(on: device)
             configurePhotoOutput(device: device)
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
@@ -263,6 +266,26 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Portrait photos need a depth map. The device can only deliver one for a depth format that goes with its
+    /// active video format, so the largest disparity or depth format is chosen. Nil when there is none.
+    private func setDepthFormat(on device: AVCaptureDevice) {
+        let depthTypes: Set<OSType> = [
+            kCVPixelFormatType_DepthFloat16, kCVPixelFormatType_DepthFloat32,
+            kCVPixelFormatType_DisparityFloat16, kCVPixelFormatType_DisparityFloat32,
+        ]
+        let usable = device.activeFormat.supportedDepthDataFormats.filter {
+            depthTypes.contains(CMFormatDescriptionGetMediaSubType($0.formatDescription))
+        }
+        let largest = usable.max { lhs, rhs in
+            let a = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription)
+            let b = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription)
+            return Int(a.width) * Int(a.height) < Int(b.width) * Int(b.height)
+        }
+        guard device.activeDepthDataFormat != largest, (try? device.lockForConfiguration()) != nil else { return }
+        device.activeDepthDataFormat = largest
+        device.unlockForConfiguration()
+    }
+
     private func setColorSpace(appleLog: Bool, on device: AVCaptureDevice) {
         guard (try? device.lockForConfiguration()) != nil else { return }
         applyColorSpace(appleLog: appleLog, on: device)
@@ -305,6 +328,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
         if photoOutput.isAppleProRAWSupported != photoOutput.isAppleProRAWEnabled {
             photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
+        }
+        if photoOutput.isDepthDataDeliverySupported != photoOutput.isDepthDataDeliveryEnabled {
+            photoOutput.isDepthDataDeliveryEnabled = photoOutput.isDepthDataDeliverySupported
         }
     }
 
@@ -479,7 +505,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     // MARK: Photo
 
-    func capturePhoto(flash: FlashMode, wantsRAW: Bool, completion: @escaping @Sendable (PhotoOutcome) -> Void) {
+    /// `portrait` asks for a depth map with the photo. RAW is skipped then, because depth is delivered with the processed image.
+    func capturePhoto(flash: FlashMode, wantsRAW: Bool, portrait: Bool, completion: @escaping @Sendable (PhotoOutcome) -> Void) {
         sessionQueue.async {
             let codec: AVVideoCodecType = self.photoOutput.availablePhotoCodecTypes.contains(.hevc) ? .hevc : .jpeg
             let settings: AVCapturePhotoSettings
@@ -487,7 +514,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             // ProRAW carries Apple's own tone mapping, so it develops much closer to the camera's look than Bayer RAW.
             let rawType = rawTypes.first { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }
                 ?? rawTypes.first { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
-            if wantsRAW, flash == .off, let rawType {
+            if wantsRAW, !portrait, flash == .off, let rawType {
                 settings = AVCapturePhotoSettings(rawPixelFormatType: rawType, processedFormat: [AVVideoCodecKey: codec])
                 settings.photoQualityPrioritization = .speed
             } else {
@@ -505,6 +532,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             if let connection = self.photoOutput.connection(with: .video), connection.isVideoRotationAngleSupported(90) {
                 connection.videoRotationAngle = 90
             }
+
+            settings.isDepthDataDeliveryEnabled = portrait && self.photoOutput.isDepthDataDeliveryEnabled
 
             let id = settings.uniqueID
             let delegate = PhotoCaptureDelegate { outcome in
@@ -534,6 +563,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private var raw: Data?
     private var processed: Data?
+    private var depth: AVDepthData?
     private var failure: Error?
     private let completion: (CaptureSessionController.PhotoOutcome) -> Void
 
@@ -550,10 +580,11 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
             raw = photo.fileDataRepresentation()
         } else {
             processed = photo.fileDataRepresentation()
+            depth = photo.depthData
         }
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
-        completion(.init(raw: raw, processed: processed, error: error ?? failure))
+        completion(.init(raw: raw, processed: processed, depth: depth, error: error ?? failure))
     }
 }

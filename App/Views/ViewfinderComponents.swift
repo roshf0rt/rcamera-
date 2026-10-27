@@ -274,6 +274,7 @@ struct OptionsPanel: View {
     let mode: CaptureMode
     let settings: AppSettings
     let update: ((inout AppSettings) -> Void) -> Void
+    let openDynamicRange: () -> Void
 
     var body: some View {
         HStack {
@@ -308,6 +309,19 @@ struct OptionsPanel: View {
         option(title: "Frame", active: settings.frame != .off, action: { update { $0.frame = $0.frame.next } }) {
             Image(systemName: "rectangle.inset.filled").font(.system(size: 26))
         }
+        dynamicRangeOption
+        option(title: "Portrait", active: settings.portrait, action: { update { $0.portrait.toggle() } }) {
+            Image(systemName: "person.crop.circle").font(.system(size: 26))
+        }
+    }
+
+    private var dynamicRangeOption: some View {
+        option(title: "Dynamic range", active: settings.dynamicRange != .preset, action: openDynamicRange) {
+            VStack(spacing: 2) {
+                Text("DR").font(.system(size: 18, weight: .bold))
+                Text(settings.dynamicRange.label).font(.system(size: 10, weight: .semibold))
+            }
+        }
     }
 
     @ViewBuilder
@@ -320,6 +334,7 @@ struct OptionsPanel: View {
         }) {
             Text(settings.videoResolution.label).font(.system(size: 24, weight: .semibold))
         }
+        dynamicRangeOption
         option(title: "Stabilization", active: false, action: { update { $0.videoStabilization = $0.videoStabilization.next } }) {
             Text(settings.videoStabilization.label)
                 .font(.system(size: 14, weight: .bold))
@@ -353,5 +368,75 @@ struct OptionsPanel: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The strip under the top bar for the dynamic-range control: one tap picks a step.
+struct DynamicRangeStrip: View {
+    let selected: DynamicRangeChoice
+    let pick: (DynamicRangeChoice) -> Void
+
+    var body: some View {
+        HStack(spacing: 18) {
+            Image(systemName: "rectangle.dashed")
+                .font(.system(size: 22))
+                .frame(width: 52, height: 52)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.chrome))
+            ForEach(DynamicRangeChoice.allCases, id: \.self) { choice in
+                Button { pick(choice) } label: {
+                    Text(choice.label)
+                        .font(.system(size: 15, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(choice == selected ? Theme.accent : .clear, lineWidth: 1)
+                        )
+                        .foregroundStyle(choice == selected ? Theme.accent : Theme.secondaryText)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(0.6))
+        .background(.ultraThinMaterial)
+    }
+}
+
+/// The f-number pill over the viewfinder in portrait mode. Tapped open, it lists the stops.
+struct ApertureControl: View {
+    let fNumber: Double
+    @Binding var expanded: Bool
+    let pick: (Double) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if expanded {
+                ForEach(PortraitAperture.stops, id: \.self) { stop in
+                    Button { pick(stop) } label: {
+                        Text(String(format: "%.1f", stop))
+                            .font(.system(size: 15, weight: .medium, design: .monospaced))
+                            .foregroundStyle(stop == fNumber ? Theme.accent : .white)
+                            .frame(minWidth: 42)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                Button { expanded = true } label: {
+                    HStack(spacing: 6) {
+                        Text("ƒ").font(.system(size: 16, weight: .semibold))
+                        Text(String(format: "%.1f", fNumber)).font(.system(size: 16, weight: .medium, design: .monospaced))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .frame(height: 38)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 6)
+        .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
     }
 }

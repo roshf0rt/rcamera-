@@ -12,6 +12,8 @@ struct CameraView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showOptions = false
+    @State private var showDynamicRange = false
+    @State private var apertureOpen = false
     @State private var showPresets = false
     @State private var showSettings = false
     @State private var showGallery = false
@@ -46,6 +48,19 @@ struct CameraView: View {
                         .allowsHitTesting(false)
                 }
 
+                if model.settings.portrait, engine.mode == .photo {
+                    ApertureControl(
+                        fNumber: model.settings.portraitFNumber,
+                        expanded: $apertureOpen
+                    ) { stop in
+                        model.updateSettings { $0.portraitFNumber = stop }
+                        apertureOpen = false
+                    }
+                    .frame(width: geo.size.width, height: 44)
+                    .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50)
+                    .transition(.opacity)
+                }
+
                 zoomLine(engine: engine)
                     .frame(width: geo.size.width, height: zoomLineHeight)
                     .offset(y: geo.size.height - controlsHeight - zoomLineHeight)
@@ -71,8 +86,21 @@ struct CameraView: View {
                     OptionsPanel(
                         mode: engine.mode,
                         settings: model.settings,
-                        update: { change in model.updateSettings(change) }
+                        update: { change in model.updateSettings(change) },
+                        openDynamicRange: {
+                            withAnimation(.easeOut(duration: 0.18)) { showOptions = false; showDynamicRange = true }
+                        }
                     )
+                    .frame(width: geo.size.width)
+                    .offset(y: topBarHeight + 6)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                if showDynamicRange {
+                    DynamicRangeStrip(selected: model.settings.dynamicRange) { choice in
+                        model.updateSettings { $0.dynamicRange = choice }
+                        withAnimation(.easeOut(duration: 0.18)) { showDynamicRange = false }
+                    }
                     .frame(width: geo.size.width)
                     .offset(y: topBarHeight + 6)
                     .transition(.opacity.combined(with: .move(edge: .top)))

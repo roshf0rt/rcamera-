@@ -1,3 +1,4 @@
+import AVFoundation
 import CameraCore
 import CoreImage
 import ImageIO
@@ -103,7 +104,9 @@ enum PhotoPipeline {
         mirror: Bool,
         frame: FrameStyle = .off,
         label: String = "",
-        accentIndex: Int = 0
+        accentIndex: Int = 0,
+        depth: AVDepthData? = nil,
+        fNumber: Double = PortraitAperture.standard
     ) -> Developed? {
         let offset = (raw != nil && processed != nil) ? rawExposureOffset(raw: raw!, processed: processed!) : 0
         let base: CIImage?
@@ -115,7 +118,8 @@ enum PhotoPipeline {
             base = nil
         }
         guard let base else { return nil }
-        let finished = finish(base, look: look, aspect: aspect, mirror: mirror)
+        let subject = depth.flatMap { portraitBlur(base, depth: $0, fNumber: fNumber) } ?? base
+        let finished = finish(subject, look: look, aspect: aspect, mirror: mirror)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
     }
 
@@ -158,6 +162,24 @@ enum PhotoPipeline {
         if case let .raw(_, value) = source { offset = value } else { offset = 0 }
         let finished = finish(base, look: look, aspect: aspect, mirror: mirror)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
+    }
+
+    /// Blurs the background of a portrait photo with Core Image's depth blur, driven by the photo's depth map.
+    /// The depth map comes from the sensor's landscape orientation, so it is turned to match the photo.
+    /// Blur strength and orientation were written without a device to check them against.
+    static func portraitBlur(_ image: CIImage, depth: AVDepthData, fNumber: Double) -> CIImage? {
+        let disparity = depth.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat16).depthDataMap
+        let map = CIImage(cvPixelBuffer: disparity).oriented(.right)
+        let extent = image.extent
+        let fitted = map.transformed(by: CGAffineTransform(
+            scaleX: extent.width / map.extent.width,
+            y: extent.height / map.extent.height
+        ))
+        guard let filter = CIFilter(name: "CIDepthBlurEffect") else { return nil }
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(fitted, forKey: "inputDisparityImage")
+        filter.setValue(fNumber, forKey: "inputAperture")
+        return filter.outputImage?.cropped(to: extent)
     }
 
     private static func framedIfNeeded(_ image: CIImage, frame: FrameStyle, label: String, accentIndex: Int) -> CIImage {

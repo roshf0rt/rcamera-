@@ -63,6 +63,39 @@ public enum DigitalZoomStop: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// The dynamic-range control on the camera screen: keep the preset's value, or force one of the five steps.
+public enum DynamicRangeChoice: String, CaseIterable, Codable, Sendable {
+    case preset
+    case extended
+    case high
+    case medium
+    case low
+    case zero
+
+    public var label: String {
+        switch self {
+        case .preset: "PRESET"
+        case .extended: "EXT+"
+        case .high: "HIGH"
+        case .medium: "MED"
+        case .low: "LOW"
+        case .zero: "ZERO"
+        }
+    }
+
+    /// The `LookAdjustments.dynamicRange` this step forces, or nil to keep the preset's own.
+    public var value: Double? {
+        switch self {
+        case .preset: nil
+        case .extended: 1.5
+        case .high: 1
+        case .medium: 2.0 / 3
+        case .low: 1.0 / 3
+        case .zero: 0
+        }
+    }
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
     public var selectedPresetID = "preset-1"
     public var lastCaptureMode: CaptureMode = .photo
@@ -83,6 +116,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var frame: FrameStyle = .off
     /// Volume buttons take a photo while the camera is on screen. Off by default.
     public var volumeShutter = false
+    /// Dynamic range forced from the camera screen, or the preset's own.
+    public var dynamicRange: DynamicRangeChoice = .preset
+    /// Portrait photos: blur the background from the depth map. Photo mode only.
+    public var portrait = false
+    /// The f-number the portrait blur is set to.
+    public var portraitFNumber = PortraitAperture.standard
 
     public var videoResolution: VideoResolution = .hd1080
     public var videoFPS = 30
@@ -103,7 +142,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, savesLocation, digitalZoomStop
-        case grainEnabled, halationEnabled, frame, volumeShutter
+        case grainEnabled, halationEnabled, frame, volumeShutter, dynamicRange, portrait, portraitFNumber
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, revision
     }
 
@@ -126,6 +165,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         halationEnabled = (try? c.decode(Bool.self, forKey: .halationEnabled)) ?? halationEnabled
         frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? frame
         volumeShutter = (try? c.decode(Bool.self, forKey: .volumeShutter)) ?? volumeShutter
+        dynamicRange = (try? c.decode(DynamicRangeChoice.self, forKey: .dynamicRange)) ?? dynamicRange
+        portrait = (try? c.decode(Bool.self, forKey: .portrait)) ?? portrait
+        portraitFNumber = PortraitAperture.nearest(to: (try? c.decode(Double.self, forKey: .portraitFNumber)) ?? portraitFNumber)
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo
