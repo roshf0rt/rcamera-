@@ -125,3 +125,37 @@ final class FormatChooserTests: XCTestCase {
         XCTAssertNil(FormatChooser.videoFormat(front, width: 3840, fps: 30, appleLog: false, photo: photo))
     }
 }
+
+final class SwatchAndCaptureTests: XCTestCase {
+    func testIdentitySwatchKeepsReferenceColors() throws {
+        let swatch = try LUT3D.identity(size: 17).swatch()
+        XCTAssertEqual(swatch.count, LUT3D.swatchInputs.count)
+        for (out, input) in zip(swatch, LUT3D.swatchInputs) {
+            XCTAssertEqual(out.r, input.r, accuracy: 1e-4)
+            XCTAssertEqual(out.g, input.g, accuracy: 1e-4)
+            XCTAssertEqual(out.b, input.b, accuracy: 1e-4)
+        }
+    }
+
+    func testSwatchFollowsTheLUT() throws {
+        // A LUT that swaps red and blue.
+        let size = 5
+        var values: [Float] = []
+        for b in 0 ..< size {
+            for g in 0 ..< size {
+                for r in 0 ..< size {
+                    let scale = Float(size - 1)
+                    values += [Float(b) / scale, Float(g) / scale, Float(r) / scale, 1]
+                }
+            }
+        }
+        let skin = try LUT3D(size: size, rgba: values).swatch()[1]
+        XCTAssertLessThan(skin.r, skin.b, "warm skin turns blue")
+    }
+
+    func testRecordsWithoutMirroredKeyStillDecode() throws {
+        let json = #"{"id":"8D2C1E3A-7A64-4C4E-9E7E-3C1B2A0F5D11","date":0,"kind":"photo","presetID":"preset-1"}"#
+        let record = try JSONDecoder().decode(CaptureRecord.self, from: Data(json.utf8))
+        XCTAssertFalse(record.mirrored)
+    }
+}

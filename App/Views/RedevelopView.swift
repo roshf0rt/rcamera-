@@ -8,7 +8,7 @@ struct RedevelopView: View {
 
     @State private var presetID = ""
     @State private var pushPull = 0.0
-    @State private var raw: Data?
+    @State private var source: PhotoPipeline.Source?
     @State private var preview: UIImage?
     @State private var isSaving = false
     @State private var loaded = false
@@ -34,7 +34,7 @@ struct RedevelopView: View {
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .onAppear(perform: load)
-        .task(id: "\(presetID)-\(pushPull)") { await renderPreview() }
+        .task(id: "\(presetID)-\(pushPull)-\(source != nil)") { await renderPreview() }
     }
 
     private var topBar: some View {
@@ -111,8 +111,10 @@ struct RedevelopView: View {
 
     private var footer: some View {
         Group {
-            if let record {
+            if let record, record.hasRAW {
                 Text("RAW data will be deleted in \(max(model.daysUntilRAWExpires(record), 0)) days")
+            } else if record != nil {
+                Text("No RAW for this photo: it is redeveloped from the camera image.")
             }
         }
         .font(.system(size: 15))
@@ -126,21 +128,23 @@ struct RedevelopView: View {
         loaded = true
         presetID = record.presetID
         pushPull = record.evPushPull
-        raw = model.rawData(for: record)
         let url = model.url(.processed, for: record)
-        Task { original = await Task.detached { UIImage(contentsOfFile: url.path) }.value }
+        Task {
+            original = await Task.detached { UIImage(contentsOfFile: url.path) }.value
+            source = await model.redevelopSource(for: record)
+        }
     }
 
     private func renderPreview() async {
-        guard loaded, let raw, let record, let preset = model.preset(id: presetID) else { return }
+        guard loaded, let source, let record, let preset = model.preset(id: presetID) else { return }
         try? await Task.sleep(for: .milliseconds(150))
         if Task.isCancelled { return }
         let look = model.look(for: preset)
         let aspect = record.aspect
         let value = pushPull
-        let offset = record.rawExposureOffset
+        let mirror = record.mirrored
         let image = await Task.detached(priority: .userInitiated) {
-            PhotoPipeline.preview(raw: raw, look: look, pushPull: value, rawExposureOffset: offset, aspect: aspect)
+            PhotoPipeline.preview(source: source, look: look, pushPull: value, aspect: aspect, mirror: mirror)
         }.value
         if !Task.isCancelled, let image { preview = image }
     }

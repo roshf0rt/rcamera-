@@ -22,6 +22,20 @@ enum Theme {
         [Color(red: 0.10, green: 0.72, blue: 0.90), Color(red: 0.16, green: 0.30, blue: 0.86)],
     ]
 
+    /// The preset's own colors as a strip of equal blocks: its LUT applied to shadow, skin, foliage, sky and
+    /// highlight. Falls back to the decorative gradient while the LUT is loading or when there is none.
+    static func swatch(_ colors: [RGBColor]?, fallback index: Int) -> LinearGradient {
+        guard let colors, !colors.isEmpty else { return gradient(index) }
+        var stops: [Gradient.Stop] = []
+        let count = CGFloat(colors.count)
+        for (offset, color) in colors.enumerated() {
+            let swiftColor = Color(.sRGB, red: Double(color.r), green: Double(color.g), blue: Double(color.b))
+            stops.append(.init(color: swiftColor, location: CGFloat(offset) / count))
+            stops.append(.init(color: swiftColor, location: CGFloat(offset + 1) / count))
+        }
+        return LinearGradient(stops: stops, startPoint: .leading, endPoint: .trailing)
+    }
+
     static func gradient(_ index: Int) -> LinearGradient {
         let colors = gradients[((index % gradients.count) + gradients.count) % gradients.count]
         return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)

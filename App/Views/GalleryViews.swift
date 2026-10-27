@@ -202,7 +202,7 @@ struct CaptureDetailView: View {
             }
             .foregroundStyle(record.isFavorite ? Theme.accent : .white)
             Spacer()
-            if record.kind == .photo, record.hasRAW {
+            if model.canRedevelop(record) {
                 Button { showRedevelop = true } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "square.stack.3d.up.fill")

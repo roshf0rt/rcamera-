@@ -1,9 +1,12 @@
 import CameraCore
 import SwiftUI
 
-/// The camera screen. Everything is stacked top to bottom inside the safe area, so no control sits on
-/// another: top bar, viewfinder (sized to the aspect and whatever room is left), exposure wheel,
-/// shutter row, mode row. Zoom chips, the preset picker and the options panel live inside the viewfinder.
+/// The camera screen, laid out like Lampa inside the safe area.
+///
+/// Top bar, then the viewfinder, then a fixed control block (exposure wheel, shutter row, mode row).
+/// Photo: the picture ends exactly where the control block starts. Video: the 16:9 picture runs full
+/// width and the control block sits on a dark band over its lower part, like the system camera.
+/// Zoom chips and the flip button always sit on one line just above the control block, on the picture.
 struct CameraView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -21,24 +24,61 @@ struct CameraView: View {
         var id = UUID()
     }
 
+    private let topBarHeight: CGFloat = 50
+    private let controlsHeight: CGFloat = 196
+    private let zoomLineHeight: CGFloat = 56
+
     var body: some View {
         let engine = model.engine
-        VStack(spacing: 0) {
-            topBar(engine: engine)
-                .frame(height: 52)
-            viewfinderArea(engine: engine)
-            EVWheel(
-                value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
-                isActive: $evActive
-            )
-            .frame(height: 46)
-            .padding(.top, 12)
-            shutterRow(engine: engine)
-                .frame(height: 92)
-                .padding(.top, 8)
-            modeRow(engine: engine)
-                .frame(height: 44)
-                .padding(.bottom, 4)
+        GeometryReader { geo in
+            let layout = layout(in: geo.size, mode: engine.mode)
+            ZStack(alignment: .topLeading) {
+                Color.black
+
+                viewfinder(engine: engine, size: layout.preview.size)
+                    .frame(width: layout.preview.width, height: layout.preview.height)
+                    .offset(x: layout.preview.minX, y: layout.preview.minY)
+
+                if engine.mode == .video {
+                    LinearGradient(colors: [.black.opacity(0), .black.opacity(0.55), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
+                        .frame(width: geo.size.width, height: controlsHeight + 24)
+                        .offset(y: geo.size.height - controlsHeight - 24)
+                        .allowsHitTesting(false)
+                }
+
+                zoomLine(engine: engine)
+                    .frame(width: geo.size.width, height: zoomLineHeight)
+                    .offset(y: geo.size.height - controlsHeight - zoomLineHeight)
+
+                if showPresets {
+                    PresetPicker()
+                        .padding(.vertical, 10)
+                        .background(Color.black.opacity(0.55))
+                        .background(.ultraThinMaterial)
+                        .frame(width: geo.size.width)
+                        .offset(y: geo.size.height - controlsHeight - 120)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+
+                controls(engine: engine)
+                    .frame(width: geo.size.width, height: controlsHeight)
+                    .offset(y: geo.size.height - controlsHeight)
+
+                topBar(engine: engine)
+                    .frame(width: geo.size.width, height: topBarHeight)
+
+                if showOptions {
+                    OptionsPanel(
+                        mode: engine.mode,
+                        settings: model.settings,
+                        update: { change in model.updateSettings(change) }
+                    )
+                    .frame(width: geo.size.width)
+                    .offset(y: topBarHeight + 6)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.22), value: engine.mode)
         }
         .background(Color.black.ignoresSafeArea())
         .overlay { if engine.access == .denied { accessDenied } }
@@ -63,6 +103,25 @@ struct CameraView: View {
             enabled ? model.level.start() : model.level.stop()
         }
         .onChange(of: engine.mode) { _, _ in showOptions = false }
+    }
+
+    private struct Layout {
+        var preview: CGRect
+    }
+
+    private func layout(in size: CGSize, mode: CaptureMode) -> Layout {
+        let width = size.width - 12
+        if mode == .video {
+            let height = min(width * 16 / 9, size.height - topBarHeight)
+            let fitted = height * 9 / 16
+            return Layout(preview: CGRect(x: (size.width - fitted) / 2, y: topBarHeight, width: fitted, height: height))
+        }
+        let ratio = CGFloat(model.settings.aspect.portraitHeightOverWidth)
+        let room = size.height - topBarHeight - controlsHeight
+        let previewWidth = min(width, room / ratio)
+        let previewHeight = previewWidth * ratio
+        // Bottom-aligned, so the zoom chips always sit on the picture.
+        return Layout(preview: CGRect(x: (size.width - previewWidth) / 2, y: topBarHeight + room - previewHeight, width: previewWidth, height: previewHeight))
     }
 
     private var alertBinding: Binding<Bool> {
@@ -91,17 +150,21 @@ struct CameraView: View {
                 Image(systemName: "hexagon.fill")
                     .font(.system(size: 18))
                     .foregroundStyle(Color(white: 0.7))
-                    .frame(width: 42, height: 42)
+                    .frame(width: 40, height: 40)
                     .background(Circle().fill(Theme.chrome))
             }
             .buttonStyle(.plain)
 
             Spacer(minLength: 0)
-            EffectToggle(title: "Grain", systemName: "circle.dotted", isOn: model.settings.grainEnabled) {
-                model.updateSettings { $0.grainEnabled.toggle() }
-            }
-            EffectToggle(title: "Halation", systemName: "sun.max", isOn: model.settings.halationEnabled) {
-                model.updateSettings { $0.halationEnabled.toggle() }
+            if engine.isRecording {
+                recordingBadge(engine: engine)
+            } else {
+                EffectToggle(title: "GRAIN", isOn: model.settings.grainEnabled) {
+                    model.updateSettings { $0.grainEnabled.toggle() }
+                }
+                EffectToggle(title: "HALATION", isOn: model.settings.halationEnabled) {
+                    model.updateSettings { $0.halationEnabled.toggle() }
+                }
             }
             Spacer(minLength: 0)
 
@@ -109,7 +172,7 @@ struct CameraView: View {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(showOptions ? Theme.accent : .white)
-                    .frame(width: 56, height: 38)
+                    .frame(width: 56, height: 36)
                     .background(Capsule().fill(Theme.chrome))
             }
             .buttonStyle(.plain)
@@ -118,19 +181,6 @@ struct CameraView: View {
     }
 
     // MARK: Viewfinder
-
-    private func viewfinderArea(engine: CameraEngine) -> some View {
-        GeometryReader { geo in
-            let ratio = engine.mode == .video ? 16.0 / 9.0 : model.settings.aspect.portraitHeightOverWidth
-            let width = min(geo.size.width - 12, geo.size.height / CGFloat(ratio))
-            let size = CGSize(width: max(width, 1), height: max(width * CGFloat(ratio), 1))
-            viewfinder(engine: engine, size: size)
-                .frame(width: size.width, height: size.height)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .animation(.easeInOut(duration: 0.22), value: size)
-        }
-        .padding(.top, 2)
-    }
 
     private func viewfinder(engine: CameraEngine, size: CGSize) -> some View {
         ZStack {
@@ -155,9 +205,6 @@ struct CameraView: View {
             if engine.showsSwitchBlur {
                 Rectangle().fill(.ultraThinMaterial).transition(.opacity)
             }
-            bottomOverlay(engine: engine)
-            if engine.isRecording { recordingBadge(engine: engine) }
-            if showOptions { optionsPanel }
         }
         .animation(.easeInOut(duration: 0.15), value: engine.showsSwitchBlur)
         .background(Color(white: 0.06))
@@ -184,60 +231,64 @@ struct CameraView: View {
         )
     }
 
-    /// Zoom chips sit on the bottom edge of the picture, like the system camera. The exposure readout and
-    /// the preset picker take their place while they are in use.
-    private func bottomOverlay(engine: CameraEngine) -> some View {
-        VStack {
-            Spacer()
-            Group {
-                if showPresets {
-                    PresetPicker()
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.35))
-                        .background(.ultraThinMaterial)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else if evActive {
-                    EVBubble(value: engine.evBias)
-                        .padding(.bottom, 12)
-                } else if engine.lens != .front, !engine.zoomStops.isEmpty {
-                    ZoomChips(stops: engine.zoomStops, active: engine.activeStop, mode: engine.mode) { stop in
-                        engine.selectZoom(stop)
+    /// Zoom chips centered, flip button on the right, as in Lampa. The exposure readout replaces the chips
+    /// while the wheel turns.
+    private func zoomLine(engine: CameraEngine) -> some View {
+        ZStack {
+            if evActive {
+                EVBubble(value: engine.evBias)
+            } else if engine.lens != .front, !engine.zoomStops.isEmpty, !showPresets {
+                ZoomChips(stops: engine.zoomStops, active: engine.activeStop, mode: engine.mode) { stop in
+                    engine.selectZoom(stop)
+                }
+                .padding(.horizontal, 4)
+                .background(Capsule().fill(Color.black.opacity(0.35)))
+            }
+            HStack {
+                Spacer()
+                if !showPresets {
+                    Button { engine.flipCamera() } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Circle().fill(Color.black.opacity(0.4)))
                     }
-                    .padding(.horizontal, 6)
-                    .background(Capsule().fill(Color.black.opacity(0.32)))
-                    .padding(.bottom, 10)
+                    .buttonStyle(.plain)
+                    .disabled(engine.isRecording)
                 }
             }
+            .padding(.horizontal, 16)
         }
     }
 
-    private var optionsPanel: some View {
-        VStack {
-            OptionsPanel(
-                mode: model.engine.mode,
-                settings: model.settings,
-                update: { change in model.updateSettings(change) }
+    private func controls(engine: CameraEngine) -> some View {
+        VStack(spacing: 0) {
+            EVWheel(
+                value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
+                isActive: $evActive
             )
+            .frame(height: 46)
             .padding(.top, 8)
-            Spacer()
+            shutterRow(engine: engine)
+                .frame(height: 90)
+                .padding(.top, 6)
+            modeRow(engine: engine)
+                .frame(height: 40)
+            Spacer(minLength: 0)
         }
-        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     private func recordingBadge(engine: CameraEngine) -> some View {
-        VStack {
-            HStack(spacing: 6) {
-                Circle().fill(.red).frame(width: 8, height: 8)
-                Text(Self.format(engine.recordingSeconds))
-                    .font(.system(size: 14, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(Color.black.opacity(0.5)))
-            .padding(.top, 12)
-            Spacer()
+        HStack(spacing: 6) {
+            Circle().fill(.red).frame(width: 8, height: 8)
+            Text(Self.format(engine.recordingSeconds))
+                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
         }
+        .padding(.horizontal, 12)
+        .frame(height: 32)
+        .background(Capsule().fill(Color.red.opacity(0.25)))
     }
 
     private static func format(_ seconds: Double) -> String {
@@ -283,7 +334,7 @@ struct CameraView: View {
         return Button { withAnimation(.easeOut(duration: 0.2)) { showPresets.toggle(); showOptions = false } } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 18)
-                    .fill(Theme.gradient(preset.accentIndex))
+                    .fill(Theme.swatch(model.swatches[preset.id], fallback: preset.accentIndex))
                     .frame(width: 58, height: 58)
                     .offset(x: 4, y: 4)
                     .opacity(showPresets ? 0 : 0.8)
@@ -312,15 +363,6 @@ struct CameraView: View {
                 modeButton("VIDEO", mode: .video, engine: engine)
             }
             HStack {
-                Button { engine.flipCamera() } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(Circle().fill(Theme.chrome))
-                }
-                .buttonStyle(.plain)
-                .disabled(engine.isRecording)
                 Spacer()
                 Button { engine.toggleLock() } label: {
                     HStack(spacing: 5) {
@@ -368,23 +410,27 @@ struct CameraView: View {
     }
 }
 
-/// A small on/off chip in the top bar, like Lampa's grain and halation switches.
+/// A small on/off switch in the top bar, like Lampa's grain and halation switches: a dot and a label,
+/// lit in the accent color when on.
 private struct EffectToggle: View {
     let title: String
-    let systemName: String
     let isOn: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: systemName).font(.system(size: 12, weight: .semibold))
-                Text(title).font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isOn ? Theme.accent : Color(white: 0.35))
+                    .frame(width: 6, height: 6)
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .tracking(0.6)
             }
-            .foregroundStyle(isOn ? Color.black : Theme.secondaryText)
+            .foregroundStyle(isOn ? .white : Theme.secondaryText)
             .padding(.horizontal, 12)
-            .frame(height: 32)
-            .background(Capsule().fill(isOn ? Theme.accent : Theme.chrome))
+            .frame(height: 30)
+            .background(Capsule().fill(Theme.chrome))
         }
         .buttonStyle(.plain)
         .sensoryFeedback(.selection, trigger: isOn)

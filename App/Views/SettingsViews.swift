@@ -15,7 +15,7 @@ struct SettingsView: View {
                             PresetEditorView(presetID: preset.id)
                         } label: {
                             HStack(spacing: 12) {
-                                Capsule().fill(Theme.gradient(preset.accentIndex)).frame(width: 28, height: 6)
+                                RoundedRectangle(cornerRadius: 3).fill(Theme.swatch(model.swatches[preset.id], fallback: preset.accentIndex)).frame(width: 44, height: 10)
                                 Text(preset.name)
                                 Spacer()
                                 Text(model.hasAnyLUT(preset.id) ? "LUT" : "No LUT").foregroundStyle(Theme.secondaryText)

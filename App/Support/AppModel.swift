@@ -17,6 +17,8 @@ final class AppModel {
     private(set) var presets: [Preset]
     private(set) var captures: [CaptureRecord]
     private(set) var processingCount = 0
+    /// Each preset's LUT applied to a few reference colors, for the colored strip on its card.
+    private(set) var swatches: [String: [RGBColor]] = [:]
     var alert: String?
 
     @ObservationIgnored private let presetLibrary: PresetLibrary
@@ -51,6 +53,7 @@ final class AppModel {
         engine.onVideo = { [weak self] url in self?.ingest(videoAt: url) }
         engine.onModeChanged = { [weak self] mode in self?.updateSettings { $0.lastCaptureMode = mode } }
         pushLooks()
+        refreshSwatches()
     }
 
     // MARK: Settings
@@ -131,6 +134,25 @@ final class AppModel {
     private func invalidateLooks(for presetID: String) {
         lookCache = lookCache.filter { !$0.key.hasPrefix("\(presetID)|") }
         if presetID == settings.selectedPresetID { pushLooks() }
+        refreshSwatches(for: [presetID])
+    }
+
+    /// Parses the photo LUT (or the video one) of each preset off the main thread and keeps only its swatch.
+    private func refreshSwatches(for ids: [String]? = nil) {
+        let targets = (ids ?? presets.map(\.id)).map { id in
+            (id, presetLibrary.lutURL(for: id, slot: .photo) ?? presetLibrary.lutURL(for: id, slot: .video))
+        }
+        Task {
+            for (id, url) in targets {
+                let swatch: [RGBColor]? = await Task.detached(priority: .utility) {
+                    guard let url, let data = try? Data(contentsOf: url),
+                          let lut = try? LUT3D.parse(data: data, fileExtension: url.pathExtension.lowercased())
+                    else { return nil }
+                    return lut.swatch()
+                }.value
+                swatches[id] = swatch
+            }
+        }
     }
 
     /// The preset's look with the camera-screen grain and halation toggles applied.
@@ -224,12 +246,15 @@ final class AppModel {
                 aspect: photo.aspect,
                 hasRAW: hasRAW,
                 placeName: place,
-                rawExposureOffset: developed.rawExposureOffset
+                rawExposureOffset: developed.rawExposureOffset,
+                mirrored: photo.mirror
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
                 try captureStore.write(developed.thumbnail, as: .thumbnail, for: record.id)
                 if hasRAW, let raw = photo.raw { try captureStore.write(raw, as: .rawDNG, for: record.id) }
+                // The camera's image before the preset: lets the photo be redeveloped without RAW, or after it expires.
+                if let original = photo.processed { try captureStore.write(original, as: .original, for: record.id) }
                 try captureStore.add(record)
                 captures = captureStore.records
             } catch {
@@ -281,17 +306,39 @@ final class AppModel {
 
     // MARK: Redevelop
 
-    /// Re-renders a stored RAW with a different preset and push/pull, replacing the processed image.
+    /// A photo can be redeveloped from its RAW, or from the camera's original image.
+    func canRedevelop(_ record: CaptureRecord) -> Bool {
+        record.kind == .photo && (record.hasRAW || captureStore.fileExists(.original, for: record.id))
+    }
+
+    /// The RAW while it is kept, otherwise the camera's original image. Reads files; call off the main thread when possible.
+    nonisolated static func redevelopSource(raw rawURL: URL, original originalURL: URL, hasRAW: Bool, exposureOffset: Double) -> PhotoPipeline.Source? {
+        if hasRAW, let raw = try? Data(contentsOf: rawURL) { return .raw(raw, exposureOffset: exposureOffset) }
+        if let original = try? Data(contentsOf: originalURL) { return .original(original) }
+        return nil
+    }
+
+    func redevelopSource(for record: CaptureRecord) async -> PhotoPipeline.Source? {
+        let rawURL = captureStore.url(.rawDNG, for: record.id)
+        let originalURL = captureStore.url(.original, for: record.id)
+        let hasRAW = record.hasRAW
+        let offset = record.rawExposureOffset
+        return await Task.detached(priority: .userInitiated) {
+            Self.redevelopSource(raw: rawURL, original: originalURL, hasRAW: hasRAW, exposureOffset: offset)
+        }.value
+    }
+
+    /// Re-renders a stored photo with a different preset and push/pull, replacing the processed image.
     func redevelop(_ record: CaptureRecord, presetID: String, pushPull: Double) async -> Bool {
         guard let preset = preset(id: presetID),
-              let raw = try? Data(contentsOf: captureStore.url(.rawDNG, for: record.id))
+              let source = await redevelopSource(for: record)
         else { return false }
         let look = look(for: preset, slot: .photo)
         let aspect = record.aspect
-        let offset = record.rawExposureOffset
+        let mirror = record.mirrored
 
         let developed = await Task.detached(priority: .userInitiated) {
-            PhotoPipeline.redevelop(raw: raw, look: look, pushPull: pushPull, rawExposureOffset: offset, aspect: aspect)
+            PhotoPipeline.redevelop(source: source, look: look, pushPull: pushPull, aspect: aspect, mirror: mirror)
         }.value
         guard let developed else { return false }
 

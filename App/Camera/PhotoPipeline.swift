@@ -115,28 +115,41 @@ enum PhotoPipeline {
         return encode(finish(base, look: look, aspect: aspect, mirror: mirror), rawExposureOffset: offset)
     }
 
-    /// Re-renders a stored RAW with another preset and push/pull.
-    static func redevelop(
-        raw: Data,
-        look: FilmLook,
-        pushPull: Double,
-        rawExposureOffset: Double,
-        aspect: AspectOption
-    ) -> Developed? {
-        guard let base = rawImage(raw, exposure: rawExposureOffset + pushPull) else { return nil }
-        return encode(finish(base, look: look, aspect: aspect, mirror: false), rawExposureOffset: rawExposureOffset)
+    /// What a redevelop starts from: the RAW when it is still kept, otherwise the camera's own image.
+    enum Source: @unchecked Sendable {
+        case raw(Data, exposureOffset: Double)
+        case original(Data)
+    }
+
+    /// `scale` below 1 renders smaller, for interactive previews.
+    private static func baseImage(_ source: Source, pushPull: Double, scale: Float) -> CIImage? {
+        switch source {
+        case let .raw(data, offset):
+            return rawImage(data, exposure: offset + pushPull, scale: scale)
+        case let .original(data):
+            guard var image = processedImage(data) else { return nil }
+            if scale < 1 {
+                image = image.transformed(by: CGAffineTransform(scaleX: CGFloat(scale), y: CGFloat(scale)))
+            }
+            if abs(pushPull) > 0.001 {
+                image = image.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: pushPull])
+            }
+            return image
+        }
+    }
+
+    /// Re-renders a stored capture with another preset and push/pull.
+    static func redevelop(source: Source, look: FilmLook, pushPull: Double, aspect: AspectOption, mirror: Bool) -> Developed? {
+        guard let base = baseImage(source, pushPull: pushPull, scale: 1) else { return nil }
+        let offset: Double
+        if case let .raw(_, value) = source { offset = value } else { offset = 0 }
+        return encode(finish(base, look: look, aspect: aspect, mirror: mirror), rawExposureOffset: offset)
     }
 
     /// A reduced-size render for the Redevelop screen.
-    static func preview(
-        raw: Data,
-        look: FilmLook,
-        pushPull: Double,
-        rawExposureOffset: Double,
-        aspect: AspectOption
-    ) -> UIImage? {
-        guard let base = rawImage(raw, exposure: rawExposureOffset + pushPull, scale: 0.35) else { return nil }
-        let image = finish(base, look: look, aspect: aspect, mirror: false)
+    static func preview(source: Source, look: FilmLook, pushPull: Double, aspect: AspectOption, mirror: Bool) -> UIImage? {
+        guard let base = baseImage(source, pushPull: pushPull, scale: 0.35) else { return nil }
+        let image = finish(base, look: look, aspect: aspect, mirror: mirror)
         guard let cgImage = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: sRGB) else { return nil }
         return UIImage(cgImage: cgImage)
     }

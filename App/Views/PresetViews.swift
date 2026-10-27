@@ -42,10 +42,10 @@ struct PresetCard: View {
                     .foregroundStyle(isSelected ? .black : .white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                Capsule()
-                    .fill(Theme.gradient(preset.accentIndex))
-                    .frame(height: 5)
-                    .padding(.top, 8)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Theme.swatch(model.swatches[preset.id], fallback: preset.accentIndex))
+                    .frame(height: 12)
+                    .padding(.top, 6)
             }
             .padding(13)
             .frame(width: 150, height: 92)
@@ -62,6 +62,7 @@ struct PresetCard: View {
 
 /// Compact card with initials, used on the Redevelop screen.
 struct PresetChip: View {
+    @Environment(AppModel.self) private var model
     let preset: Preset
     let isSelected: Bool
     let action: () -> Void
@@ -77,7 +78,9 @@ struct PresetChip: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                 }
-                Capsule().fill(Theme.gradient(preset.accentIndex)).frame(height: 5)
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Theme.swatch(model.swatches[preset.id], fallback: preset.accentIndex))
+                    .frame(height: 10)
             }
             .foregroundStyle(isSelected ? .black : .white)
             .padding(.horizontal, 14)

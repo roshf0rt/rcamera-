@@ -22,6 +22,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var appleLog: Bool
         var digitalZoom: Double
         var exposureBias: Double
+        var wantsRAW: Bool
     }
 
     struct DeviceInfo: Sendable {
@@ -58,6 +59,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var currentPosition: AVCaptureDevice.Position?
     private var currentFormatIndex: Int?
     private var currentAppleLog = false
+    /// Cameras whose hand-picked 4:3 format gave no RAW. Their photos use the `.photo` preset instead,
+    /// which always offers RAW where the camera has it, at the cost of a rebuild when switching to video.
+    private var photoPresetPositions: Set<AVCaptureDevice.Position> = []
     /// Zoom factor of the virtual device at which each lens takes over. 1 is the widest lens.
     private var lensZoomFactors: [LensID: Double] = [.wide: 1]
     private var photoDelegates: [Int64: PhotoCaptureDelegate] = [:]
@@ -132,7 +136,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             ? .photo
             : (config.format.width >= 3840 ? .hd4K3840x2160 : .hd1920x1080)
         if config.mode == .photo {
-            return FormatPlan(index: photo?.index, appleLog: false, fallbackPreset: fallback)
+            let usePreset = config.wantsRAW && photoPresetPositions.contains(device.position)
+            return FormatPlan(index: usePreset ? nil : photo?.index, appleLog: false, fallbackPreset: fallback)
         }
         let choice = FormatChooser.videoFormat(
             formats,
@@ -193,6 +198,13 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
             setPixelFormat(tenBit: formatPlan.appleLog)
+        }
+
+        // RAW is what Redevelop works from. If the chosen format has none, fall back to the photo preset once.
+        if structural, config.mode == .photo, config.wantsRAW, position == .back, formatPlan.index != nil,
+           photoOutput.availableRawPhotoPixelFormatTypes.isEmpty, !photoPresetPositions.contains(position) {
+            photoPresetPositions.insert(position)
+            return applyOnQueue(config)
         }
 
         configureDevice(config, device: device)

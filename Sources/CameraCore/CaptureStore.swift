@@ -7,6 +7,8 @@ public enum CaptureKind: String, Codable, Sendable {
 
 public enum CaptureFile: String, Sendable {
     case rawDNG = "original.dng"
+    /// The camera's own image before the preset, kept when there is no RAW so the photo can still be redeveloped.
+    case original = "original.heic"
     case processed = "processed.heic"
     case thumbnail = "thumb.jpg"
     case video = "video.mov"
@@ -25,6 +27,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var isFavorite: Bool
     /// EV offset that makes a developed RAW match the camera's own processed image in brightness.
     public var rawExposureOffset: Double
+    /// Front-camera photo saved mirrored; redevelop mirrors it again.
+    public var mirrored: Bool
 
     public init(
         id: UUID = UUID(),
@@ -36,7 +40,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         hasRAW: Bool = false,
         placeName: String? = nil,
         isFavorite: Bool = false,
-        rawExposureOffset: Double = 0
+        rawExposureOffset: Double = 0,
+        mirrored: Bool = false
     ) {
         self.id = id
         self.date = date
@@ -48,10 +53,11 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.placeName = placeName
         self.isFavorite = isFavorite
         self.rawExposureOffset = rawExposureOffset
+        self.mirrored = mirrored
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset
+        case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored
     }
 
     /// Index files from earlier releases lack newer keys; they keep their captures.
@@ -67,6 +73,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         placeName = try? c.decode(String?.self, forKey: .placeName)
         isFavorite = (try? c.decode(Bool.self, forKey: .isFavorite)) ?? false
         rawExposureOffset = (try? c.decode(Double.self, forKey: .rawExposureOffset)) ?? 0
+        mirrored = (try? c.decode(Bool.self, forKey: .mirrored)) ?? false
     }
 }
 
