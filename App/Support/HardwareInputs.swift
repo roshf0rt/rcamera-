@@ -2,6 +2,7 @@ import AppIntents
 import AVFoundation
 import MediaPlayer
 import SwiftUI
+import UIKit
 
 extension Notification.Name {
     /// Posted by `TakePhotoIntent`; `AppModel` takes a photo when it hears it.

@@ -309,9 +309,9 @@ final class AppModel {
                 placeName: place,
                 rawExposureOffset: developed.rawExposureOffset,
                 mirrored: photo.mirror,
+                frame: frame,
                 grainEnabled: grainOn,
-                halationEnabled: halationOn,
-                frame: frame
+                halationEnabled: halationOn
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
