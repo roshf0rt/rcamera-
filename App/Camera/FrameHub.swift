@@ -1,6 +1,7 @@
 import AVFoundation
 import CameraCore
 import CoreImage
+import QuartzCore
 
 /// Receives camera frames on the capture queue, crops them to the chosen aspect, grades them on the GPU,
 /// then shows the result and (when recording) writes it to disk.
@@ -33,6 +34,15 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     private let lock = NSLock()
 
     private var look = FilmLook.identity
+    private var fade: Fade?
+    private static let fadeDuration: CFTimeInterval = 0.3
+
+    /// The looks being faded out, and when the fade began.
+    private struct Fade {
+        var look: FilmLook
+        var logLook: FilmLook?
+        var start: CFTimeInterval
+    }
     private var logLook: FilmLook?
     private var aspect: AspectOption = .ratio4x3
     private var mirror = false
@@ -53,8 +63,14 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     }
 
     /// `logLook` grades 10-bit Apple Log frames; everything else uses `look`.
+    /// A change of LUT crossfades over `fadeDuration`, so switching presets feels smooth rather than abrupt.
     func configure(look: FilmLook, logLook: FilmLook?, aspect: AspectOption, mirror: Bool) {
         lock.lock()
+        let lutChanged = look.lutIdentity != self.look.lutIdentity
+            || logLook?.lutIdentity != self.logLook?.lutIdentity
+        if lutChanged, deliveredFrames > 0 {
+            fade = Fade(look: self.look, logLook: self.logLook, start: CACurrentMediaTime())
+        }
         self.look = look
         self.logLook = logLook
         self.aspect = aspect
@@ -123,6 +139,19 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         lock.lock()
         let isLog = Self.isTenBit(source)
         let look = isLog ? (logLook ?? look) : look
+        var previous: FilmLook?
+        var previousMix: Float = 0
+        if let fade {
+            let progress = (CACurrentMediaTime() - fade.start) / Self.fadeDuration
+            if progress >= 1 {
+                self.fade = nil
+            } else {
+                previous = isLog ? (fade.logLook ?? fade.look) : fade.look
+                // Ease out: quick start, gentle landing.
+                let remaining = Float(1 - progress)
+                previousMix = remaining * remaining
+            }
+        }
         let aspect = aspect, mirror = mirror
         let separateRecordStream = recordOutput != nil
         let isRecordStream = separateRecordStream && output === recordOutput
@@ -131,13 +160,13 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
 
         if isRecordStream {
             guard wantsRecording,
-                  let rendered = render(source, pool: recordPool, look: look, aspect: aspect, mirror: mirror)
+                  let rendered = render(source, pool: recordPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror)
             else { return }
             record(rendered.buffer, at: time, width: rendered.crop.width, height: rendered.crop.height)
             return
         }
 
-        guard let rendered = render(source, pool: previewPool, look: look, aspect: aspect, mirror: mirror) else { return }
+        guard let rendered = render(source, pool: previewPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror) else { return }
         let buffer = rendered.buffer, crop = rendered.crop
         lock.lock()
         geometry = Geometry(source: CGSize(width: CVPixelBufferGetWidth(source), height: CVPixelBufferGetHeight(source)), crop: crop)
@@ -155,10 +184,18 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         return format == kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange || format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
     }
 
-    private func render(_ source: CVPixelBuffer, pool: PixelBufferPool, look: FilmLook, aspect: AspectOption, mirror: Bool) -> (buffer: CVPixelBuffer, crop: CropRect)? {
+    private func render(
+        _ source: CVPixelBuffer,
+        pool: PixelBufferPool,
+        look: FilmLook,
+        previous: FilmLook?,
+        previousMix: Float,
+        aspect: AspectOption,
+        mirror: Bool
+    ) -> (buffer: CVPixelBuffer, crop: CropRect)? {
         let crop = aspect.cropRect(sourceWidth: CVPixelBufferGetWidth(source), sourceHeight: CVPixelBufferGetHeight(source))
         guard let output = pool.buffer(width: crop.width, height: crop.height) else { return nil }
-        if let grader, grader.grade(source: source, crop: crop, mirror: mirror, look: look, into: output) {
+        if let grader, grader.grade(source: source, crop: crop, mirror: mirror, look: look, into: output, previous: previous, previousMix: previousMix) {
             return (output, crop)
         }
 

@@ -203,3 +203,41 @@ final class LUTProfileTests: XCTestCase {
         }
     }
 }
+
+final class AppleLogTests: XCTestCase {
+    func testCurveRoundTrips() {
+        for r: Float in [-0.05, 0, 0.005, 0.01, 0.18, 0.9, 4, 20] {
+            XCTAssertEqual(AppleLog.decode(AppleLog.encode(r)), r, accuracy: max(1e-4, r * 1e-4))
+        }
+        XCTAssertEqual(AppleLog.encode(0.18), 0.488, accuracy: 0.002)
+    }
+
+    func testMidGreyIsNeutralAndWhereRec709PutsIt() {
+        let grey = AppleLog.encode(0.18)
+        let out = AppleLog.toRec709(r: grey, g: grey, b: grey)
+        XCTAssertEqual(out.0, 0.409, accuracy: 0.01)
+        XCTAssertEqual(out.0, out.1, accuracy: 0.005)
+        XCTAssertEqual(out.1, out.2, accuracy: 0.005)
+    }
+
+    func testHighlightsRollOffInsteadOfClipping() {
+        let one = AppleLog.encode(1)
+        let two = AppleLog.encode(2)
+        let a = AppleLog.toRec709(r: one, g: one, b: one).0
+        let b = AppleLog.toRec709(r: two, g: two, b: two).0
+        XCTAssertLessThan(a, b)
+        XCTAssertLessThan(b, 1.0001)
+        XCTAssertGreaterThan(a, 0.85)
+    }
+
+    func testNeutralLUTFollowedByAnotherLUT() throws {
+        let neutral = AppleLog.neutralRec709LUT(size: 17)
+        let grey = AppleLog.encode(0.18)
+        let direct = neutral.apply(r: grey, g: grey, b: grey)
+        XCTAssertEqual(direct.r, 0.409, accuracy: 0.02)
+
+        let invert = try LUT3D(size: 2, rgba: [1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1])
+        let chained = neutral.followed(by: invert).apply(r: grey, g: grey, b: grey)
+        XCTAssertEqual(chained.r, 1 - direct.r, accuracy: 0.01)
+    }
+}

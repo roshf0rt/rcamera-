@@ -23,6 +23,11 @@ struct GradeParams {
     float grainOffsetY;
     float grainScale;
     float halation;
+    // Crossfade from the previous preset's LUT: 1 = all previous, 0 = all current.
+    int hasPreviousLUT;
+    float previousLutScale;
+    float previousLutOffset;
+    float previousMix;
 };
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
@@ -88,12 +93,22 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
                   texture2d<float> glow [[texture(3)]],
                   texture2d<float> grain [[texture(4)]],
                   texture2d<float, access::write> destination [[texture(5)]],
+                  texture3d<float> previousLUT [[texture(6)]],
                   constant GradeParams &p [[buffer(0)]],
                   uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= uint(p.width) || gid.y >= uint(p.height)) {
         return;
     }
-    float3 color = applyLUT(readSource(luma, chroma, sourcePoint(gid, p), p), lut, p);
+    float3 source = readSource(luma, chroma, sourcePoint(gid, p), p);
+    float3 color = applyLUT(source, lut, p);
+    if (p.previousMix > 0.0) {
+        float3 previous = source;
+        if (p.hasPreviousLUT != 0) {
+            float3 coordinate = saturate(source) * p.previousLutScale + p.previousLutOffset;
+            previous = previousLUT.sample(linearClamp, coordinate).rgb;
+        }
+        color = mix(color, previous, p.previousMix);
+    }
 
     if (p.halation > 0.0) {
         float2 uv = (float2(gid) + 0.5) / float2(float(p.width), float(p.height));

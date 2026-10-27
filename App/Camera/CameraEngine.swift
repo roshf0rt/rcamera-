@@ -12,7 +12,8 @@ final class CameraEngine {
         case unknown, granted, denied
     }
 
-    /// The preset resolved for each kind of input. `appleLog` is nil when the preset has no Apple Log LUT.
+    /// The preset resolved for each kind of input. `appleLog` is the preset's Apple Log LUT, or a neutral
+    /// Apple Log → Rec.709 conversion followed by its video LUT, so every preset works in Apple Log.
     struct Looks {
         var photo = FilmLook.identity
         var video = FilmLook.identity
@@ -258,9 +259,10 @@ final class CameraEngine {
         }
     }
 
-    /// Apple Log capture is only requested when the toggle is on and the preset has an Apple Log LUT to decode it.
+    /// Apple Log depends only on the setting, mode and camera, never on the preset, so switching presets
+    /// never rebuilds the session.
     private var wantsAppleLog: Bool {
-        settings.appleLogVideo && looks.appleLog != nil && mode == .video && lens != .front
+        settings.appleLogVideo && mode == .video && lens != .front
     }
 
     private func reapplyIfAppleLogChanged() {

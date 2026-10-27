@@ -22,6 +22,10 @@ private struct GradeParams {
     var grainOffsetY: Float = 0
     var grainScale: Float = 1
     var halation: Float = 0
+    var hasPreviousLUT: Int32 = 0
+    var previousLutScale: Float = 1
+    var previousLutOffset: Float = 0
+    var previousMix: Float = 0
 }
 
 /// Applies a `FilmLook` on the GPU in one pass, like Lampa's Ironstone: camera pixel, LUT, halation, grain.
@@ -87,8 +91,18 @@ final class MetalGrader: @unchecked Sendable {
     /// Renders `crop` of `source` with `look` into `output`, whose size must match the crop.
     /// `source` may be BGRA or 10-bit bi-planar Y'CbCr (the camera's Apple Log stream).
     /// `cachedMasks` reuses mask textures between calls; only the capture queue should pass true.
+    /// `previous` with `previousMix` above 0 blends in another look's LUT, for a crossfade between presets.
     @discardableResult
-    func grade(source: CVPixelBuffer, crop: CropRect, mirror: Bool, look: FilmLook, into output: CVPixelBuffer, cachedMasks: Bool = true) -> Bool {
+    func grade(
+        source: CVPixelBuffer,
+        crop: CropRect,
+        mirror: Bool,
+        look: FilmLook,
+        into output: CVPixelBuffer,
+        cachedMasks: Bool = true,
+        previous: FilmLook? = nil,
+        previousMix: Float = 0
+    ) -> Bool {
         var params = GradeParams()
         var holders: [CVMetalTexture] = []
 
@@ -127,6 +141,18 @@ final class MetalGrader: @unchecked Sendable {
             params.hasLUT = 1
             params.lutScale = (size - 1) / size
             params.lutOffset = 0.5 / size
+        }
+
+        var previousLUT: MTLTexture?
+        if let previous, previousMix > 0 {
+            params.previousMix = min(previousMix, 1)
+            previousLUT = previous.texture(on: device)
+            if let previousLUT {
+                let size = Float(previousLUT.width)
+                params.hasPreviousLUT = 1
+                params.previousLutScale = (size - 1) / size
+                params.previousLutOffset = 0.5 / size
+            }
         }
 
         params.grain = FilmMath.grainIntensity(look.grain)
@@ -169,6 +195,7 @@ final class MetalGrader: @unchecked Sendable {
         encoder.setTexture(glow, index: 3)
         encoder.setTexture(grain, index: 4)
         encoder.setTexture(destination, index: 5)
+        encoder.setTexture(previousLUT ?? emptyLUT, index: 6)
         encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
         dispatch(encoder, state: gradeState, width: crop.width, height: crop.height)
         encoder.endEncoding()

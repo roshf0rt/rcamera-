@@ -154,18 +154,37 @@ final class AppModel {
         return try? LUT3D.parse(data: data, fileExtension: url.pathExtension.lowercased())
     }
 
-    /// The preset's photo look without the camera-screen toggles, loaded off the main thread.
-    /// The Redevelop screen uses it so switching presets never parses a LUT on the main thread.
-    func baseLook(for preset: Preset) async -> FilmLook {
-        let key = "\(preset.id)|\(LUTSlot.photo.rawValue)"
+    /// The preset's look for one kind of input, without the camera-screen toggles. LUTs are parsed off the
+    /// main thread, so neither the camera nor Redevelop stutters when switching presets.
+    ///
+    /// A missing photo LUT falls back to the video one and back. A missing Apple Log LUT becomes the neutral
+    /// Apple Log → Rec.709 conversion followed by the video LUT, so the camera can stay in Apple Log for
+    /// every preset (as Lampa does with its `neutral_appleLog`).
+    func baseLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
+        let key = "\(preset.id)|\(slot.rawValue)"
         if let cached = lookCache[key] { return cached }
-        let url = presetLibrary.lutURL(for: preset.id, slot: .photo) ?? presetLibrary.lutURL(for: preset.id, slot: .video)
-        let lut = await Task.detached(priority: .userInitiated) { Self.parseLUT(url) }.value
+        let photoURL = presetLibrary.lutURL(for: preset.id, slot: .photo)
+        let videoURL = presetLibrary.lutURL(for: preset.id, slot: .video)
+        let logURL = presetLibrary.lutURL(for: preset.id, slot: .appleLog)
+        let lut: LUT3D? = await Task.detached(priority: .userInitiated) {
+            switch slot {
+            case .photo:
+                return Self.parseLUT(photoURL ?? videoURL)
+            case .video:
+                return Self.parseLUT(videoURL ?? photoURL)
+            case .appleLog:
+                if let log = Self.parseLUT(logURL) { return log }
+                let neutral = Self.neutralAppleLog
+                return Self.parseLUT(videoURL ?? photoURL).map { neutral.followed(by: $0) } ?? neutral
+            }
+        }.value
         if let cached = lookCache[key] { return cached }
         let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation)
         lookCache[key] = look
         return look
     }
+
+    nonisolated static let neutralAppleLog = AppleLog.neutralRec709LUT()
 
     /// Loads every preset's photo look in the background, so the first switch to each is instant too.
     func prepareLooks() async {
@@ -175,26 +194,21 @@ final class AppModel {
     }
 
     /// The preset's look with the camera-screen grain and halation toggles applied.
-    func look(for preset: Preset, slot: LUTSlot = .photo) -> FilmLook {
-        let key = "\(preset.id)|\(slot.rawValue)"
-        let base: FilmLook
-        if let cached = lookCache[key] {
-            base = cached
-        } else {
-            let lut = try? presetLibrary.loadLUT(for: preset.id, slot: slot)
-            base = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation)
-            lookCache[key] = base
-        }
-        return base.with(grain: settings.grainEnabled, halation: settings.halationEnabled)
+    func cameraLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
+        await baseLook(for: preset, slot: slot).with(grain: settings.grainEnabled, halation: settings.halationEnabled)
     }
 
+    /// Resolves the selected preset in the background, then hands it to the camera. The old look stays on
+    /// screen until then, and the camera crossfades to the new one.
     private func pushLooks() {
         let preset = selectedPreset
-        engine.setLooks(CameraEngine.Looks(
-            photo: look(for: preset, slot: .photo),
-            video: look(for: preset, slot: .video),
-            appleLog: presetLibrary.hasLUT(for: preset.id, slot: .appleLog) ? look(for: preset, slot: .appleLog) : nil
-        ))
+        Task {
+            let photo = await cameraLook(for: preset, slot: .photo)
+            let video = await cameraLook(for: preset, slot: .video)
+            let appleLog = await cameraLook(for: preset, slot: .appleLog)
+            guard preset.id == selectedPreset.id else { return }
+            engine.setLooks(CameraEngine.Looks(photo: photo, video: video, appleLog: appleLog))
+        }
     }
 
     private static func describe(_ error: LUTError) -> String {
@@ -236,13 +250,13 @@ final class AppModel {
     private func ingest(photo: CameraEngine.PhotoResult) {
         processingCount += 1
         let preset = selectedPreset
-        let look = look(for: preset, slot: .photo)
         let saveLocation = settings.savesLocation
         let keepRAW = settings.capturesRAW
         let grainOn = settings.grainEnabled
         let halationOn = settings.halationEnabled
 
         Task {
+            let look = await cameraLook(for: preset, slot: .photo)
             let place = saveLocation ? await location.currentPlaceName() : nil
             let developed = await Task.detached(priority: .userInitiated) {
                 PhotoPipeline.develop(

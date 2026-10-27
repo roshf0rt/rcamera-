@@ -34,6 +34,9 @@ final class FilmLook: @unchecked Sendable {
 
     var hasLUT: Bool { lut != nil }
 
+    /// Same for a look and its toggled variants: tells whether two looks use the same LUT.
+    var lutIdentity: ObjectIdentifier { ObjectIdentifier(upload) }
+
     /// The same look with grain or halation switched off by the camera-screen toggles.
     func with(grain grainOn: Bool, halation halationOn: Bool) -> FilmLook {
         if grainOn, halationOn { return self }
