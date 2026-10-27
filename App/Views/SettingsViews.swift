@@ -18,18 +18,25 @@ struct SettingsView: View {
                                 Capsule().fill(Theme.gradient(preset.accentIndex)).frame(width: 28, height: 6)
                                 Text(preset.name)
                                 Spacer()
-                                Text(model.hasLUT(preset.id) ? "LUT" : "No LUT").foregroundStyle(Theme.secondaryText)
+                                Text(model.hasAnyLUT(preset.id) ? "LUT" : "No LUT").foregroundStyle(Theme.secondaryText)
                             }
                         }
                     }
                 }
 
-                Section("Camera") {
+                Section {
                     Toggle("Grid", isOn: model.binding(\.isGridEnabled))
                     Toggle("Level", isOn: model.binding(\.isLevelEnabled))
                     Toggle("Mirror front camera", isOn: model.binding(\.mirrorFrontCamera))
                     Toggle("Capture RAW", isOn: model.binding(\.capturesRAW))
                     Toggle("Save location", isOn: model.binding(\.savesLocation))
+                    Picker("Extra zoom stop", selection: model.binding(\.digitalZoomStop)) {
+                        ForEach(DigitalZoomStop.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                } header: {
+                    Text("Camera")
+                } footer: {
+                    Text("Lenses (0.5×, 1×, telephoto) are detected automatically. The extra stop is a crop of the main camera.")
                 }
 
                 Section {
@@ -39,13 +46,20 @@ struct SettingsView: View {
                     Picker("Frame rate", selection: model.binding(\.videoFPS)) {
                         ForEach([24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
                     }
-                    Toggle("Stabilization", isOn: model.binding(\.videoStabilization))
+                    Picker("Stabilization", selection: model.binding(\.videoStabilization)) {
+                        ForEach(VideoStabilization.allCases, id: \.self) { Text($0.label.capitalized).tag($0) }
+                    }
+                    Toggle("Apple Log", isOn: model.binding(\.appleLogVideo))
                 } header: {
                     Text("Video")
                 } footer: {
-                    Text("RAW files are kept for \(CaptureStore.rawRetentionDays) days so you can redevelop photos, then deleted. The processed photo stays.")
+                    Text("Cinematic stabilization delays the viewfinder. Apple Log needs a supported iPhone and a preset with an Apple Log LUT; otherwise normal video is recorded.")
                 }
                 .disabled(model.engine.isRecording)
+
+                Section {} footer: {
+                    Text("RAW files are kept for \(CaptureStore.rawRetentionDays) days so you can redevelop photos, then deleted. The processed photo stays.")
+                }
             }
             .scrollContentBackground(.hidden)
             .background(Color.black)
@@ -66,8 +80,11 @@ struct PresetEditorView: View {
 
     @State private var name = ""
     @State private var grain = 0.0
-    @State private var importing = false
     @State private var loaded = false
+    @State private var importSlot: LUTSlot?
+    @State private var importing = false
+    @State private var busy = false
+    @State private var message: String?
 
     private var preset: Preset? { model.preset(id: presetID) }
 
@@ -85,19 +102,19 @@ struct PresetEditorView: View {
                 }
             }
             Section {
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    Text(model.hasLUT(presetID) ? "LUT loaded" : "No LUT").foregroundStyle(Theme.secondaryText)
+                ForEach(LUTSlot.allCases, id: \.self) { slot in
+                    slotRow(slot)
                 }
-                Button("Import LUT…") { importing = true }
-                if model.hasLUT(presetID) {
-                    Button("Remove LUT", role: .destructive) { model.removeLUT(presetID: presetID) }
+                if busy {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Importing…").foregroundStyle(Theme.secondaryText)
+                    }
                 }
             } header: {
-                Text("LUT")
+                Text("LUTs")
             } footer: {
-                Text("Pick a 3D LUT file: .cube (Adobe/Resolve) or .lut (35³-style binary). It is validated, then stored for this preset. You can also bundle files named \(presetID).cube in the app's LUTs folder.")
+                Text("3D LUTs in .cube or .lut format. Video falls back to the photo LUT when it has none of its own; Apple Log does not. Files named \(presetID).cube, \(presetID).video.cube and \(presetID).applelog.cube in the app's LUTs folder are picked up too.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -111,15 +128,53 @@ struct PresetEditorView: View {
             grain = preset.grain
         }
         .onDisappear(perform: save)
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
-            if case .success(let url) = result {
-                model.importLUT(from: url, presetID: presetID)
+        .background {
+            Color.clear.fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
+                guard let slot = importSlot else { return }
+                switch result {
+                case .success(let url):
+                    busy = true
+                    Task {
+                        message = await model.importLUT(from: url, presetID: presetID, slot: slot)
+                        busy = false
+                    }
+                case .failure(let error):
+                    message = error.localizedDescription
+                }
             }
         }
-        .alert("LUT", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
+        .alert("LUT", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(model.alert ?? "")
+            Text(message ?? "")
+        }
+    }
+
+    private func slotRow(_ slot: LUTSlot) -> some View {
+        let has = model.hasLUT(presetID, slot: slot)
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(slot.title)
+                Text(has ? "Loaded" : (slot == .video && model.hasLUT(presetID, slot: .photo) ? "Using photo LUT" : "None"))
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Spacer()
+            Button(has ? "Replace" : "Import") {
+                importSlot = slot
+                importing = true
+            }
+            .buttonStyle(.bordered)
+            .disabled(busy)
+            if has {
+                Button(role: .destructive) {
+                    model.removeLUT(presetID: presetID, slot: slot)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.bordered)
+                .disabled(busy)
+            }
         }
     }
 

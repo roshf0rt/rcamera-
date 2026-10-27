@@ -33,7 +33,7 @@ struct PresetCard: View {
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
-                Text(model.hasLUT(preset.id) ? "LUT" : "No LUT")
+                Text(model.hasAnyLUT(preset.id) ? "LUT" : "No LUT")
                     .font(.system(size: 12))
                     .foregroundStyle(isSelected ? Color.black.opacity(0.5) : Theme.secondaryText)
                 Spacer(minLength: 0)

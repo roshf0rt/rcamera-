@@ -10,6 +10,7 @@ struct CameraView: View {
     @State private var showSettings = false
     @State private var showGallery = false
     @State private var showZoomSlider = false
+    @State private var evActive = false
     @State private var focusMarker: FocusPoint?
     @State private var pinchStart: Double?
 
@@ -161,12 +162,9 @@ struct CameraView: View {
     private var optionsPanel: some View {
         VStack {
             OptionsPanel(
-                flash: model.settings.flash,
-                timer: model.settings.timer,
-                aspect: model.settings.aspect,
-                onFlash: { model.updateSettings { $0.flash = $0.flash.next } },
-                onTimer: { model.updateSettings { $0.timer = $0.timer.next } },
-                onAspect: { model.updateSettings { $0.aspect = $0.aspect.next } }
+                mode: model.engine.mode,
+                settings: model.settings,
+                update: { change in model.updateSettings(change) }
             )
             .padding(.top, 8)
             Spacer()
@@ -219,12 +217,13 @@ struct CameraView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
                 zoomRow(engine: engine)
-                EVDial(
+                EVWheel(
                     value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
+                    isActive: $evActive,
                     overlaid: engine.mode == .video
                 )
-                .padding(.top, 20)
-                .padding(.bottom, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 18)
             }
             shutterRow(engine: engine)
             modeRow(engine: engine)
@@ -235,7 +234,9 @@ struct CameraView: View {
 
     private func zoomRow(engine: CameraEngine) -> some View {
         ZStack {
-            if showZoomSlider && engine.lens != .front {
+            if evActive {
+                EVBubble(value: engine.evBias)
+            } else if showZoomSlider && engine.lens != .front {
                 Slider(
                     value: Binding(get: { engine.zoomFactor }, set: { engine.setContinuousZoom($0) }),
                     in: 1 ... 10
@@ -337,7 +338,7 @@ struct CameraView: View {
 
     private func modeRow(engine: CameraEngine) -> some View {
         ZStack {
-            HStack(spacing: 52) {
+            HStack(spacing: 40) {
                 modeButton("PHOTO", mode: .photo, engine: engine)
                 modeButton("VIDEO", mode: .video, engine: engine)
             }
@@ -349,8 +350,8 @@ struct CameraView: View {
                         Image(systemName: engine.isAELocked ? "lock.fill" : "lock.open.fill").font(.system(size: 13))
                     }
                     .foregroundStyle(engine.isAELocked ? Theme.accent : Theme.secondaryText)
-                    .padding(.horizontal, 14)
-                    .frame(height: 38)
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
                     .background(Capsule().fill(Theme.chrome))
                 }
                 .buttonStyle(.plain)

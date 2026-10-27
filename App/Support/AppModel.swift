@@ -50,7 +50,7 @@ final class AppModel {
         engine.onPhoto = { [weak self] result in self?.ingest(photo: result) }
         engine.onVideo = { [weak self] url in self?.ingest(videoAt: url) }
         engine.onModeChanged = { [weak self] mode in self?.updateSettings { $0.lastCaptureMode = mode } }
-        engine.setLook(look(for: selectedPreset))
+        pushLooks()
     }
 
     // MARK: Settings
@@ -79,54 +79,74 @@ final class AppModel {
 
     func selectPreset(_ id: String) {
         updateSettings { $0.selectedPresetID = id }
-        engine.setLook(look(for: selectedPreset))
+        pushLooks()
     }
 
     func preset(id: String) -> Preset? {
         presets.first { $0.id == id }
     }
 
-    func hasLUT(_ presetID: String) -> Bool {
-        presetLibrary.hasLUT(for: presetID)
+    func hasLUT(_ presetID: String, slot: LUTSlot) -> Bool {
+        presetLibrary.hasLUT(for: presetID, slot: slot)
+    }
+
+    func hasAnyLUT(_ presetID: String) -> Bool {
+        presetLibrary.hasAnyLUT(for: presetID)
     }
 
     func updatePreset(_ preset: Preset) {
         do {
             try presetLibrary.update(preset)
             presets = presetLibrary.presets
-            lookCache[preset.id] = nil
-            if preset.id == settings.selectedPresetID { engine.setLook(look(for: selectedPreset)) }
+            lookCache = lookCache.filter { !$0.key.hasPrefix("\(preset.id)|") }
+            if preset.id == settings.selectedPresetID { pushLooks() }
         } catch {
             alert = error.localizedDescription
         }
     }
 
-    func importLUT(from url: URL, presetID: String) {
+    /// Reads and validates the file off the main thread, then stores it. Returns an error message, or nil on success.
+    func importLUT(from url: URL, presetID: String, slot: LUTSlot) async -> String? {
         let hasAccess = url.startAccessingSecurityScopedResource()
         defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
         do {
-            try presetLibrary.importLUT(from: url, for: presetID)
-            lookCache[presetID] = nil
-            if presetID == settings.selectedPresetID { engine.setLook(look(for: selectedPreset)) }
+            let prepared = try await Task.detached(priority: .userInitiated) { try LUTImport.prepare(url: url) }.value
+            try presetLibrary.commit(prepared, for: presetID, slot: slot)
+            invalidateLooks(for: presetID)
+            return nil
         } catch let error as LUTError {
-            alert = Self.describe(error)
+            return Self.describe(error)
         } catch {
-            alert = error.localizedDescription
+            return error.localizedDescription
         }
     }
 
-    func removeLUT(presetID: String) {
-        try? presetLibrary.removeLUT(for: presetID)
-        lookCache[presetID] = nil
-        if presetID == settings.selectedPresetID { engine.setLook(look(for: selectedPreset)) }
+    func removeLUT(presetID: String, slot: LUTSlot) {
+        try? presetLibrary.removeLUT(for: presetID, slot: slot)
+        invalidateLooks(for: presetID)
     }
 
-    func look(for preset: Preset) -> FilmLook {
-        if let cached = lookCache[preset.id] { return cached }
-        let lut = try? presetLibrary.loadLUT(for: preset.id)
+    private func invalidateLooks(for presetID: String) {
+        lookCache = lookCache.filter { !$0.key.hasPrefix("\(presetID)|") }
+        if presetID == settings.selectedPresetID { pushLooks() }
+    }
+
+    func look(for preset: Preset, slot: LUTSlot = .photo) -> FilmLook {
+        let key = "\(preset.id)|\(slot.rawValue)"
+        if let cached = lookCache[key] { return cached }
+        let lut = try? presetLibrary.loadLUT(for: preset.id, slot: slot)
         let look = FilmLook(lut: lut, grain: preset.grain)
-        lookCache[preset.id] = look
+        lookCache[key] = look
         return look
+    }
+
+    private func pushLooks() {
+        let preset = selectedPreset
+        engine.setLooks(CameraEngine.Looks(
+            photo: look(for: preset, slot: .photo),
+            video: look(for: preset, slot: .video),
+            appleLog: presetLibrary.hasLUT(for: preset.id, slot: .appleLog) ? look(for: preset, slot: .appleLog) : nil
+        ))
     }
 
     private static func describe(_ error: LUTError) -> String {
@@ -168,7 +188,7 @@ final class AppModel {
     private func ingest(photo: CameraEngine.PhotoResult) {
         processingCount += 1
         let preset = selectedPreset
-        let look = look(for: preset)
+        let look = look(for: preset, slot: .photo)
         let saveLocation = settings.savesLocation
         let keepRAW = settings.capturesRAW
 
@@ -259,7 +279,7 @@ final class AppModel {
         guard let preset = preset(id: presetID),
               let raw = try? Data(contentsOf: captureStore.url(.rawDNG, for: record.id))
         else { return false }
-        let look = look(for: preset)
+        let look = look(for: preset, slot: .photo)
         let aspect = record.aspect
 
         let developed = await Task.detached(priority: .userInitiated) {

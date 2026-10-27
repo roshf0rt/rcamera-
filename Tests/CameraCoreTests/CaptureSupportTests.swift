@@ -61,18 +61,40 @@ final class OptionTests: XCTestCase {
 }
 
 final class ZoomStopTests: XCTestCase {
-    func testPhotoStopsWithTripleCamera() {
+    func testPhotoStopsOnlyShowRealLensesByDefault() {
         let stops = ZoomStop.photoStops(focalLengths: [.ultraWide: 13, .wide: 24, .telephoto: 100])
-        XCTAssertEqual(stops.map(\.label), ["0.5", "1", "1.5", "4"])
-        XCTAssertEqual(stops.map(\.lens), [.ultraWide, .wide, .wide, .telephoto])
-        XCTAssertEqual(stops[2].digitalZoom, 1.5)
+        XCTAssertEqual(stops.map(\.label), ["0.5", "1", "4"])
+        XCTAssertEqual(stops.map(\.lens), [.ultraWide, .wide, .telephoto])
     }
 
-    func testPhotoStopsWithoutTelephotoFallBackToDigitalTwoX() {
-        let stops = ZoomStop.photoStops(focalLengths: [.wide: 24])
-        XCTAssertEqual(stops.map(\.label), ["1", "1.5", "2"])
-        XCTAssertEqual(stops.last?.lens, .wide)
-        XCTAssertEqual(stops.last?.digitalZoom, 2.0)
+    func testOptionalCropStopSitsBetweenLenses() {
+        let focals: [LensID: Double] = [.ultraWide: 13, .wide: 24, .telephoto: 100]
+        let onePointFive = ZoomStop.photoStops(focalLengths: focals, digital: .x1_5)
+        XCTAssertEqual(onePointFive.map(\.label), ["0.5", "1", "1.5", "4"])
+        XCTAssertEqual(onePointFive[2].lens, .wide)
+        XCTAssertEqual(onePointFive[2].digitalZoom, 1.5)
+
+        let two = ZoomStop.photoStops(focalLengths: focals, digital: .x2)
+        XCTAssertEqual(two.map(\.label), ["0.5", "1", "2", "4"])
+    }
+
+    func testPhoneWithOnlyAWideLensGetsOnlyOneStop() {
+        XCTAssertEqual(ZoomStop.photoStops(focalLengths: [.wide: 24]).map(\.label), ["1"])
+        XCTAssertEqual(ZoomStop.photoStops(focalLengths: [.wide: 24], digital: .x2).map(\.label), ["1", "2"])
+    }
+
+    func testCropStopIsSkippedWhenARealLensCoversIt() {
+        // A 48 mm telephoto is already a 2x lens.
+        let stops = ZoomStop.photoStops(focalLengths: [.wide: 24, .telephoto: 48], digital: .x2)
+        XCTAssertEqual(stops.map(\.label), ["1", "2"])
+        XCTAssertEqual(stops.last?.lens, .telephoto)
+    }
+
+    func testDetectedFocalLengthsSnapToStandardValues() {
+        let video = ZoomStop.videoStops(focalLengths: [.ultraWide: 14.2, .wide: 24.9, .telephoto: 104])
+        XCTAssertEqual(video.map(\.label), ["13", "24", "100"])
+        let photo = ZoomStop.photoStops(focalLengths: [.ultraWide: 14.2, .wide: 24.9, .telephoto: 104])
+        XCTAssertEqual(photo.map(\.label), ["0.5", "1", "4"])
     }
 
     func testVideoStopsUseFocalLengths() {
@@ -81,7 +103,7 @@ final class ZoomStopTests: XCTestCase {
     }
 
     func testStopIDsAreUnique() {
-        let stops = ZoomStop.photoStops(focalLengths: ZoomStop.defaultFocalLengths)
+        let stops = ZoomStop.photoStops(focalLengths: ZoomStop.defaultFocalLengths, digital: .x1_5)
         XCTAssertEqual(Set(stops.map(\.id)).count, stops.count)
     }
 }
@@ -201,5 +223,43 @@ final class VideoGapFillerTests: XCTestCase {
         XCTAssertEqual(VideoGapFiller.fillTimes(last: 0, current: 1000, timescale: 600, fps: 0), [])
         XCTAssertEqual(VideoGapFiller.fillTimes(last: 0, current: 1000, timescale: 0, fps: 30), [])
         XCTAssertEqual(VideoGapFiller.fillTimes(last: 0, current: 1000, timescale: 10, fps: 30), [])
+    }
+}
+
+final class SettingsMigrationTests: XCTestCase {
+    func testOldSettingsFileKeepsValuesAndGainsDefaults() throws {
+        // Written by the first release: boolean stabilization, no crop stop, no Apple Log.
+        let json = """
+        {"selectedPresetID":"preset-4","lastCaptureMode":"video","aspect":"16:9","flash":"off","timer":"off",
+         "isGridEnabled":false,"isLevelEnabled":false,"mirrorFrontCamera":true,"capturesRAW":true,"savesLocation":true,
+         "videoResolution":"uhd4K","videoFPS":60,"videoStabilization":false}
+        """
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        XCTAssertEqual(settings.selectedPresetID, "preset-4")
+        XCTAssertEqual(settings.lastCaptureMode, .video)
+        XCTAssertEqual(settings.videoFPS, 60)
+        XCTAssertFalse(settings.isGridEnabled)
+        XCTAssertEqual(settings.videoStabilization, .off)
+        XCTAssertEqual(settings.digitalZoomStop, .none)
+        XCTAssertFalse(settings.appleLogVideo)
+    }
+
+    func testLegacyTrueStabilizationBecomesStandard() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"videoStabilization":true}"#.utf8))
+        XCTAssertEqual(settings.videoStabilization, .standard)
+    }
+
+    func testNewSettingsRoundTrip() throws {
+        var settings = AppSettings()
+        settings.videoStabilization = .cinematic
+        settings.digitalZoomStop = .x2
+        settings.appleLogVideo = true
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(decoded, settings)
+    }
+
+    func testStabilizationCycles() {
+        XCTAssertEqual(VideoStabilization.off.next, .standard)
+        XCTAssertEqual(VideoStabilization.cinematic.next, .off)
     }
 }

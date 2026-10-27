@@ -134,14 +134,39 @@ struct ZoomChips: View {
     }
 }
 
-/// The EV pill: drag sideways to change exposure compensation, double-tap to reset.
-struct EVDial: View {
+/// Exposure wheel. Collapsed it is a small pill; while you drag it opens into a full-width ruler.
+/// Dragging right moves the ticks right, so the value under the center mark goes down.
+struct EVWheel: View {
     @Binding var value: Double
+    @Binding var isActive: Bool
     var overlaid = false
 
-    @State private var dragStart: Double?
+    @State private var dragStartValue: Double?
+    @State private var rawValue: Double?
+    @State private var collapseTask: Task<Void, Never>?
+
+    private let pointsPerEV: CGFloat = 200
 
     var body: some View {
+        GeometryReader { geo in
+            let width = isActive ? geo.size.width - 24 : 176
+            ZStack {
+                Capsule().fill(overlaid ? Color.black.opacity(0.4) : Color(white: 0.12))
+                    .background(overlaid ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color.clear), in: Capsule())
+                if isActive { ruler(width: width) } else { compact }
+            }
+            .frame(width: width, height: 46)
+            .contentShape(Capsule())
+            .position(x: geo.size.width / 2, y: 23)
+            .gesture(drag)
+            .simultaneousGesture(TapGesture(count: 2).onEnded { reset() })
+            .animation(.easeOut(duration: 0.2), value: isActive)
+            .sensoryFeedback(.selection, trigger: value)
+        }
+        .frame(height: 46)
+    }
+
+    private var compact: some View {
         HStack(spacing: 10) {
             ticks
             VStack(spacing: 0) {
@@ -150,24 +175,9 @@ struct EVDial: View {
                     .font(.system(size: 17, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white)
             }
-            .frame(width: 52)
+            .frame(width: 56)
             ticks
         }
-        .padding(.horizontal, 18)
-        .frame(height: 42)
-        .background(Capsule().fill(Color.black.opacity(overlaid ? 0.45 : 0.85)))
-        .background(overlaid ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color.clear), in: Capsule())
-        .gesture(
-            DragGesture(minimumDistance: 3)
-                .onChanged { gesture in
-                    let start = dragStart ?? value
-                    dragStart = start
-                    value = EVScale.snapped(start + Double(gesture.translation.width) / 70)
-                }
-                .onEnded { _ in dragStart = nil }
-        )
-        .onTapGesture(count: 2) { value = 0 }
-        .sensoryFeedback(.selection, trigger: value)
     }
 
     private var ticks: some View {
@@ -177,37 +187,94 @@ struct EVDial: View {
             }
         }
     }
+
+    private func ruler(width: CGFloat) -> some View {
+        let shown = rawValue ?? value
+        return ZStack {
+            Canvas { context, size in
+                let center = size.width / 2
+                for step in -20 ... 20 {
+                    let x = center + CGFloat(Double(step) / 10 - shown) * pointsPerEV
+                    guard x > 8, x < size.width - 8 else { continue }
+                    let major = step % 5 == 0
+                    let height: CGFloat = major ? 22 : 16
+                    let rect = CGRect(x: x - 1, y: (size.height - height) / 2, width: 2, height: height)
+                    context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.white.opacity(major ? 0.7 : 0.35)))
+                }
+            }
+            .mask(
+                LinearGradient(
+                    stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.12),
+                            .init(color: .black, location: 0.88), .init(color: .clear, location: 1)],
+                    startPoint: .leading, endPoint: .trailing
+                )
+            )
+            Capsule().fill(.white).frame(width: 3, height: 30)
+        }
+    }
+
+    private var drag: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { gesture in
+                collapseTask?.cancel()
+                if dragStartValue == nil {
+                    dragStartValue = value
+                    isActive = true
+                }
+                let start = dragStartValue ?? value
+                let raw = min(max(start - Double(gesture.translation.width) / Double(pointsPerEV), EVScale.range.lowerBound), EVScale.range.upperBound)
+                rawValue = raw
+                value = EVScale.snapped(raw)
+            }
+            .onEnded { _ in
+                dragStartValue = nil
+                rawValue = nil
+                scheduleCollapse()
+            }
+    }
+
+    private func reset() {
+        value = 0
+        isActive = true
+        scheduleCollapse()
+    }
+
+    private func scheduleCollapse() {
+        collapseTask?.cancel()
+        collapseTask = Task {
+            try? await Task.sleep(for: .seconds(1.1))
+            if !Task.isCancelled { isActive = false }
+        }
+    }
 }
 
+/// The "Exposure -0.4" label shown above the wheel while it is open.
+struct EVBubble: View {
+    let value: Double
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Exposure").font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
+            Text(EVScale.format(value))
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 8)
+        .background(Capsule().fill(Color.black.opacity(0.4)))
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+}
+
+/// The panel under the "..." button. Photo mode: Flash, Timer, Aspect. Video mode: FPS, Resolution, Stabilization.
 struct OptionsPanel: View {
-    let flash: FlashMode
-    let timer: TimerOption
-    let aspect: AspectOption
-    let onFlash: () -> Void
-    let onTimer: () -> Void
-    let onAspect: () -> Void
+    let mode: CaptureMode
+    let settings: AppSettings
+    let update: ((inout AppSettings) -> Void) -> Void
 
     var body: some View {
         HStack {
-            option(title: "Flash", active: flash != .off, action: onFlash) {
-                Image(systemName: flashSymbol).font(.system(size: 26))
-            }
-            option(title: "Timer", active: timer != .off, action: onTimer) {
-                ZStack {
-                    Image(systemName: "timer").font(.system(size: 26))
-                    if timer != .off {
-                        Text("\(timer.seconds)")
-                            .font(.system(size: 11, weight: .bold))
-                            .offset(x: 0, y: 3)
-                    }
-                }
-            }
-            option(title: "Aspect", active: false, action: onAspect) {
-                ZStack {
-                    Image(systemName: "viewfinder").font(.system(size: 34, weight: .light))
-                    Text(aspect.label).font(.system(size: 11, weight: .semibold))
-                }
-            }
+            if mode == .photo { photoOptions } else { videoOptions }
         }
         .padding(.vertical, 20)
         .frame(maxWidth: .infinity)
@@ -216,8 +283,54 @@ struct OptionsPanel: View {
         .padding(.horizontal, 8)
     }
 
+    @ViewBuilder
+    private var photoOptions: some View {
+        option(title: "Flash", active: settings.flash != .off, action: { update { $0.flash = $0.flash.next } }) {
+            Image(systemName: flashSymbol).font(.system(size: 26))
+        }
+        option(title: "Timer", active: settings.timer != .off, action: { update { $0.timer = $0.timer.next } }) {
+            ZStack {
+                Image(systemName: "timer").font(.system(size: 26))
+                if settings.timer != .off {
+                    Text("\(settings.timer.seconds)").font(.system(size: 11, weight: .bold)).offset(y: 3)
+                }
+            }
+        }
+        option(title: "Aspect", active: false, action: { update { $0.aspect = $0.aspect.next } }) {
+            ZStack {
+                Image(systemName: "viewfinder").font(.system(size: 34, weight: .light))
+                Text(settings.aspect.label).font(.system(size: 11, weight: .semibold))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var videoOptions: some View {
+        option(title: "FPS", active: false, action: { update { $0.videoFPS = Self.nextFPS($0.videoFPS) } }) {
+            Text("\(settings.videoFPS)").font(.system(size: 24, weight: .semibold))
+        }
+        option(title: "Resolution", active: false, action: {
+            update { $0.videoResolution = $0.videoResolution == .hd1080 ? .uhd4K : .hd1080 }
+        }) {
+            Text(settings.videoResolution.label).font(.system(size: 24, weight: .semibold))
+        }
+        option(title: "Stabilization", active: false, action: { update { $0.videoStabilization = $0.videoStabilization.next } }) {
+            Text(settings.videoStabilization.label)
+                .font(.system(size: 14, weight: .bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(settings.videoStabilization == .off ? 0.1 : 0.28)))
+                .foregroundStyle(settings.videoStabilization == .off ? Theme.secondaryText : .white)
+        }
+    }
+
+    private static func nextFPS(_ fps: Int) -> Int {
+        let options = [24, 30, 60]
+        return options[((options.firstIndex(of: fps) ?? 0) + 1) % options.count]
+    }
+
     private var flashSymbol: String {
-        switch flash {
+        switch settings.flash {
         case .off: "bolt.slash.fill"
         case .auto: "bolt.badge.automatic.fill"
         case .on: "bolt.fill"

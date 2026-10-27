@@ -12,6 +12,13 @@ final class CameraEngine {
         case unknown, granted, denied
     }
 
+    /// The preset resolved for each kind of input. `appleLog` is nil when the preset has no Apple Log LUT.
+    struct Looks {
+        var photo = FilmLook.identity
+        var video = FilmLook.identity
+        var appleLog: FilmLook?
+    }
+
     struct PhotoResult {
         var raw: Data?
         var processed: Data?
@@ -31,6 +38,7 @@ final class CameraEngine {
     private(set) var recordingSeconds = 0.0
     private(set) var isCapturing = false
     private(set) var rawAvailable = false
+    private(set) var appleLogActive = false
     var message: String?
 
     var phase: CameraPhase { machine.phase }
@@ -44,7 +52,8 @@ final class CameraEngine {
     @ObservationIgnored var onModeChanged: ((CaptureMode) -> Void)?
 
     @ObservationIgnored private var settings: AppSettings
-    @ObservationIgnored private var look = FilmLook.identity
+    @ObservationIgnored private var looks = Looks()
+    @ObservationIgnored private var appleLogRequested = false
     @ObservationIgnored private var focalLengths = ZoomStop.defaultFocalLengths
     @ObservationIgnored private var digitalZoom = 1.0
     @ObservationIgnored private var recordingTimer: Timer?
@@ -79,9 +88,10 @@ final class CameraEngine {
         controller.stop()
     }
 
-    func setLook(_ look: FilmLook) {
-        self.look = look
+    func setLooks(_ looks: Looks) {
+        self.looks = looks
         updateHub()
+        reapplyIfAppleLogChanged()
     }
 
     func update(settings new: AppSettings) {
@@ -91,6 +101,14 @@ final class CameraEngine {
             send(.updateVideoConfiguration(new.videoFormat))
         } else if new.videoStabilization != old.videoStabilization, !isRecording {
             Task { await applyConfig() }
+        } else {
+            reapplyIfAppleLogChanged()
+        }
+        if new.digitalZoomStop != old.digitalZoomStop {
+            refreshStops()
+            if let active = activeStop, !zoomStops.contains(active), let fallback = zoomStops.first(where: { $0.lens == lens }) {
+                selectZoom(fallback)
+            }
         }
         updateHub()
     }
@@ -215,18 +233,31 @@ final class CameraEngine {
         }
     }
 
+    /// Apple Log capture is only requested when the toggle is on and the preset has an Apple Log LUT to decode it.
+    private var wantsAppleLog: Bool {
+        settings.appleLogVideo && looks.appleLog != nil && mode == .video && lens != .front
+    }
+
+    private func reapplyIfAppleLogChanged() {
+        guard mode == .video, !isRecording, wantsAppleLog != appleLogRequested else { return }
+        Task { await applyConfig() }
+    }
+
     private func applyConfig() async {
+        appleLogRequested = wantsAppleLog
         let config = CaptureSessionController.Config(
             lens: machine.configuration.lens,
             mode: machine.configuration.mode,
             format: machine.configuration.format,
             stabilization: settings.videoStabilization,
+            appleLog: appleLogRequested,
             digitalZoom: digitalZoom,
             exposureBias: evBias
         )
         let info = await controller.apply(config)
         focalLengths = info.focalLengths
         rawAvailable = info.rawAvailable
+        appleLogActive = info.appleLogActive
         refreshStops()
         updateHub()
     }
@@ -238,7 +269,7 @@ final class CameraEngine {
             return
         }
         zoomStops = mode == .photo
-            ? ZoomStop.photoStops(focalLengths: focalLengths)
+            ? ZoomStop.photoStops(focalLengths: focalLengths, digital: settings.digitalZoomStop)
             : ZoomStop.videoStops(focalLengths: focalLengths)
         activeStop = zoomStops.first { $0.lens == lens && abs($0.digitalZoom - digitalZoom) < 0.01 }
             ?? zoomStops.first { $0.lens == lens }
@@ -248,6 +279,14 @@ final class CameraEngine {
     private var mirrorsOutput: Bool { lens == .front && settings.mirrorFrontCamera }
 
     private func updateHub() {
+        let look: FilmLook
+        if mode == .photo {
+            look = looks.photo
+        } else if appleLogActive, let appleLog = looks.appleLog {
+            look = appleLog
+        } else {
+            look = looks.video
+        }
         controller.hub.configure(
             look: look,
             aspect: mode == .photo ? settings.aspect : nil,

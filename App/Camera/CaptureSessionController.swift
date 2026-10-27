@@ -9,7 +9,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var lens: LensID
         var mode: CaptureMode
         var format: VideoFormat
-        var stabilization: Bool
+        var stabilization: VideoStabilization
+        var appleLog: Bool
         var digitalZoom: Double
         var exposureBias: Double
     }
@@ -18,6 +19,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var focalLengths: [LensID: Double]
         var rawAvailable: Bool
         var hasMicrophone: Bool
+        var appleLogActive: Bool
     }
 
     struct PhotoOutcome: @unchecked Sendable {
@@ -115,15 +117,16 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         updateAudio(enabled: config.mode == .video)
         session.commitConfiguration()
 
+        let appleLogActive = configureDevice(config)
         configureConnections(config)
-        configureDevice(config)
 
         if !session.isRunning { session.startRunning() }
 
         return DeviceInfo(
             focalLengths: focalLengths(),
             rawAvailable: photoOutput.availableRawPhotoPixelFormatTypes.contains { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) },
-            hasMicrophone: audioInput != nil
+            hasMicrophone: audioInput != nil,
+            appleLogActive: appleLogActive
         )
     }
 
@@ -164,7 +167,14 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
             if connection.isVideoMirroringSupported { connection.isVideoMirrored = false }
             if connection.isVideoStabilizationSupported {
-                connection.preferredVideoStabilizationMode = (config.stabilization && config.mode == .video) ? .auto : .off
+                // `.auto` picks cinematic modes that buffer frames, which makes the viewfinder lag.
+                let mode: AVCaptureVideoStabilizationMode
+                switch (config.mode, config.stabilization) {
+                case (.photo, _), (_, .off): mode = .off
+                case (.video, .standard): mode = .standard
+                case (.video, .cinematic): mode = .cinematic
+                }
+                connection.preferredVideoStabilizationMode = mode
             }
         }
         if let connection = photoOutput.connection(with: .video) {
@@ -173,23 +183,42 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    private func configureDevice(_ config: Config) {
-        guard let device = videoInput?.device else { return }
+    /// Returns whether the camera is now delivering Apple Log.
+    private func configureDevice(_ config: Config) -> Bool {
+        guard let device = videoInput?.device else { return false }
+        var appleLogActive = false
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
 
-            if config.mode == .video, config.format.fps > 0 {
-                let fps = Double(config.format.fps)
-                let supported = device.activeFormat.videoSupportedFrameRateRanges.contains {
-                    $0.minFrameRate <= fps && fps <= $0.maxFrameRate
+            let wantsFPS = config.mode == .video && config.format.fps > 0
+            let fps = Double(config.format.fps)
+            func supportsFPS(_ format: AVCaptureDevice.Format) -> Bool {
+                format.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= fps && fps <= $0.maxFrameRate }
+            }
+
+            if config.mode == .video, config.appleLog, device.position == .back {
+                let width = Int32(config.format.width)
+                let candidate = device.formats.first {
+                    CMVideoFormatDescriptionGetDimensions($0.formatDescription).width == width
+                        && $0.supportedColorSpaces.contains(.appleLog)
+                        && supportsFPS($0)
                 }
-                if supported {
-                    let duration = CMTime(value: 1, timescale: CMTimeScale(config.format.fps))
-                    device.activeVideoMinFrameDuration = duration
-                    device.activeVideoMaxFrameDuration = duration
+                if let candidate {
+                    device.activeFormat = candidate
+                    device.activeColorSpace = .appleLog
+                    appleLogActive = true
                 }
-            } else {
+            }
+            if !appleLogActive, device.activeColorSpace != .sRGB, device.activeFormat.supportedColorSpaces.contains(.sRGB) {
+                device.activeColorSpace = .sRGB
+            }
+
+            if wantsFPS, supportsFPS(device.activeFormat) {
+                let duration = CMTime(value: 1, timescale: CMTimeScale(config.format.fps))
+                device.activeVideoMinFrameDuration = duration
+                device.activeVideoMaxFrameDuration = duration
+            } else if !wantsFPS {
                 device.activeVideoMinFrameDuration = .invalid
                 device.activeVideoMaxFrameDuration = .invalid
             }
@@ -200,6 +229,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         } catch {
             // The device keeps its previous configuration.
         }
+        return appleLogActive
     }
 
     private func clampedZoom(_ zoom: Double, for device: AVCaptureDevice) -> CGFloat {

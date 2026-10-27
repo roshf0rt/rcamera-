@@ -91,7 +91,9 @@ final class PresetLibraryTests: XCTestCase {
     func testDefaultsHaveTenNamedPresets() throws {
         let library = try PresetLibrary(storageDirectory: makeTempDirectory())
         XCTAssertEqual(library.presets.count, 10)
-        XCTAssertEqual(library.presets.first?.name, "Пресет 1")
+        XCTAssertEqual(library.presets.first?.name, "JaneSu")
+        XCTAssertEqual(library.presets[1].name, "JaneSu 2")
+        XCTAssertEqual(library.presets[2].name, "Пресет 3")
         XCTAssertEqual(library.presets.last?.id, "preset-10")
         XCTAssertFalse(library.hasLUT(for: "preset-1"))
     }
@@ -178,5 +180,132 @@ final class PresetLibraryTests: XCTestCase {
         try writeCube(size: 6, to: mine)
         try library.importLUT(from: mine, for: "preset-2")
         XCTAssertEqual(try library.loadLUT(for: "preset-2")?.size, 6)
+    }
+
+    func testSlotsAreStoredSeparately() throws {
+        let dir = try makeTempDirectory()
+        let small = dir.appendingPathComponent("a.cube")
+        let large = dir.appendingPathComponent("b.cube")
+        try writeCube(size: 3, to: small)
+        try writeCube(size: 5, to: large)
+        let library = try PresetLibrary(storageDirectory: dir.appendingPathComponent("lib"))
+
+        try library.importLUT(from: small, for: "preset-1", slot: .photo)
+        try library.importLUT(from: large, for: "preset-1", slot: .appleLog)
+
+        XCTAssertTrue(library.hasLUT(for: "preset-1", slot: .photo))
+        XCTAssertFalse(library.hasLUT(for: "preset-1", slot: .video))
+        XCTAssertTrue(library.hasLUT(for: "preset-1", slot: .appleLog))
+        XCTAssertEqual(try library.loadLUT(for: "preset-1", slot: .photo)?.size, 3)
+        XCTAssertEqual(try library.loadLUT(for: "preset-1", slot: .appleLog)?.size, 5)
+    }
+
+    func testVideoFallsBackToPhotoButAppleLogDoesNot() throws {
+        let dir = try makeTempDirectory()
+        let cube = dir.appendingPathComponent("a.cube")
+        try writeCube(size: 3, to: cube)
+        let library = try PresetLibrary(storageDirectory: dir.appendingPathComponent("lib"))
+        try library.importLUT(from: cube, for: "preset-1", slot: .photo)
+
+        XCTAssertEqual(try library.loadLUT(for: "preset-1", slot: .video)?.size, 3)
+        XCTAssertNil(try library.loadLUT(for: "preset-1", slot: .appleLog))
+        XCTAssertFalse(library.hasLUT(for: "preset-1", slot: .video), "fallback does not count as an own LUT")
+        XCTAssertTrue(library.hasAnyLUT(for: "preset-1"))
+    }
+
+    func testRemovingOneSlotKeepsTheOthers() throws {
+        let dir = try makeTempDirectory()
+        let cube = dir.appendingPathComponent("a.cube")
+        try writeCube(size: 3, to: cube)
+        let library = try PresetLibrary(storageDirectory: dir.appendingPathComponent("lib"))
+        try library.importLUT(from: cube, for: "preset-1", slot: .photo)
+        try library.importLUT(from: cube, for: "preset-1", slot: .video)
+        try library.removeLUT(for: "preset-1", slot: .video)
+        XCTAssertTrue(library.hasLUT(for: "preset-1", slot: .photo))
+        XCTAssertFalse(library.hasLUT(for: "preset-1", slot: .video))
+    }
+
+    func testPreparedLUTCanBeCommittedLater() throws {
+        let dir = try makeTempDirectory()
+        let cube = dir.appendingPathComponent("a.cube")
+        try writeCube(size: 4, to: cube)
+        let library = try PresetLibrary(storageDirectory: dir.appendingPathComponent("lib"))
+        let prepared = try LUTImport.prepare(url: cube)
+        XCTAssertFalse(library.hasAnyLUT(for: "preset-2"))
+        try library.commit(prepared, for: "preset-2", slot: .photo)
+        XCTAssertEqual(try library.loadLUT(for: "preset-2")?.size, 4)
+    }
+
+    func testOldPlaceholderNamesAreUpdatedButEditedNamesStay() throws {
+        let dir = try makeTempDirectory()
+        let storage = dir.appendingPathComponent("lib")
+        try FileManager.default.createDirectory(at: storage, withIntermediateDirectories: true)
+        // What the first release wrote: placeholder names for every preset, one renamed by the user.
+        var old = (1 ... 10).map { Preset(id: "preset-\($0)", name: "Пресет \($0)", accentIndex: $0 - 1) }
+        old[3].name = "Мой пресет"
+        try JSONEncoder().encode(old).write(to: storage.appendingPathComponent("presets.json"))
+
+        let library = try PresetLibrary(storageDirectory: storage)
+        XCTAssertEqual(library.presets[0].name, "JaneSu")
+        XCTAssertEqual(library.presets[1].name, "JaneSu 2")
+        XCTAssertEqual(library.presets[2].name, "Пресет 3")
+        XCTAssertEqual(library.presets[3].name, "Мой пресет")
+    }
+}
+
+final class LUTToolsTests: XCTestCase {
+    func testBinaryExportRoundTrips() throws {
+        let lut = try LUT3D.identity(size: 9)
+        let data = try lut.binaryLUTData()
+        XCTAssertEqual(data.count, 1 + 9 * 9 * 9 * 4)
+        let back = try LUT3D.parse(data: data, fileExtension: "lut")
+        XCTAssertEqual(back.size, 9)
+        for (a, b) in zip(lut.rgba, back.rgba) { XCTAssertEqual(a, b, accuracy: 1.0 / 255.0) }
+    }
+
+    func testIdentityHasLinearNeutralCurve() throws {
+        let curve = try LUT3D.identity(size: 5).neutralCurve()
+        XCTAssertEqual(curve, [0, 0.25, 0.5, 0.75, 1])
+    }
+
+    func testComposingWithIdentityCurveChangesNothing() throws {
+        var text = "LUT_3D_SIZE 3\n"
+        for b in 0 ... 2 { for g in 0 ... 2 { for r in 0 ... 2 { text += "\(Float(2 - r) / 2) \(Float(g) / 2) \(Float(b) / 2)\n" } } }
+        let lut = try LUT3D.parse(data: Data(text.utf8), fileExtension: "cube")
+        let composed = try lut.composing(preCurve: [0, 0.5, 1])
+        for (a, b) in zip(lut.rgba, composed.rgba) { XCTAssertEqual(a, b, accuracy: 1e-5) }
+    }
+
+    func testComposingAppliesTheCurveFirst() throws {
+        // A curve that pushes mid-gray to white, followed by an inverting LUT, must give black at 0.5.
+        var text = "LUT_3D_SIZE 3\n"
+        for b in 0 ... 2 { for g in 0 ... 2 { for r in 0 ... 2 {
+            text += "\(1 - Float(r) / 2) \(1 - Float(g) / 2) \(1 - Float(b) / 2)\n"
+        } } }
+        let invert = try LUT3D.parse(data: Data(text.utf8), fileExtension: "cube")
+        let composed = try invert.composing(preCurve: [0, 1, 1])
+        let out = composed.apply(r: 0.5, g: 0.5, b: 0.5)
+        XCTAssertEqual(out.r, 0, accuracy: 1e-4)
+        XCTAssertEqual(out.g, 0, accuracy: 1e-4)
+        XCTAssertEqual(out.b, 0, accuracy: 1e-4)
+        XCTAssertEqual(composed.apply(r: 0, g: 0, b: 0).r, 1, accuracy: 1e-4)
+    }
+
+    func testCurveEvaluationInterpolates() {
+        XCTAssertEqual(LUT3D.evaluate(curve: [0, 1, 0], at: 0.25), 0.5, accuracy: 1e-6)
+        XCTAssertEqual(LUT3D.evaluate(curve: [0, 1, 0], at: 1.5), 0, accuracy: 1e-6)
+    }
+
+    func testParserHandlesCRLFExponentsAndSignedValues() throws {
+        let text = "TITLE \"x\"\r\nLUT_3D_SIZE 2\r\n# note\r\n"
+            + "0 0 0\r\n1.0e0 0 0\r\n0 1 0\r\n1 1 0\r\n0 0 1\r\n1 0 1\r\n+0 1 1\r\n1 1 -0.0\r\n"
+        let lut = try LUT3D.parse(data: Data(text.utf8), fileExtension: "cube")
+        XCTAssertEqual(lut.size, 2)
+        XCTAssertEqual(lut.rgba[4], 1)
+        XCTAssertEqual(lut.rgba[6 * 4 + 2], 1)
+    }
+
+    func testParserRejectsGarbageNumbers() {
+        XCTAssertThrowsError(try LUT3D.parse(data: Data("LUT_3D_SIZE 2\n0 0\n".utf8), fileExtension: "cube"))
     }
 }
