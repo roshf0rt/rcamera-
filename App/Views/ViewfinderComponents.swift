@@ -128,6 +128,7 @@ struct ZoomChips: View {
             }
         }
         .foregroundStyle(isActive ? Theme.accent : .white)
+        .followsDevice()
         .frame(width: isActive ? 54 : 42, height: 54)
         .background(Circle().fill(Color.black.opacity(isActive ? 0.45 : 0)))
         .contentShape(Rectangle())
@@ -390,6 +391,7 @@ struct OptionsPanel: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
+            .followsDevice()
             .foregroundStyle(active ? Theme.accent : .white)
             .frame(maxWidth: .infinity, minHeight: 52)
             .contentShape(Rectangle())

@@ -151,6 +151,8 @@ struct CameraView: View {
             .animation(.easeInOut(duration: 0.22), value: engine.mode)
         }
         .background(Color.black.ignoresSafeArea())
+        .environment(\.iconRotation, model.orientation.current.iconRotation)
+        .onChange(of: model.orientation.current) { _, held in engine.deviceOrientation = held }
         .overlay { if engine.access == .denied { accessDenied } }
         .fullScreenCover(isPresented: $showGallery) { GalleryView() }
         .sheet(isPresented: Binding(get: { editingPresetID != nil }, set: { if !$0 { editingPresetID = nil } })) {
@@ -191,6 +193,7 @@ struct CameraView: View {
             } else if phase == .background {
                 engine.stop()
                 model.syncVolumeShutter(active: false)
+                model.orientation.stop()
                 model.location.stop()
                 model.level.stop()
             }
@@ -242,6 +245,8 @@ struct CameraView: View {
         if model.settings.savesLocation { model.location.start() }
         if model.settings.isLevelEnabled { model.level.start() }
         model.syncVolumeShutter(active: true)
+        model.orientation.start()
+        model.engine.deviceOrientation = model.orientation.current
         await model.engine.start()
     }
 
@@ -253,6 +258,7 @@ struct CameraView: View {
                 Image(systemName: "hexagon.fill")
                     .font(.system(size: 18))
                     .foregroundStyle(Color(white: 0.7))
+                    .followsDevice()
                     .frame(width: 40, height: 40)
                     .background(Circle().fill(Theme.chrome))
             }
@@ -274,6 +280,7 @@ struct CameraView: View {
             Button { withAnimation(Self.panelSpring) { showOptions.toggle(); showPresets = false; showDynamicRange = false } } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .bold))
+                    .followsDevice()
                     .foregroundStyle(showOptions ? Theme.accent : .white)
                     .frame(width: 56, height: 36)
                     .background(Capsule().fill(Theme.chrome))
@@ -474,6 +481,7 @@ struct CameraView: View {
                         .foregroundStyle(.white)
                 }
                 .shadow(color: .black.opacity(0.5), radius: 10)
+                .followsDevice()
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 .allowsHitTesting(false)
                 .id(toast)
@@ -568,6 +576,7 @@ struct CameraView: View {
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 18, weight: .medium))
                             .foregroundStyle(.white)
+                            .followsDevice()
                             .frame(width: 44, height: 44)
                             .background(Circle().fill(Color.black.opacity(0.4)))
                     }
@@ -626,6 +635,7 @@ struct CameraView: View {
                     }
                     if model.processingCount > 0 { ProgressView().tint(.white) }
                 }
+                .followsDevice()
                 .frame(width: 58, height: 58)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.15), lineWidth: 1))
@@ -652,6 +662,7 @@ struct CameraView: View {
         return Button { withAnimation(Self.panelSpring) { showPresets.toggle(); showOptions = false } } label: {
             ZStack(alignment: .bottomLeading) {
                 PresetSwatch(preset: preset, corner: 14)
+                    .followsDevice()
                 Text(preset.name)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(style.light ? Color.black : Color.white)

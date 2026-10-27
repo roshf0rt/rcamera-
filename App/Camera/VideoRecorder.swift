@@ -21,7 +21,9 @@ final class VideoRecorder {
     private var lastBuffer: CVPixelBuffer?
     private var lastTime = CMTime.invalid
 
-    init(url: URL, width: Int, height: Int, fps: Int, audioSettings: [String: Any]?) throws {
+    /// `quarterTurns` counter-clockwise turns the file asks players to show the portrait frames with,
+    /// for a phone held sideways.
+    init(url: URL, width: Int, height: Int, fps: Int, quarterTurns: Int = 0, audioSettings: [String: Any]?) throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
 
@@ -34,6 +36,8 @@ final class VideoRecorder {
         ]
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = true
+        // A positive angle shows the frames turned clockwise, so counter-clockwise turns are negative.
+        videoInput.transform = CGAffineTransform(rotationAngle: -CGFloat(quarterTurns) * .pi / 2)
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoInput,
             sourcePixelBufferAttributes: [

@@ -28,7 +28,12 @@ final class CameraEngine {
         var date: Date
         /// Set for portrait photos: the depth the blur is built from.
         var depth: AVDepthData?
+        /// How the phone was held when the shutter was pressed.
+        var orientation: DeviceOrientation = .portrait
     }
+
+    /// How the phone is held now; photos and videos are turned to match.
+    var deviceOrientation: DeviceOrientation = .portrait
 
     private(set) var machine: CameraStateMachine
     private(set) var access: Access = .unknown
@@ -375,6 +380,7 @@ final class CameraEngine {
         let mirror = mirrorsOutput
         let aspect = settings.aspect
         let portrait = settings.portrait
+        let heldAs = deviceOrientation
         controller.capturePhoto(flash: settings.flash, wantsRAW: settings.capturesRAW, rawFormat: settings.rawFormat, portrait: portrait) { [weak self] outcome in
             Task { @MainActor in
                 guard let self else { return }
@@ -389,7 +395,8 @@ final class CameraEngine {
                     aspect: aspect,
                     mirror: mirror,
                     date: Date(),
-                    depth: outcome.depth
+                    depth: outcome.depth,
+                    orientation: heldAs
                 ))
             }
         }
@@ -399,7 +406,7 @@ final class CameraEngine {
 
     private func beginRecording() {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rec-\(UUID().uuidString).mov")
-        controller.startRecording(url: url, fps: machine.configuration.format.fps) { [weak self] in
+        controller.startRecording(url: url, fps: machine.configuration.format.fps, quarterTurns: deviceOrientation.quarterTurns) { [weak self] in
             Task { @MainActor in self?.recordingDidStart() }
         } onFail: { [weak self] error in
             Task { @MainActor in

@@ -115,7 +115,8 @@ enum PhotoPipeline {
         accentIndex: Int = 0,
         depth: AVDepthData? = nil,
         fNumber: Double = PortraitAperture.standard,
-        lens: LensStyle = .solis
+        lens: LensStyle = .solis,
+        orientation: DeviceOrientation = .portrait
     ) -> Developed? {
         let offset = (raw != nil && processed != nil) ? rawExposureOffset(raw: raw!, processed: processed!) : 0
         let base: CIImage?
@@ -129,8 +130,19 @@ enum PhotoPipeline {
         guard let base else { return nil }
         let blurred = depth.flatMap { portraitBlur(base, depth: $0, fNumber: fNumber, lens: lens) } ?? base
         let subject = depth == nil ? base : lensLook(blurred, lens: lens)
-        let finished = finish(subject, look: look, aspect: aspect, mirror: mirror)
+        let finished = turned(finish(subject, look: look, aspect: aspect, mirror: mirror), orientation)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
+    }
+
+    /// The portrait frame turned to how the phone was held, before the border so the border fits the shot.
+    static func turned(_ image: CIImage, _ orientation: DeviceOrientation) -> CIImage {
+        let result: CIImage
+        switch orientation.quarterTurns {
+        case 1: result = image.oriented(.left)
+        case -1: result = image.oriented(.right)
+        default: return image
+        }
+        return result.transformed(by: CGAffineTransform(translationX: -result.extent.minX, y: -result.extent.minY))
     }
 
     /// What a redevelop starts from: the RAW when it is still kept, otherwise the camera's own image.
@@ -165,12 +177,13 @@ enum PhotoPipeline {
         mirror: Bool,
         frame: FrameStyle = .off,
         label: String = "",
-        accentIndex: Int = 0
+        accentIndex: Int = 0,
+        orientation: DeviceOrientation = .portrait
     ) -> Developed? {
         guard let base = baseImage(source, pushPull: pushPull, scale: 1) else { return nil }
         let offset: Double
         if case let .raw(_, value) = source { offset = value } else { offset = 0 }
-        let finished = finish(base, look: look, aspect: aspect, mirror: mirror)
+        let finished = turned(finish(base, look: look, aspect: aspect, mirror: mirror), orientation)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
     }
 

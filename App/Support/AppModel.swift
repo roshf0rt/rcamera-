@@ -13,6 +13,7 @@ final class AppModel {
     @ObservationIgnored let volumeShutter = VolumeShutter()
     let location = LocationProvider()
     let level = LevelMonitor()
+    let orientation = OrientationMonitor()
 
     private(set) var settings: AppSettings
     private(set) var presets: [Preset]
@@ -407,7 +408,8 @@ final class AppModel {
                     accentIndex: preset.accentIndex,
                     depth: photo.depth,
                     fNumber: portraitFNumber,
-                    lens: lens
+                    lens: lens,
+                    orientation: photo.orientation
                 )
             }.value
             processingCount -= 1
@@ -428,7 +430,8 @@ final class AppModel {
                 mirrored: photo.mirror,
                 frame: frame,
                 grainEnabled: grainOn,
-                halationEnabled: halationOn
+                halationEnabled: halationOn,
+                orientation: photo.orientation
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
@@ -517,6 +520,7 @@ final class AppModel {
         let look = await baseLook(for: preset).with(grain: grain, halation: halation)
         let aspect = record.aspect
         let mirror = record.mirrored
+        let orientation = record.orientation
 
         let developed = await Task.detached(priority: .userInitiated) {
             PhotoPipeline.redevelop(
@@ -527,7 +531,8 @@ final class AppModel {
                 mirror: mirror,
                 frame: record.frame,
                 label: preset.name,
-                accentIndex: preset.accentIndex
+                accentIndex: preset.accentIndex,
+                orientation: orientation
             )
         }.value
         guard let developed else { return false }

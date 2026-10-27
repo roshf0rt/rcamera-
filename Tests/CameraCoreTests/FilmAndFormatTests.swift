@@ -297,3 +297,22 @@ final class CineExposureTests: XCTestCase {
         XCTAssertEqual(FormatChooser.frameRates(pro, width: 3840), [24, 30, 60, 120])
     }
 }
+
+final class DeviceOrientationTests: XCTestCase {
+    func testGravityPicksTheOrientationWithAMargin() {
+        XCTAssertEqual(DeviceOrientation.from(gravityX: 0, gravityY: -1, previous: .landscapeLeft), .portrait)
+        XCTAssertEqual(DeviceOrientation.from(gravityX: -1, gravityY: 0, previous: .portrait), .landscapeLeft)
+        XCTAssertEqual(DeviceOrientation.from(gravityX: 1, gravityY: 0, previous: .portrait), .landscapeRight)
+        // Near the diagonal nothing changes, so the icons do not flicker.
+        XCTAssertEqual(DeviceOrientation.from(gravityX: -0.72, gravityY: -0.69, previous: .portrait), .portrait)
+        XCTAssertEqual(DeviceOrientation.from(gravityX: -0.72, gravityY: -0.69, previous: .landscapeLeft), .landscapeLeft)
+        // Flat on a table keeps the last one.
+        XCTAssertEqual(DeviceOrientation.from(gravityX: 0.05, gravityY: 0.02, previous: .landscapeRight), .landscapeRight)
+    }
+
+    func testRotationsMirrorEachOther() {
+        XCTAssertEqual(DeviceOrientation.landscapeLeft.iconRotation, -DeviceOrientation.landscapeRight.iconRotation)
+        XCTAssertEqual(DeviceOrientation.portrait.quarterTurns, 0)
+        XCTAssertEqual(DeviceOrientation.landscapeLeft.quarterTurns, 1)
+    }
+}

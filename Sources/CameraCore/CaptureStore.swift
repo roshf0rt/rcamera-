@@ -34,6 +34,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var halationEnabled: Bool
     /// Border the saved photo was made with. Redevelop keeps it.
     public var frame: FrameStyle
+    /// How the phone was held; the saved photo is turned to match, and Redevelop turns it again.
+    public var orientation: DeviceOrientation
 
     public init(
         id: UUID = UUID(),
@@ -49,7 +51,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         mirrored: Bool = false,
         frame: FrameStyle = .off,
         grainEnabled: Bool = true,
-        halationEnabled: Bool = true
+        halationEnabled: Bool = true,
+        orientation: DeviceOrientation = .portrait
     ) {
         self.id = id
         self.date = date
@@ -65,11 +68,12 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.frame = frame
         self.grainEnabled = grainEnabled
         self.halationEnabled = halationEnabled
+        self.orientation = orientation
     }
 
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
-        case grainEnabled, halationEnabled
+        case grainEnabled, halationEnabled, orientation
     }
 
     /// Index files from earlier releases lack newer keys; they keep their captures.
@@ -89,6 +93,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? .off
         grainEnabled = (try? c.decode(Bool.self, forKey: .grainEnabled)) ?? true
         halationEnabled = (try? c.decode(Bool.self, forKey: .halationEnabled)) ?? true
+        orientation = (try? c.decode(DeviceOrientation.self, forKey: .orientation)) ?? .portrait
     }
 }
 

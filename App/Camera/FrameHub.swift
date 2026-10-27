@@ -18,6 +18,8 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     private struct PendingRecording {
         var url: URL
         var fps: Int
+        /// The phone held sideways: the file says to show the frames turned.
+        var quarterTurns: Int
         var audioSettings: [String: Any]?
         /// Frames captured before the button press are dropped. Stabilization delays frames, so some arrive late.
         var requestTime: CMTime
@@ -100,10 +102,10 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
 
     // MARK: Recording
 
-    func startRecording(url: URL, fps: Int, audioSettings: [String: Any]?, onStart: @escaping () -> Void, onFail: @escaping (Error) -> Void) {
+    func startRecording(url: URL, fps: Int, quarterTurns: Int = 0, audioSettings: [String: Any]?, onStart: @escaping () -> Void, onFail: @escaping (Error) -> Void) {
         let now = CMClockGetTime(CMClockGetHostTimeClock())
         lock.lock()
-        pending = PendingRecording(url: url, fps: fps, audioSettings: audioSettings, requestTime: now, onStart: onStart, onFail: onFail)
+        pending = PendingRecording(url: url, fps: fps, quarterTurns: quarterTurns, audioSettings: audioSettings, requestTime: now, onStart: onStart, onFail: onFail)
         lock.unlock()
     }
 
@@ -221,7 +223,7 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         if recorder == nil, let pending {
             if CMTimeCompare(time, pending.requestTime) < 0 { return }
             do {
-                recorder = try VideoRecorder(url: pending.url, width: width, height: height, fps: pending.fps, audioSettings: pending.audioSettings)
+                recorder = try VideoRecorder(url: pending.url, width: width, height: height, fps: pending.fps, quarterTurns: pending.quarterTurns, audioSettings: pending.audioSettings)
             } catch {
                 lock.lock()
                 self.pending = nil
