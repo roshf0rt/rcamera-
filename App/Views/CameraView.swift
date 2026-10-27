@@ -49,12 +49,25 @@ struct CameraView: View {
                 }
 
                 if model.settings.portrait, engine.mode == .photo {
-                    ApertureControl(
-                        fNumber: model.settings.portraitFNumber,
-                        expanded: $apertureOpen
-                    ) { stop in
-                        model.updateSettings { $0.portraitFNumber = stop }
-                        apertureOpen = false
+                    HStack(spacing: 8) {
+                        ApertureControl(
+                            fNumber: model.settings.portraitFNumber,
+                            expanded: $apertureOpen
+                        ) { stop in
+                            model.updateSettings { $0.portraitFNumber = stop }
+                            apertureOpen = false
+                        }
+                        Button {
+                            model.updateSettings { $0.lensStyle = $0.lensStyle.next }
+                        } label: {
+                            Text(model.settings.lensStyle.label)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .frame(height: 38)
+                                .background(Capsule().fill(Color.black.opacity(0.45)))
+                        }
+                        .buttonStyle(.plain)
                     }
                     .frame(width: geo.size.width, height: 44)
                     .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50)

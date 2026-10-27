@@ -282,9 +282,11 @@ final class AppModel {
         let halationOn = settings.halationEnabled
         let frame = settings.frame
         let portraitFNumber = settings.portraitFNumber
+        let lens = settings.lensStyle
 
         Task {
-            let look = await cameraLook(for: preset, slot: .photo)
+            var look = await cameraLook(for: preset, slot: .photo)
+            if photo.depth != nil { look = look.with { lens.apply(to: &$0) } }
             let place = saveLocation ? await location.currentPlaceName() : nil
             let developed = await Task.detached(priority: .userInitiated) {
                 PhotoPipeline.develop(
@@ -297,7 +299,8 @@ final class AppModel {
                     label: preset.name,
                     accentIndex: preset.accentIndex,
                     depth: photo.depth,
-                    fNumber: portraitFNumber
+                    fNumber: portraitFNumber,
+                    lens: lens
                 )
             }.value
             processingCount -= 1

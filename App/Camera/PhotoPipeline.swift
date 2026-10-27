@@ -106,7 +106,8 @@ enum PhotoPipeline {
         label: String = "",
         accentIndex: Int = 0,
         depth: AVDepthData? = nil,
-        fNumber: Double = PortraitAperture.standard
+        fNumber: Double = PortraitAperture.standard,
+        lens: LensStyle = .solis
     ) -> Developed? {
         let offset = (raw != nil && processed != nil) ? rawExposureOffset(raw: raw!, processed: processed!) : 0
         let base: CIImage?
@@ -118,7 +119,8 @@ enum PhotoPipeline {
             base = nil
         }
         guard let base else { return nil }
-        let subject = depth.flatMap { portraitBlur(base, depth: $0, fNumber: fNumber) } ?? base
+        let blurred = depth.flatMap { portraitBlur(base, depth: $0, fNumber: fNumber) } ?? base
+        let subject = depth == nil ? base : lensLook(blurred, lens: lens)
         let finished = finish(subject, look: look, aspect: aspect, mirror: mirror)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
     }
@@ -165,6 +167,25 @@ enum PhotoPipeline {
     }
 
     /// Blurs the background of a portrait photo with Core Image's depth blur, driven by the photo's depth map.
+    /// The lens character on top of the blur: vignetting at the edges and a glow around the highlights.
+    /// The look's colour fringing comes from the lens too, through `LensStyle.apply(to:)`.
+    static func lensLook(_ image: CIImage, lens: LensStyle) -> CIImage {
+        var result = image
+        if let vignette = CIFilter(name: "CIVignette") {
+            vignette.setValue(result, forKey: kCIInputImageKey)
+            vignette.setValue(-lens.vignette, forKey: kCIInputIntensityKey)
+            vignette.setValue(1.5, forKey: kCIInputRadiusKey)
+            result = vignette.outputImage?.cropped(to: image.extent) ?? result
+        }
+        if let bloom = CIFilter(name: "CIBloom") {
+            bloom.setValue(result, forKey: kCIInputImageKey)
+            bloom.setValue(lens.ring * 0.5, forKey: kCIInputIntensityKey)
+            bloom.setValue(10 + lens.highlightSpread * 20, forKey: kCIInputRadiusKey)
+            result = bloom.outputImage?.cropped(to: image.extent) ?? result
+        }
+        return result
+    }
+
     /// The depth map comes from the sensor's landscape orientation, so it is turned to match the photo.
     /// Blur strength and orientation were written without a device to check them against.
     static func portraitBlur(_ image: CIImage, depth: AVDepthData, fNumber: Double) -> CIImage? {

@@ -288,3 +288,39 @@ final class PortraitTests: XCTestCase {
         XCTAssertEqual(settings.portraitFNumber, 4.0)
     }
 }
+
+final class LensStyleTests: XCTestCase {
+    func testSevenLensesWithUniqueLabelsInOrder() {
+        XCTAssertEqual(LensStyle.allCases.count, 7)
+        XCTAssertEqual(Set(LensStyle.allCases.map(\.label)).count, 7)
+        let orders = LensStyle.allCases.map(\.order)
+        XCTAssertEqual(Set(orders).count, 7)
+    }
+
+    func testParametersStayInTheirRanges() {
+        for lens in LensStyle.allCases {
+            XCTAssertTrue((0 ... 1).contains(lens.vignette), "\(lens)")
+            XCTAssertTrue((0 ... 1).contains(lens.ring), "\(lens)")
+            XCTAssertTrue((0 ... 1).contains(lens.highlightSpread), "\(lens)")
+            XCTAssertTrue((0 ... 1).contains(lens.fringing), "\(lens)")
+        }
+    }
+
+    func testApplyWritesFringingIntoTheLook() {
+        var look = LookAdjustments.neutral
+        LensStyle.petzval.apply(to: &look)
+        XCTAssertEqual(look.chromaticAberration, 1.5, accuracy: 1e-9)
+        XCTAssertEqual(look.bloom, 0.2, accuracy: 1e-9)
+    }
+
+    func testNextCyclesThroughAllLenses() {
+        var lens = LensStyle.solis
+        var seen: Set<LensStyle> = []
+        for _ in 0 ..< 7 {
+            seen.insert(lens)
+            lens = lens.next
+        }
+        XCTAssertEqual(seen.count, 7)
+        XCTAssertEqual(lens, .solis)
+    }
+}
