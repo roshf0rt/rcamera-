@@ -76,7 +76,9 @@ public enum PresetCatalog {
     /// Presets the user adds start with this, so they can be told apart from the built-in ten.
     public static let customPrefix = "custom-"
     /// Bumped whenever default names or looks change, so older installs can adopt them.
-    public static let revision = 3
+    /// Revision 4 locked the built-in presets; earlier edits to them move into custom copies.
+    public static let revision = 4
+    static let lockRevision = 4
 
     /// JaneSu first, then the Roshfort collection.
     static let names = ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet"]
@@ -171,41 +173,139 @@ public final class PresetLibrary {
         } else {
             presets = defaults
         }
+        if savedRevision < PresetCatalog.lockRevision {
+            moveBuiltInEditsToCustomCopies(defaults: defaults)
+        }
         try? "\(PresetCatalog.revision)".write(to: revisionFile, atomically: true, encoding: .utf8)
+    }
+
+    /// Built-in presets only change through film speed, contrast curve and dynamic range now. A built-in
+    /// the user had changed in other ways is kept as a custom copy (with its LUTs), then reset.
+    private func moveBuiltInEditsToCustomCopies(defaults: [Preset]) {
+        var changed = false
+        for index in presets.indices {
+            let stored = presets[index]
+            guard !stored.isCustom, let fresh = defaults.first(where: { $0.id == stored.id }) else { continue }
+            let locked = Self.lockedEdit(stored: fresh, edited: stored)
+            let renamed = stored.name != fresh.name
+            if locked != stored || renamed {
+                var copy = stored
+                copy.id = PresetCatalog.customPrefix + UUID().uuidString.lowercased()
+                copy.name = renamed ? stored.name : "\(stored.name) Custom"
+                presets.append(copy)
+                copyLUTs(from: stored.id, to: copy.id)
+            }
+            // Film speed, curve and range choices stay on the built-in itself.
+            presets[index] = locked
+            changed = true
+        }
+        if changed { try? save() }
+    }
+
+    /// What may change on a built-in preset: the film speed's values (grain, grain size, sharpness,
+    /// fringing), the contrast curve's tone and dynamic range. Everything else stays as stored.
+    public static func lockedEdit(stored: Preset, edited: Preset) -> Preset {
+        var result = stored
+        result.grain = edited.grain
+        var look = stored.adjustments
+        let wanted = edited.adjustments
+        look.grainSize = wanted.grainSize
+        look.sharpness = wanted.sharpness
+        look.chromaticAberration = wanted.chromaticAberration
+        look.contrast = wanted.contrast
+        look.postExposure = wanted.postExposure
+        look.shadows = wanted.shadows
+        look.midpoint = wanted.midpoint
+        look.highlights = wanted.highlights
+        look.fade = wanted.fade
+        look.mute = wanted.mute
+        look.saturation = wanted.saturation
+        look.filmStrength = wanted.filmStrength
+        look.curve = wanted.curve
+        look.dynamicRange = wanted.dynamicRange
+        result.adjustments = look
+        return result
     }
 
     public func preset(id: String) -> Preset? {
         presets.first { $0.id == id }
     }
 
+    /// Saves a preset. Built-in presets only take the changes `lockedEdit` allows.
     public func update(_ preset: Preset) throws {
         guard let index = presets.firstIndex(where: { $0.id == preset.id }) else { return }
-        var updated = preset
-        updated.grain = min(max(preset.grain, 0), 1)
-        updated.halation = min(max(preset.halation, 0), 1)
+        var updated = preset.isCustom ? preset : Self.lockedEdit(stored: presets[index], edited: preset)
+        updated.grain = min(max(updated.grain, 0), 1)
+        updated.halation = min(max(updated.halation, 0), 1)
         presets[index] = updated
         try save()
     }
 
-    /// Adds a custom preset that starts as a copy of `source`, with the same look and its own LUT files.
+    /// Adds a custom preset. With a `source` it starts as a copy of that look, LUT files included;
+    /// without one it starts from scratch: no LUT, no grain or halation, neutral regulators.
     @discardableResult
-    public func addCustom(copying source: Preset, name: String = "New Preset") throws -> Preset {
-        var copy = source
-        copy.id = PresetCatalog.customPrefix + UUID().uuidString.lowercased()
-        copy.name = name
-        presets.append(copy)
+    public func addCustom(copying source: Preset?, name: String = "New Preset", accentIndex: Int? = nil) throws -> Preset {
+        let id = PresetCatalog.customPrefix + UUID().uuidString.lowercased()
+        var preset = source ?? Preset(id: id, name: name, accentIndex: accentIndex ?? 0)
+        preset.id = id
+        preset.name = name
+        if let accentIndex { preset.accentIndex = accentIndex }
+        presets.append(preset)
+        if let source { copyLUTs(from: source.id, to: id) }
         try save()
-        return copy
+        return preset
+    }
+
+    /// Puts a built-in preset back to how it ships. Custom presets are left alone.
+    public func resetBuiltIn(id: String) throws {
+        guard let index = presets.firstIndex(where: { $0.id == id }), !presets[index].isCustom,
+              let fresh = PresetCatalog.defaults().first(where: { $0.id == id })
+        else { return }
+        presets[index] = fresh
+        try save()
+    }
+
+    /// Gives a preset's LUTs (bundled or imported) to another preset as imported files.
+    private func copyLUTs(from sourceID: String, to targetID: String) {
+        for slot in LUTSlot.allCases {
+            guard let url = lutURL(for: sourceID, slot: slot), lutURL(for: targetID, slot: slot) == nil else { continue }
+            let target = userLUTDirectory.appendingPathComponent("\(targetID)\(slot.fileSuffix).\(url.pathExtension)")
+            try? fileManager.copyItem(at: url, to: target)
+        }
+        invalidateCache(for: targetID)
+    }
+
+    // MARK: Covers
+
+    private var coverDirectory: URL { storageDirectory.appendingPathComponent("Covers", isDirectory: true) }
+
+    /// The picture a custom preset's card shows, if the user chose one.
+    public func coverURL(for presetID: String) -> URL? {
+        let url = coverDirectory.appendingPathComponent("\(presetID).jpg")
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Stores (or with nil removes) the card picture of a custom preset, as JPEG data.
+    public func setCover(_ data: Data?, for presetID: String) throws {
+        guard preset(id: presetID)?.isCustom == true else { return }
+        let url = coverDirectory.appendingPathComponent("\(presetID).jpg")
+        if let data {
+            try fileManager.createDirectory(at: coverDirectory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } else if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
     }
 
     /// Removes a custom preset and its LUT files. Built-in presets cannot be removed.
     public func removeCustom(id: String) throws {
         guard let preset = preset(id: id), preset.isCustom else { return }
-        presets.removeAll { $0.id == preset.id }
         for slot in LUTSlot.allCases {
             try? removeLUT(for: preset.id, slot: slot)
         }
         lutCache = lutCache.filter { !$0.key.hasPrefix("\(preset.id)|") }
+        try? setCover(nil, for: preset.id)
+        presets.removeAll { $0.id == preset.id }
         try save()
     }
 

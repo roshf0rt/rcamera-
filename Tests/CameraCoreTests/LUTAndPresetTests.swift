@@ -100,7 +100,7 @@ final class PresetLibraryTests: XCTestCase {
     func testUpdateSurvivesReload() throws {
         let dir = try makeTempDirectory()
         let library = try PresetLibrary(storageDirectory: dir)
-        var preset = library.presets[2]
+        var preset = try library.addCustom(copying: library.presets[2])
         preset.name = "Тёплый"
         preset.grain = 4
         try library.update(preset)
@@ -250,7 +250,8 @@ final class PresetLibraryTests: XCTestCase {
         XCTAssertEqual(library.presets[0].name, "JaneSu")
         XCTAssertEqual(library.presets[1].name, "Carbon")
         XCTAssertEqual(library.presets[2].name, "Clear")
-        XCTAssertEqual(library.presets[3].name, "Мой пресет")
+        XCTAssertEqual(library.presets[3].name, "Drift", "built-ins are locked; the renamed one lives on as a custom copy")
+        XCTAssertEqual(library.presets.filter(\.isCustom).map(\.name), ["Мой пресет"])
         XCTAssertGreaterThan(library.presets[0].grain, 0)
         XCTAssertGreaterThan(library.presets[0].halation, 0)
         XCTAssertEqual(library.presets[5].grain, 0.45, "amounts from before the new renderer are replaced")
@@ -258,7 +259,6 @@ final class PresetLibraryTests: XCTestCase {
         // The migration runs once: a later edit back to zero grain is respected.
         var edited = library.presets[0]
         edited.grain = 0
-        edited.halation = 0
         try library.update(edited)
         let reloaded = try PresetLibrary(storageDirectory: storage)
         XCTAssertEqual(reloaded.presets[0].grain, 0)
@@ -270,7 +270,7 @@ final class PresetLibraryTests: XCTestCase {
         try FileManager.default.createDirectory(at: storage, withIntermediateDirectories: true)
         try #"[{"id":"preset-1","name":"X","grain":0.2,"accentIndex":0}]"#.write(
             to: storage.appendingPathComponent("presets.json"), atomically: true, encoding: .utf8)
-        try "3".write(to: storage.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
+        try "\(PresetCatalog.revision)".write(to: storage.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
         let library = try PresetLibrary(storageDirectory: storage)
         XCTAssertEqual(library.presets.first?.name, "X")
         XCTAssertEqual(library.presets.first?.halation, 0)
@@ -383,6 +383,101 @@ final class CustomPresetTests: XCTestCase {
         let added = try library.addCustom(copying: library.presets[2], name: "Mine")
         let reopened = try PresetLibrary(storageDirectory: directory)
         XCTAssertEqual(reopened.preset(id: added.id)?.name, "Mine")
+    }
+
+    func testBuiltInPresetsOnlyTakeSpeedCurveAndRange() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var edited = library.presets[0]
+        let original = edited
+        edited.name = "Renamed"
+        edited.halation = 0
+        edited.adjustments.temp = 0.8
+        edited.adjustments.hue = 20
+        ContrastCurve.crush.apply(to: &edited.adjustments)
+        FilmSpeed.iso800.apply(grain: &edited.grain, to: &edited.adjustments)
+        edited.adjustments.dynamicRange = 1.5
+        try library.update(edited)
+
+        let stored = try XCTUnwrap(library.preset(id: original.id))
+        XCTAssertEqual(stored.name, original.name)
+        XCTAssertEqual(stored.halation, original.halation)
+        XCTAssertEqual(stored.adjustments.temp, 0)
+        XCTAssertEqual(stored.adjustments.hue, 0)
+        XCTAssertEqual(stored.adjustments.curve, .crush)
+        XCTAssertEqual(stored.adjustments.contrast, edited.adjustments.contrast)
+        XCTAssertEqual(stored.grain, FilmSpeed.iso800.grain)
+        XCTAssertEqual(stored.adjustments.dynamicRange, 1.5)
+
+        try library.resetBuiltIn(id: original.id)
+        XCTAssertEqual(library.preset(id: original.id), original)
+    }
+
+    func testCustomPresetsTakeEveryChange() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var added = try library.addCustom(copying: library.presets[0], name: "Mine")
+        added.name = "Mine 2"
+        added.adjustments.temp = 0.8
+        try library.update(added)
+        XCTAssertEqual(library.preset(id: added.id)?.name, "Mine 2")
+        XCTAssertEqual(library.preset(id: added.id)?.adjustments.temp, 0.8)
+    }
+
+    func testFromScratchStartsNeutralWithoutLUT() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scratch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundled = directory.appendingPathComponent("bundle")
+        try FileManager.default.createDirectory(at: bundled, withIntermediateDirectories: true)
+        try "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n"
+            .write(to: bundled.appendingPathComponent("preset-1.cube"), atomically: true, encoding: .utf8)
+        let library = try PresetLibrary(storageDirectory: directory.appendingPathComponent("lib"), bundledLUTDirectory: bundled)
+
+        let blank = try library.addCustom(copying: nil, name: "Blank", accentIndex: 4)
+        XCTAssertEqual(blank.adjustments, .neutral)
+        XCTAssertEqual(blank.grain, 0)
+        XCTAssertEqual(blank.accentIndex, 4)
+        XCTAssertFalse(library.hasAnyLUT(for: blank.id))
+
+        let based = try library.addCustom(copying: library.presets[0], name: "Based")
+        XCTAssertTrue(library.hasLUT(for: based.id, slot: .photo), "the source's LUT comes along")
+        XCTAssertEqual(try library.loadLUT(for: based.id)?.size, 2)
+        try library.removeCustom(id: based.id)
+        XCTAssertTrue(library.hasLUT(for: "preset-1"), "the bundled original stays")
+    }
+
+    func testCoversAreStoredAndRemovedWithThePreset() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try library.setCover(Data([1, 2, 3]), for: "preset-1")
+        XCTAssertNil(library.coverURL(for: "preset-1"), "built-in presets keep their card")
+        let added = try library.addCustom(copying: nil, name: "Mine")
+        try library.setCover(Data([1, 2, 3]), for: added.id)
+        let url = try XCTUnwrap(library.coverURL(for: added.id))
+        XCTAssertEqual(try Data(contentsOf: url), Data([1, 2, 3]))
+        try library.removeCustom(id: added.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testEditedBuiltInsMoveIntoCustomCopiesWhenLocking() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // An install from before the lock, with a built-in the user had tuned and renamed.
+        var presets = library.presets
+        presets[1].name = "My Carbon"
+        presets[1].adjustments.temp = 0.5
+        try JSONEncoder().encode(presets).write(to: directory.appendingPathComponent("presets.json"))
+        try "3".write(to: directory.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
+
+        let reopened = try PresetLibrary(storageDirectory: directory)
+        XCTAssertEqual(reopened.preset(id: "preset-2"), PresetCatalog.defaults()[1])
+        let copy = try XCTUnwrap(reopened.presets.first { $0.isCustom })
+        XCTAssertEqual(copy.name, "My Carbon")
+        XCTAssertEqual(copy.adjustments.temp, 0.5)
+        XCTAssertEqual(reopened.presets.count, PresetCatalog.defaultCount + 1)
+
+        // Opening again does not copy twice.
+        XCTAssertEqual(try PresetLibrary(storageDirectory: directory).presets.count, PresetCatalog.defaultCount + 1)
     }
 
     func testExportWritesReadableJSON() throws {

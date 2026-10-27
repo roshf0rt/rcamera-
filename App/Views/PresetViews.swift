@@ -1,4 +1,5 @@
 import CameraCore
+import PhotosUI
 import SwiftUI
 
 /// How a preset's card looks, from the RCamera card designs (FilterPicker.swift and FilterCardsSVG):
@@ -47,6 +48,8 @@ struct PresetPicker: View {
     @Environment(AppModel.self) private var model
     /// Opens the editor for a preset, from the long-press menu.
     var onEdit: (String) -> Void = { _ in }
+    /// Opens the new-preset sheet, from scratch (nil) or based on a preset.
+    var onCreate: (Preset?) -> Void = { _ in }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -59,21 +62,24 @@ struct PresetPicker: View {
                         .id(preset.id)
                         .contextMenu {
                             Button { onEdit(preset.id) } label: {
-                                Label("Edit", systemImage: "slider.horizontal.3")
+                                Label(preset.isCustom ? "Edit" : "Quality & Tone", systemImage: "slider.horizontal.3")
                             }
-                            if let url = model.exportPreset(id: preset.id) {
-                                ShareLink(item: url) {
-                                    Label("Share", systemImage: "square.and.arrow.up")
-                                }
+                            Button { onCreate(preset) } label: {
+                                Label("New preset from this", systemImage: "plus.square.on.square")
                             }
                             if preset.isCustom {
+                                if let url = model.exportPreset(id: preset.id) {
+                                    ShareLink(item: url) {
+                                        Label("Share", systemImage: "square.and.arrow.up")
+                                    }
+                                }
                                 Button(role: .destructive) { model.deletePreset(id: preset.id) } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
                         }
                     }
-                    Button { model.addPreset() } label: {
+                    Button { onCreate(nil) } label: {
                         VStack(spacing: 6) {
                             Image(systemName: "plus").font(.system(size: 20, weight: .semibold))
                             Text("New").font(.system(size: 12, weight: .semibold))
@@ -82,7 +88,7 @@ struct PresetPicker: View {
                         .frame(width: 84, height: PresetCard.height)
                         .background(RoundedRectangle(cornerRadius: PresetCard.corner, style: .continuous).fill(Color(white: 0.08)))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
@@ -104,10 +110,13 @@ struct PresetCard: View {
     let isSelected: Bool
     var thumbnail: UIImage?
     let action: () -> Void
+    @Environment(AppModel.self) private var model
 
     private var style: PresetCardStyle { PresetCardStyle.of(preset) }
+    /// The redevelop thumbnail, or the photo the user chose for a custom preset.
+    private var picture: UIImage? { thumbnail ?? (preset.isCustom ? model.cover(for: preset.id) : nil) }
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Self.corner, style: .continuous) }
-    private var foreground: Color { isSelected && style.light && thumbnail == nil ? .black : .white }
+    private var foreground: Color { isSelected && style.light && picture == nil ? .black : .white }
 
     var body: some View {
         Button(action: action) {
@@ -125,7 +134,7 @@ struct PresetCard: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
                     Spacer(minLength: 0)
-                    if thumbnail == nil, !isSelected || style.selectedFill != nil {
+                    if picture == nil, !isSelected || style.selectedFill != nil {
                         RoundedRectangle(cornerRadius: 1.5).fill(style.gradient).frame(height: 5)
                     }
                 }
@@ -149,8 +158,8 @@ struct PresetCard: View {
 
     @ViewBuilder
     private var background: some View {
-        if let thumbnail {
-            Image(uiImage: thumbnail)
+        if let picture {
+            Image(uiImage: picture)
                 .resizable()
                 .scaledToFill()
                 .frame(width: Self.width, height: Self.height)
@@ -171,5 +180,232 @@ struct PresetSwatch: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: corner, style: .continuous).fill(PresetCardStyle.of(preset).gradient)
+    }
+}
+
+/// The sheet for a new custom preset: a name, what it starts from (nothing, or one of the presets with
+/// its LUTs), and its card: one of the card designs, or a photo.
+struct NewPresetSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    /// Preselected starting point; nil starts from scratch.
+    let base: Preset?
+    /// Called with the new preset's id, so the caller can open its editor.
+    let created: (String) -> Void
+
+    @State private var name = ""
+    @State private var baseID: String?
+    @State private var accentIndex = 0
+    @State private var coverItem: PhotosPickerItem?
+    @State private var coverData: Data?
+    @State private var coverImage: UIImage?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    preview
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 8)
+
+                    TextField("Preset name", text: $name)
+                        .font(.system(size: 22, weight: .semibold))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.chrome.opacity(0.6)))
+
+                    section("Start from") {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                startCard(nil)
+                                ForEach(model.presets) { preset in startCard(preset) }
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                        .padding(.horizontal, -16)
+                        Text(baseID == nil
+                             ? "An empty look: no LUT, no grain, every regulator neutral."
+                             : "A copy of this preset's look and LUTs. Every regulator is yours to change.")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+
+                    section("Card") {
+                        HStack(spacing: 10) {
+                            ForEach(PresetCardStyle.all.indices, id: \.self) { index in
+                                Button {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { accentIndex = index }
+                                } label: {
+                                    Circle()
+                                        .fill(PresetCardStyle.all[index].gradient)
+                                        .frame(width: 26, height: 26)
+                                        .overlay(Circle().strokeBorder(.white, lineWidth: accentIndex == index && coverImage == nil ? 2 : 0))
+                                }
+                                .buttonStyle(PressableStyle())
+                            }
+                        }
+                        HStack(spacing: 10) {
+                            PhotosPicker(selection: $coverItem, matching: .images) {
+                                Label(coverImage == nil ? "Use a photo" : "Change photo", systemImage: "photo")
+                                    .font(.system(size: 15, weight: .semibold))
+                            }
+                            if coverImage != nil {
+                                Button("Remove photo", role: .destructive) {
+                                    withAnimation { coverImage = nil; coverData = nil; coverItem = nil }
+                                }
+                                .font(.system(size: 15, weight: .semibold))
+                            }
+                        }
+                        .tint(Theme.accent)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 30)
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle("New preset")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        let source = baseID.flatMap { model.preset(id: $0) }
+                        if let id = model.createPreset(name: name, base: source, accentIndex: accentIndex, cover: coverData) {
+                            dismiss()
+                            created(id)
+                        }
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+            .onAppear {
+                guard name.isEmpty else { return }
+                baseID = base?.id
+                accentIndex = base?.accentIndex ?? 0
+                name = base.map { "\($0.name) Custom" } ?? ""
+            }
+            .onChange(of: coverItem) { _, item in
+                guard let item else { return }
+                Task {
+                    guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else { return }
+                    withAnimation { coverData = data; coverImage = image }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .tint(Theme.accent)
+    }
+
+    /// The card as it will look in the picker.
+    private var preview: some View {
+        let draft = Preset(id: PresetCatalog.customPrefix + "draft", name: name.isEmpty ? "New Preset" : name, accentIndex: accentIndex)
+        return PresetCard(preset: draft, isSelected: true, thumbnail: coverImage) {}
+            .scaleEffect(1.25)
+            .padding(.vertical, 12)
+            .allowsHitTesting(false)
+    }
+
+    private func startCard(_ preset: Preset?) -> some View {
+        let isOn = baseID == preset?.id
+        return Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                baseID = preset?.id
+                if let preset, coverImage == nil { accentIndex = preset.accentIndex }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Group {
+                    if let preset {
+                        PresetSwatch(preset: preset, corner: 12)
+                    } else {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.35), style: StrokeStyle(lineWidth: 1.2, dash: [4, 3]))
+                            .overlay(Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white.opacity(0.7)))
+                    }
+                }
+                .frame(width: 74, height: 52)
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(isOn ? Theme.accent : .clear, lineWidth: 2))
+                Text(preset?.name ?? "Blank")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isOn ? Theme.accent : .white.opacity(0.8))
+                    .lineLimit(1)
+                    .frame(width: 74, alignment: .leading)
+            }
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .font(.system(size: 12, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(Theme.secondaryText)
+            content()
+        }
+    }
+}
+
+/// mood's Quality / Tone control: a title on the left and a vertical wheel of values on the right.
+/// Drag up or down to turn it, tap to step forward. The neighbouring values peek above and below.
+struct WheelPicker: View {
+    let title: String
+    let labels: [String]
+    /// The value shown now; nil when the preset matches none of them.
+    let index: Int?
+    let pick: (Int) -> Void
+
+    @State private var dragStart: Int?
+
+    private let step: CGFloat = 26
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.white)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                neighbour(-1)
+                Text(index.map { labels[$0] } ?? "—")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .contentTransition(.numericText())
+                neighbour(1)
+            }
+            .frame(height: 72)
+            .clipped()
+            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.3),
+                                         .init(color: .black, location: 0.7), .init(color: .clear, location: 1)],
+                                 startPoint: .top, endPoint: .bottom))
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 64)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(white: 0.13)))
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 4)
+                .onChanged { value in
+                    let start = dragStart ?? (index ?? 0)
+                    dragStart = start
+                    let moved = Int((-value.translation.height / step).rounded())
+                    let target = min(max(start + moved, 0), labels.count - 1)
+                    if target != index { turn(to: target) }
+                }
+                .onEnded { _ in dragStart = nil }
+        )
+        .onTapGesture { turn(to: ((index ?? -1) + 1) % labels.count) }
+        .sensoryFeedback(.selection, trigger: index)
+    }
+
+    private func neighbour(_ offset: Int) -> some View {
+        let position = (index ?? 0) + offset
+        return Text(labels.indices.contains(position) ? labels[position] : " ")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.white.opacity(0.35))
+    }
+
+    private func turn(to target: Int) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { pick(target) }
     }
 }

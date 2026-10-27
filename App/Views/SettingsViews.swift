@@ -6,6 +6,32 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showNewPreset = false
+
+    private func presetRow(_ preset: Preset) -> some View {
+        NavigationLink {
+            PresetEditorView(presetID: preset.id)
+        } label: {
+            HStack(spacing: 12) {
+                Group {
+                    if let cover = model.cover(for: preset.id) {
+                        Image(uiImage: cover).resizable().scaledToFill()
+                    } else {
+                        PresetSwatch(preset: preset, corner: 7)
+                    }
+                }
+                .frame(width: 52, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(preset.name)
+                    Text(PresetCardStyle.of(preset).subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+            }
+        }
+    }
+
     /// "0.1.0 (build 57)": the build is the CI run number, so every IPA can be told apart.
     static var version: String {
         let info = Bundle.main.infoDictionary
@@ -17,22 +43,20 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Presets") {
-                    ForEach(model.presets) { preset in
-                        NavigationLink {
-                            PresetEditorView(presetID: preset.id)
-                        } label: {
-                            HStack(spacing: 12) {
-                                PresetSwatch(preset: preset, corner: 7)
-                                    .frame(width: 52, height: 34)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(preset.name)
-                                    Text(PresetCardStyle.of(preset).subtitle)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Theme.secondaryText)
-                                }
-                            }
-                        }
+                Section {
+                    ForEach(model.presets.filter { !$0.isCustom }) { preset in presetRow(preset) }
+                } header: {
+                    Text("Built-in presets")
+                } footer: {
+                    Text("Built-in presets change only film speed, contrast curve and dynamic range. Make your own to change everything.")
+                }
+
+                Section("My presets") {
+                    ForEach(model.presets.filter(\.isCustom)) { preset in presetRow(preset) }
+                    Button {
+                        showNewPreset = true
+                    } label: {
+                        Label("New preset", systemImage: "plus")
                     }
                 }
 
@@ -87,6 +111,9 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Color.black)
+            .sheet(isPresented: $showNewPreset) {
+                NewPresetSheet(base: nil) { _ in }
+            }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

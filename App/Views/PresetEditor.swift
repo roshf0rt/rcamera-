@@ -9,6 +9,8 @@ import SwiftUI
 struct PresetEditorView: View {
     @Environment(AppModel.self) private var model
     let presetID: String
+    /// Opens a newly created preset; without it the new preset is only selected.
+    var onCreated: ((String) -> Void)?
 
     enum Tab: String, CaseIterable {
         case emulation = "EMULATION"
@@ -42,6 +44,13 @@ struct PresetEditorView: View {
     @State private var original: UIImage?
     @State private var showOriginal = false
     @State private var picked: PhotosPickerItem?
+    @State private var showNewPreset = false
+    @State private var coverItem: PhotosPickerItem?
+    @State private var confirmDelete = false
+    @Environment(\.dismiss) private var dismiss
+
+    /// Built-in presets only change film speed, contrast curve and dynamic range, as in mood.
+    private var isCustom: Bool { current.isCustom }
 
     private var preset: Preset? { model.preset(id: presetID) }
 
@@ -54,36 +63,18 @@ struct PresetEditorView: View {
         VStack(spacing: 12) {
             nameBar
             previewCard
-            tabBar
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    switch tab {
-                    case .emulation: emulation
-                    case .quality: quality
-                    case .tone: tone
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 40)
-                .id(tab)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            if isCustom {
+                tabBar
+                customControls
+            } else {
+                builtInControls
             }
-            .scrollIndicators(.hidden)
-            .animation(.spring(response: 0.35, dampingFraction: 0.88), value: tab)
         }
         .padding(.top, 8)
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            guard !loaded, let preset else { return }
-            loaded = true
-            name = preset.name
-            grain = preset.grain
-            halation = preset.halation
-            adjustments = preset.adjustments
-        }
+        .onAppear(perform: loadState)
         .task(id: presetID) { await reloadLUT() }
         .task(id: source) { await loadBase() }
         .task(id: renderKey) { await render() }
@@ -98,7 +89,22 @@ struct PresetEditorView: View {
                 }
             }
         }
+        .onChange(of: coverItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) { model.setCover(data, for: presetID) }
+            }
+        }
         .onDisappear(perform: save)
+        .sheet(isPresented: $showNewPreset) {
+            NewPresetSheet(base: current) { id in onCreated?(id) }
+        }
+        .confirmationDialog("Delete \(current.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                model.deletePreset(id: presetID)
+                dismiss()
+            }
+        }
         .background {
             Color.clear.fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
                 guard let slot = importSlot else { return }
@@ -120,6 +126,82 @@ struct PresetEditorView: View {
         } message: {
             Text(message ?? "")
         }
+    }
+
+    private func loadState() {
+        guard !loaded, let preset else { return }
+        loaded = true
+        name = preset.name
+        grain = preset.grain
+        halation = preset.halation
+        adjustments = preset.adjustments
+    }
+
+    /// Built-in preset: the Quality and Tone wheels and dynamic range, like mood's preset screen.
+    private var builtInControls: some View {
+        ScrollView {
+            VStack(spacing: 10) {
+                WheelPicker(title: "Quality", labels: FilmSpeed.allCases.map(\.label), index: selectedSpeed) { index in
+                    var g = grain
+                    FilmSpeed.allCases[index].apply(grain: &g, to: &adjustments)
+                    grain = g
+                    save()
+                }
+                WheelPicker(title: "Tone", labels: ContrastCurve.allCases.map { $0.label.uppercased() }, index: selectedCurve) { index in
+                    ContrastCurve.allCases[index].apply(to: &adjustments)
+                    save()
+                }
+                WheelPicker(title: "Dynamic range", labels: Self.rangeLabels, index: rangeIndex) { index in
+                    adjustments.dynamicRange = Self.rangeValues[index]
+                    save()
+                }
+                Text("Built-in presets keep their LUT and colour. To change anything else, make your own preset from this one.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+                Button { showNewPreset = true } label: {
+                    Label("New preset from \(current.name)", systemImage: "plus.square.on.square")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Capsule().fill(Theme.accent))
+                }
+                .buttonStyle(PressableStyle())
+                .padding(.top, 6)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 30)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    static let rangeLabels = ["ZERO", "LOW", "MED", "HIGH", "EXT+"]
+    static let rangeValues = [0, 1.0 / 3, 2.0 / 3, 1, 1.5]
+
+    private var rangeIndex: Int? {
+        Self.rangeValues.firstIndex { abs($0 - adjustments.dynamicRange) < 0.01 }
+    }
+
+    /// Custom preset: every regulator, in mood's three tabs.
+    private var customControls: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                switch tab {
+                case .emulation: emulation
+                case .quality: quality
+                case .tone: tone
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 40)
+            .id(tab)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+        .scrollIndicators(.hidden)
+        .animation(.spring(response: 0.35, dampingFraction: 0.88), value: tab)
     }
 
     // MARK: Preview
@@ -264,16 +346,31 @@ struct PresetEditorView: View {
                 PresetSwatch(preset: preset)
                     .frame(width: 40, height: 40)
             }
-            TextField("Name", text: $name)
-                .font(.system(size: 22, weight: .semibold))
-                .onSubmit(save)
+            if isCustom {
+                TextField("Name", text: $name)
+                    .font(.system(size: 22, weight: .semibold))
+                    .onSubmit(save)
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(.system(size: 22, weight: .semibold))
+                    Text("BUILT-IN").font(.system(size: 10, weight: .bold)).tracking(1).foregroundStyle(Theme.secondaryText)
+                }
+                Spacer()
+            }
             Button("Reset") {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                    adjustments = .neutral
-                    grain = preset?.grain ?? 0
-                    halation = preset?.halation ?? 0
+                    if isCustom {
+                        adjustments = .neutral
+                    } else {
+                        model.resetPreset(id: presetID)
+                        if let fresh = model.preset(id: presetID) {
+                            grain = fresh.grain
+                            halation = fresh.halation
+                            adjustments = fresh.adjustments
+                        }
+                    }
                 }
-                save()
+                if isCustom { save() }
             }
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(Theme.accent)
@@ -331,6 +428,7 @@ struct PresetEditorView: View {
                 ColourChartCard(look: adjustments, lut: lut)
             }
             lutSection
+            cardSection
         }
     }
 
@@ -408,6 +506,43 @@ struct PresetEditorView: View {
                     .font(.footnote)
                     .foregroundStyle(Theme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// The custom preset's card: colours, an optional photo, and deleting the preset.
+    private var cardSection: some View {
+        section("Card") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    ForEach(PresetCardStyle.all.indices, id: \.self) { index in
+                        Button {
+                            guard var updated = preset else { return }
+                            updated.accentIndex = index
+                            model.updatePreset(updated)
+                        } label: {
+                            Circle()
+                                .fill(PresetCardStyle.all[index].gradient)
+                                .frame(width: 26, height: 26)
+                                .overlay(Circle().strokeBorder(.white, lineWidth: current.accentIndex == index ? 2 : 0))
+                        }
+                        .buttonStyle(PressableStyle())
+                    }
+                }
+                HStack(spacing: 16) {
+                    PhotosPicker(selection: $coverItem, matching: .images) {
+                        Label(model.cover(for: presetID) == nil ? "Use a photo" : "Change photo", systemImage: "photo")
+                    }
+                    if model.cover(for: presetID) != nil {
+                        Button("Remove photo", role: .destructive) { model.setCover(nil, for: presetID) }
+                    }
+                    Spacer()
+                    Button(role: .destructive) { confirmDelete = true } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .tint(Theme.accent)
             }
         }
     }

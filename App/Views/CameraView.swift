@@ -18,6 +18,8 @@ struct CameraView: View {
     /// The preset name shown over the picture for a moment after a switch.
     @State private var presetToast: String?
     @State private var editingPresetID: String?
+    /// The new-preset sheet: `.some(nil)` starts from scratch, `.some(preset)` from that preset.
+    @State private var newPresetBase: Preset??
     @State private var showPresets = false
     @State private var showSettings = false
     @State private var showGallery = false
@@ -104,7 +106,7 @@ struct CameraView: View {
                     .offset(y: geo.size.height - controlsHeight - zoomLineHeight)
 
                 if showPresets {
-                    PresetPicker(onEdit: { editingPresetID = $0 })
+                    PresetPicker(onEdit: { editingPresetID = $0 }, onCreate: { newPresetBase = .some($0) })
                         .padding(.vertical, 10)
                         .background(Color.black.opacity(0.55))
                         .background(.ultraThinMaterial)
@@ -155,7 +157,8 @@ struct CameraView: View {
         .sheet(isPresented: Binding(get: { editingPresetID != nil }, set: { if !$0 { editingPresetID = nil } })) {
             if let id = editingPresetID {
                 NavigationStack {
-                    PresetEditorView(presetID: id)
+                    PresetEditorView(presetID: id, onCreated: { editingPresetID = $0 })
+                        .id(id)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("Done") { editingPresetID = nil }
@@ -164,6 +167,16 @@ struct CameraView: View {
                 }
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
+            }
+        }
+        .sheet(isPresented: Binding(get: { newPresetBase != nil }, set: { if !$0 { newPresetBase = nil } })) {
+            NewPresetSheet(base: newPresetBase ?? nil) { id in
+                newPresetBase = nil
+                // Straight into the editor, so the new preset can be tuned at once.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(450))
+                    editingPresetID = id
+                }
             }
         }
         .sheet(isPresented: $showSettings) { SettingsView() }

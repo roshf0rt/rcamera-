@@ -58,16 +58,64 @@ final class AppModel {
         pushLooks()
     }
 
-    /// Adds a custom preset as a copy of the selected one, and selects it so it can be edited right away.
-    func addPreset() {
-        guard let source = presets.first(where: { $0.id == settings.selectedPresetID }) ?? presets.first else { return }
+    /// Creates a custom preset, from scratch (`base` nil) or from another preset's look and LUTs, with
+    /// its own card colours and optional cover photo. Selects it and returns its id.
+    @discardableResult
+    func createPreset(name: String, base: Preset?, accentIndex: Int, cover: Data?) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let added = try presetLibrary.addCustom(copying: source)
+            let added = try presetLibrary.addCustom(copying: base, name: trimmed.isEmpty ? "New Preset" : trimmed, accentIndex: accentIndex)
+            if let cover { setCover(cover, for: added.id) }
             presets = presetLibrary.presets
             selectPreset(added.id)
+            return added.id
+        } catch {
+            alert = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Puts a built-in preset back to how it ships.
+    func resetPreset(id: String) {
+        do {
+            try presetLibrary.resetBuiltIn(id: id)
+            presets = presetLibrary.presets
+            invalidateLooks(for: id)
         } catch {
             alert = error.localizedDescription
         }
+    }
+
+    /// Card pictures of custom presets, loaded on demand.
+    private(set) var covers: [String: UIImage] = [:]
+
+    func cover(for presetID: String) -> UIImage? {
+        if let cached = covers[presetID] { return cached }
+        guard let url = presetLibrary.coverURL(for: presetID), let image = UIImage(contentsOfFile: url.path) else { return nil }
+        // Loaded lazily from a view's body, so the cache is filled outside the update.
+        Task { @MainActor in self.covers[presetID] = image }
+        return image
+    }
+
+    /// Stores a photo (or with nil removes it) as a custom preset's card picture, downsized to 600 px.
+    func setCover(_ data: Data?, for presetID: String) {
+        let jpeg = data.flatMap { UIImage(data: $0) }.flatMap { Self.coverJPEG($0) }
+        do {
+            try presetLibrary.setCover(jpeg, for: presetID)
+            covers[presetID] = jpeg.flatMap { UIImage(data: $0) }
+        } catch {
+            alert = error.localizedDescription
+        }
+    }
+
+    private static func coverJPEG(_ image: UIImage) -> Data? {
+        let longSide = max(image.size.width, image.size.height)
+        let factor = min(1, 600 / max(longSide, 1))
+        let size = CGSize(width: image.size.width * factor, height: image.size.height * factor)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let small = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        return small.jpegData(compressionQuality: 0.85)
     }
 
     /// Deletes a custom preset. Built-in presets are never removed.
@@ -76,6 +124,7 @@ final class AppModel {
             try presetLibrary.removeCustom(id: id)
             presets = presetLibrary.presets
             lookCache = lookCache.filter { !$0.key.hasPrefix("\(id)|") }
+            covers[id] = nil
             if settings.selectedPresetID == id, let first = presets.first { selectPreset(first.id) }
         } catch {
             alert = error.localizedDescription
