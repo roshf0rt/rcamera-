@@ -203,13 +203,68 @@ enum PhotoPipeline {
         return filter.outputImage?.cropped(to: extent)
     }
 
+    /// Draws a pattern in translucent white over the whole frame. The photo is drawn on top and hides the middle.
+    /// `edge` is the frame's side width, so the pattern scales with the photo.
+    static func drawPattern(_ pattern: FramePattern, in cg: CGContext, width: Int, height: Int, edge: CGFloat) {
+        let w = CGFloat(width)
+        let h = CGFloat(height)
+        cg.saveGState()
+        defer { cg.restoreGState() }
+        switch pattern {
+        case .none:
+            break
+        case .dots:
+            cg.setFillColor(UIColor.white.withAlphaComponent(0.25).cgColor)
+            let step = edge * 1.6
+            let radius = edge * 0.22
+            var y = step / 2
+            while y < h {
+                var x = step / 2
+                while x < w {
+                    cg.fillEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
+                    x += step
+                }
+                y += step
+            }
+        case .stripes:
+            cg.setStrokeColor(UIColor.white.withAlphaComponent(0.2).cgColor)
+            cg.setLineWidth(edge * 0.4)
+            let step = edge * 1.4
+            var x: CGFloat = -h
+            while x < w {
+                cg.move(to: CGPoint(x: x, y: h))
+                cg.addLine(to: CGPoint(x: x + h, y: 0))
+                x += step
+            }
+            cg.strokePath()
+        case .grid:
+            cg.setStrokeColor(UIColor.white.withAlphaComponent(0.2).cgColor)
+            cg.setLineWidth(max(1, edge * 0.08))
+            let step = edge * 0.9
+            var x: CGFloat = 0
+            while x <= w {
+                cg.move(to: CGPoint(x: x, y: 0))
+                cg.addLine(to: CGPoint(x: x, y: h))
+                x += step
+            }
+            var y: CGFloat = 0
+            while y <= h {
+                cg.move(to: CGPoint(x: 0, y: y))
+                cg.addLine(to: CGPoint(x: w, y: y))
+                y += step
+            }
+            cg.strokePath()
+        }
+    }
+
     private static func framedIfNeeded(_ image: CIImage, frame: FrameStyle, label: String, accentIndex: Int) -> CIImage {
-        guard frame != .off else { return image }
-        return framed(image, label: label, accentIndex: accentIndex) ?? image
+        let style = frame.resolved(accentIndex: accentIndex)
+        guard style != .off else { return image }
+        return framed(image, label: label, accentIndex: accentIndex, pattern: style.pattern) ?? image
     }
 
     /// The photo on a border: the preset card's gradient, with the preset name on the bottom band.
-    static func framed(_ image: CIImage, label: String, accentIndex: Int) -> CIImage? {
+    static func framed(_ image: CIImage, label: String, accentIndex: Int, pattern: FramePattern = .none) -> CIImage? {
         let extent = image.extent.integral
         let width = Int(extent.width)
         let height = Int(extent.height)
@@ -232,6 +287,7 @@ enum PhotoPipeline {
                     options: []
                 )
             }
+            drawPattern(pattern, in: context.cgContext, width: canvasWidth, height: canvasHeight, edge: CGFloat(min(width, height)) / 25)
             UIImage(cgImage: photo).draw(in: CGRect(x: layout.side, y: layout.top, width: width, height: height))
 
             let font = UIFont.systemFont(ofSize: CGFloat(layout.bottom) * 0.36, weight: .semibold)

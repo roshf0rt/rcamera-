@@ -231,9 +231,32 @@ final class FrameTests: XCTestCase {
         XCTAssertEqual(layout.bottom, 3)
     }
 
-    func testFrameStyleCyclesBackToOff() {
-        XCTAssertEqual(FrameStyle.off.next, .gradient)
-        XCTAssertEqual(FrameStyle.gradient.next, .off)
+    func testFrameStyleCyclesThroughEveryFrameAndBackToOff() {
+        var style = FrameStyle.off
+        var seen: [FrameStyle] = []
+        for _ in 0 ..< FrameStyle.allCases.count {
+            seen.append(style)
+            style = style.next
+        }
+        XCTAssertEqual(Set(seen).count, FrameStyle.allCases.count)
+        XCTAssertEqual(style, .off)
+    }
+
+    func testAutoResolvesToAFixedFrameForEveryPreset() {
+        for accent in 0 ..< 12 {
+            let resolved = FrameStyle.auto.resolved(accentIndex: accent)
+            XCTAssertNotEqual(resolved, .auto)
+            XCTAssertNotEqual(resolved, .off)
+        }
+        XCTAssertEqual(FrameStyle.off.resolved(accentIndex: 3), .off)
+        XCTAssertEqual(FrameStyle.dots.resolved(accentIndex: 3), .dots)
+    }
+
+    func testPatternsFollowTheirFrames() {
+        XCTAssertEqual(FrameStyle.gradient.pattern, .none)
+        XCTAssertEqual(FrameStyle.dots.pattern, .dots)
+        XCTAssertEqual(FrameStyle.stripes.pattern, .stripes)
+        XCTAssertEqual(FrameStyle.grid.pattern, .grid)
     }
 }
 
