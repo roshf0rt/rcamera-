@@ -17,6 +17,8 @@ struct CameraView: View {
     @State private var showLenses = false
     /// The preset name shown over the picture for a moment after a switch.
     @State private var presetToast: String?
+    /// The version, shown for a few seconds at launch so an installed build can be told apart.
+    @State private var showVersion = true
     @State private var editingPresetID: String?
     /// The new-preset sheet: `.some(nil)` starts from scratch, `.some(preset)` from that preset.
     @State private var newPresetBase: Preset??
@@ -121,6 +123,23 @@ struct CameraView: View {
 
                 topBar(engine: engine)
                     .frame(width: geo.size.width, height: topBarHeight)
+
+                if showVersion {
+                    Text("RCamera \(SettingsView.version)")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Theme.accent))
+                        .frame(width: geo.size.width)
+                        .offset(y: topBarHeight + 14)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                        .task {
+                            try? await Task.sleep(for: .seconds(4))
+                            withAnimation(.easeOut(duration: 0.4)) { showVersion = false }
+                        }
+                }
 
                 if showOptions {
                     OptionsPanel(
