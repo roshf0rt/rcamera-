@@ -98,7 +98,8 @@ struct SettingsView: View {
                         ForEach(VideoResolution.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
                     Picker("Frame rate", selection: model.binding(\.videoFPS)) {
-                        ForEach([24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
+                        let rates = model.engine.frameRates[model.settings.videoResolution.size.width] ?? []
+                        ForEach(rates.isEmpty ? [24, 30, 60] : rates, id: \.self) { Text("\($0) fps").tag($0) }
                     }
                     Picker("Stabilization", selection: model.binding(\.videoStabilization)) {
                         ForEach(VideoStabilization.allCases, id: \.self) { Text($0.label.capitalized).tag($0) }

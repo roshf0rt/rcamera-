@@ -77,6 +77,16 @@ public enum FormatChooser {
         return nil
     }
 
+    /// Frame rates offered for a video width: the standard ones some 16:9 format (or, for 1080p, the
+    /// photo format) can run. 120 shows up only on cameras that have it, e.g. 4K120 on recent Pro iPhones.
+    public static func frameRates(_ formats: [FormatDescriptor], width: Int, candidates: [Int] = [24, 30, 60, 120]) -> [Int] {
+        let photo = photoFormat(formats)
+        return candidates.filter { fps in
+            if width <= 1920, let photo, photo.width >= 1920, photo.maxFPS >= Double(fps) { return true }
+            return formats.contains { $0.isSixteenByNine && $0.width == width && $0.maxFPS >= Double(fps) }
+        }
+    }
+
     private static func sixteenByNine(_ formats: [FormatDescriptor], width: Int, fps: Int, appleLog: Bool) -> FormatDescriptor? {
         let candidates = formats.filter {
             $0.isSixteenByNine && $0.width == width && $0.maxFPS >= Double(fps) && (!appleLog || $0.supportsAppleLog)

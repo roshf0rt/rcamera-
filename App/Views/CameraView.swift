@@ -129,7 +129,8 @@ struct CameraView: View {
                         update: { change in model.updateSettings(change) },
                         openDynamicRange: {
                             withAnimation(Self.panelSpring) { showOptions = false; showDynamicRange = true }
-                        }
+                        },
+                        frameRates: engine.frameRates
                     )
                     .frame(width: geo.size.width)
                     .offset(y: topBarHeight + 6)
@@ -441,6 +442,25 @@ struct CameraView: View {
             }
             if engine.showsSwitchBlur {
                 Rectangle().fill(.ultraThinMaterial).transition(.opacity)
+            }
+            if engine.mode == .video, let readout = engine.cineReadout {
+                VStack {
+                    HStack {
+                        HStack(spacing: 6) {
+                            Text("180°").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.accent)
+                            Text(readout).font(.system(size: 12, weight: .medium, design: .monospaced))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.black.opacity(0.45)))
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
             if let toast = presetToast {
                 VStack(spacing: 2) {

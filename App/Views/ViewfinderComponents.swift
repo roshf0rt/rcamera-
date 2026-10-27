@@ -270,14 +270,19 @@ struct EVBubble: View {
 }
 
 /// The panel under the "..." button, a grid of four fixed-width cells per row so labels never wrap.
-/// Photo: Flash, Timer, Aspect, Frame, Range, Portrait. Video: FPS, Resolution, Stabilization.
+/// Photo: Flash, Timer, Aspect, Frame, Range, Portrait. Video: FPS, Resolution, Stabilization, Cine.
 struct OptionsPanel: View {
     let mode: CaptureMode
     let settings: AppSettings
     let update: ((inout AppSettings) -> Void) -> Void
     let openDynamicRange: () -> Void
+    /// Frame rates the camera runs, by video width; 120 appears only where the camera has it.
+    var frameRates: [Int: [Int]] = [:]
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 4)
+    /// Six photo options sit three by two, four video options in one row, so no cell is left empty.
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 4), count: mode == .photo ? 3 : 4)
+    }
 
     var body: some View {
         LazyVGrid(columns: columns, spacing: 14) {
@@ -324,11 +329,23 @@ struct OptionsPanel: View {
 
     @ViewBuilder
     private var videoOptions: some View {
-        option(title: "FPS", active: false, action: { update { $0.videoFPS = Self.nextFPS($0.videoFPS) } }) {
+        option(title: "FPS", active: settings.videoFPS > 60, action: {
+            let options = rates(for: settings.videoResolution)
+            update { $0.videoFPS = Self.next($0.videoFPS, in: options) }
+        }) {
             Text("\(settings.videoFPS)").font(.system(size: 18, weight: .semibold))
         }
         option(title: "Resolution", active: false, action: {
-            update { $0.videoResolution = $0.videoResolution == .hd1080 ? .uhd4K : .hd1080 }
+            let resolution: VideoResolution = settings.videoResolution == .hd1080 ? .uhd4K : .hd1080
+            let options = rates(for: resolution)
+            update {
+                $0.videoResolution = resolution
+                // A rate the new size cannot run steps down to the nearest one it can.
+                if !options.contains($0.videoFPS) {
+                    let current = settings.videoFPS
+                    $0.videoFPS = options.last { $0 <= current } ?? options.first ?? 30
+                }
+            }
         }) {
             Text(settings.videoResolution.label).font(.system(size: 18, weight: .semibold))
         }
@@ -341,11 +358,19 @@ struct OptionsPanel: View {
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(settings.videoStabilization == .off ? 0.1 : 0.28)))
         }
+        option(title: "Cine", active: settings.cineExposure, action: { update { $0.cineExposure.toggle() } }) {
+            Text("180°").font(.system(size: 17, weight: .semibold))
+        }
     }
 
-    private static func nextFPS(_ fps: Int) -> Int {
-        let options = [24, 30, 60]
-        return options[((options.firstIndex(of: fps) ?? 0) + 1) % options.count]
+    private func rates(for resolution: VideoResolution) -> [Int] {
+        let known = frameRates[resolution.size.width] ?? []
+        return known.isEmpty ? [24, 30, 60] : known
+    }
+
+    private static func next(_ fps: Int, in options: [Int]) -> Int {
+        guard !options.isEmpty else { return fps }
+        return options[((options.firstIndex(of: fps) ?? -1) + 1) % options.count]
     }
 
     private var flashSymbol: String {

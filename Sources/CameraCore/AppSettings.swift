@@ -183,6 +183,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var videoFPS = 30
     public var videoStabilization: VideoStabilization = .standard
     public var appleLogVideo = true
+    /// Video only: shutter held at the 180° rule, ISO does the exposure (see `CineExposure`).
+    public var cineExposure = false
     /// Bumped when defaults change; older files adopt the new defaults once.
     public var revision = AppSettings.currentRevision
 
@@ -199,7 +201,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, rawFormat, savesLocation, digitalZoomStop
         case grainLevel, halationEnabled, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle, photoResolution
-        case videoResolution, videoFPS, videoStabilization, appleLogVideo, revision
+        case videoResolution, videoFPS, videoStabilization, appleLogVideo, cineExposure, revision
     }
 
     /// Keys older settings files used.
@@ -240,6 +242,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo
+        cineExposure = (try? c.decode(Bool.self, forKey: .cineExposure)) ?? cineExposure
         revision = (try? c.decode(Int.self, forKey: .revision)) ?? 0
         if let stabilization = try? c.decode(VideoStabilization.self, forKey: .videoStabilization) {
             videoStabilization = stabilization

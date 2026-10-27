@@ -33,6 +33,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var appleLogActive: Bool
         /// The session was rebuilt, so the viewfinder paused for a moment.
         var didReconfigure: Bool
+        /// Frame rates the camera runs for each video width (1920, 3840).
+        var frameRates: [Int: [Int]] = [:]
     }
 
     struct PhotoOutcome: @unchecked Sendable {
@@ -192,7 +194,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let needsInput = videoInput == nil || currentPosition != position
         let candidate = needsInput ? self.device(for: position) : videoInput?.device
         guard let device = candidate else {
-            return DeviceInfo(focalLengths: ZoomStop.defaultFocalLengths, rawAvailable: false, appleLogActive: false, didReconfigure: false)
+            return DeviceInfo(focalLengths: ZoomStop.defaultFocalLengths, rawAvailable: false, appleLogActive: false, didReconfigure: false, frameRates: [:])
         }
 
         let formatPlan = self.plan(for: config, device: device)
@@ -239,12 +241,83 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
         if !session.isRunning { session.startRunning() }
 
+        let described = Self.describe(device.formats)
         return DeviceInfo(
             focalLengths: focalLengths(),
             rawAvailable: !photoOutput.availableRawPhotoPixelFormatTypes.isEmpty,
             appleLogActive: formatPlan.appleLog,
-            didReconfigure: structural && wasRunning
+            didReconfigure: structural && wasRunning,
+            frameRates: [1920: FormatChooser.frameRates(described, width: 1920), 3840: FormatChooser.frameRates(described, width: 3840)]
         )
+    }
+
+    // MARK: Cine exposure
+
+    private var cineTimer: DispatchSourceTimer?
+    private var cineFPS = 24
+    private var userLocked = false
+    /// Called on the main queue with "1/48 · ISO 320", or nil when the loop stops.
+    var onCineReadout: (@Sendable (String?) -> Void)?
+
+    /// Starts or stops cinematic auto exposure (`CineExposure`) for video at `fps`.
+    func setCineExposure(_ enabled: Bool, fps: Int) {
+        sessionQueue.async {
+            self.cineFPS = fps
+            if enabled {
+                guard self.cineTimer == nil else { return }
+                let timer = DispatchSource.makeTimerSource(queue: self.sessionQueue)
+                timer.schedule(deadline: .now(), repeating: .milliseconds(120))
+                timer.setEventHandler { [weak self] in self?.cineTick() }
+                self.cineTimer = timer
+                timer.resume()
+            } else if let timer = self.cineTimer {
+                timer.cancel()
+                self.cineTimer = nil
+                if let device = self.videoInput?.device, !self.userLocked, device.isExposureModeSupported(.continuousAutoExposure) {
+                    try? device.lockForConfiguration()
+                    device.exposureMode = .continuousAutoExposure
+                    device.unlockForConfiguration()
+                }
+                let report = self.onCineReadout
+                DispatchQueue.main.async { report?(nil) }
+            }
+        }
+    }
+
+    private var lastCineReadout: String?
+
+    private func cineTick() {
+        guard !userLocked, let device = videoInput?.device, device.isExposureModeSupported(.custom) else { return }
+        let format = device.activeFormat
+        let limits = CineExposure.Limits(
+            minISO: Double(format.minISO),
+            maxISO: Double(format.maxISO),
+            minDuration: format.minExposureDuration.seconds,
+            maxDuration: format.maxExposureDuration.seconds
+        )
+        let current = CineExposure.Setting(iso: Double(device.iso), duration: device.exposureDuration.seconds)
+        guard current.duration > 0, current.iso > 0 else { return }
+        let next = CineExposure.next(current: current, offset: Double(device.exposureTargetOffset), fps: cineFPS, limits: limits)
+        let changed = abs(next.iso - current.iso) / current.iso > 0.01 || abs(next.duration - current.duration) / current.duration > 0.01
+        if changed || device.exposureMode != .custom {
+            do {
+                try device.lockForConfiguration()
+                device.setExposureModeCustom(
+                    duration: CMTime(seconds: next.duration, preferredTimescale: 1_000_000),
+                    iso: Float(next.iso),
+                    completionHandler: nil
+                )
+                device.unlockForConfiguration()
+            } catch {
+                return
+            }
+        }
+        let readout = CineExposure.readout(next)
+        if readout != lastCineReadout {
+            lastCineReadout = readout
+            let report = onCineReadout
+            DispatchQueue.main.async { report?(readout) }
+        }
     }
 
     // MARK: Camera Control
@@ -557,7 +630,15 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     func setLocked(_ locked: Bool) {
         sessionQueue.async {
+            self.userLocked = locked
             guard let device = self.videoInput?.device else { return }
+            // Unlocking hands exposure back to the cine loop when it runs.
+            if !locked, self.cineTimer != nil {
+                try? device.lockForConfiguration()
+                if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+                device.unlockForConfiguration()
+                return
+            }
             try? device.lockForConfiguration()
             let focus: AVCaptureDevice.FocusMode = locked ? .locked : .continuousAutoFocus
             let exposure: AVCaptureDevice.ExposureMode = locked ? .locked : .continuousAutoExposure
@@ -576,7 +657,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 device.focusPointOfInterest = point
                 device.focusMode = lockAfter ? .autoFocus : .continuousAutoFocus
             }
-            if device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.autoExpose) {
+            // The cine loop owns exposure while it runs; a tap only moves the focus.
+            if self.cineTimer == nil, device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.autoExpose) {
                 device.exposurePointOfInterest = point
                 device.exposureMode = lockAfter ? .autoExpose : .continuousAutoExposure
             }

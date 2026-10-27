@@ -241,3 +241,59 @@ final class AppleLogTests: XCTestCase {
         XCTAssertEqual(chained.r, 1 - direct.r, accuracy: 0.01)
     }
 }
+
+final class CineExposureTests: XCTestCase {
+    private let limits = CineExposure.Limits(minISO: 50, maxISO: 3200, minDuration: 1.0 / 20000, maxDuration: 1.0 / 3)
+
+    func testShutterFollowsTheHundredEightyDegreeRule() {
+        XCTAssertEqual(CineExposure.shutter(fps: 24), 1.0 / 48, accuracy: 1e-12)
+        XCTAssertEqual(CineExposure.shutter(fps: 30), 1.0 / 60, accuracy: 1e-12)
+        XCTAssertEqual(CineExposure.shutter(fps: 120), 1.0 / 240, accuracy: 1e-12)
+    }
+
+    func testISOCarriesTheExposureAtTheCineShutter() {
+        // Auto exposure had picked 1/120 at ISO 400; at 24 fps the shutter moves to 1/48 and ISO drops to keep the light.
+        let start = CineExposure.Setting(iso: 400, duration: 1.0 / 120)
+        let next = CineExposure.next(current: start, offset: 0, fps: 24, limits: limits)
+        XCTAssertEqual(next.duration, 1.0 / 48, accuracy: 1e-12)
+        XCTAssertEqual(next.iso * next.duration, start.iso * start.duration, accuracy: 1e-9)
+    }
+
+    func testTooBrightLowersISOAndOnlyThenShortensTheShutter() {
+        let start = CineExposure.Setting(iso: 100, duration: 1.0 / 48)
+        let darker = CineExposure.next(current: start, offset: 1, fps: 24, limits: limits)
+        XCTAssertEqual(darker.duration, 1.0 / 48, accuracy: 1e-12)
+        XCTAssertLessThan(darker.iso, 100)
+
+        let sunny = CineExposure.Setting(iso: 50, duration: 1.0 / 48)
+        let faster = CineExposure.next(current: sunny, offset: 3, fps: 24, limits: limits)
+        XCTAssertEqual(faster.iso, 50)
+        XCTAssertLessThan(faster.duration, 1.0 / 48, "no ND filter: the shutter has to give way")
+    }
+
+    func testTooDarkRaisesISOAndNeverExposesLongerThanAFrame() {
+        let night = CineExposure.Setting(iso: 3200, duration: 1.0 / 48)
+        let slower = CineExposure.next(current: night, offset: -4, fps: 24, limits: limits)
+        XCTAssertEqual(slower.iso, 3200)
+        XCTAssertGreaterThan(slower.duration, 1.0 / 48)
+        XCTAssertLessThanOrEqual(slower.duration, 1.0 / 24 + 1e-12)
+    }
+
+    func testSmallOffsetsAreLeftAlone() {
+        let start = CineExposure.Setting(iso: 200, duration: 1.0 / 48)
+        XCTAssertEqual(CineExposure.next(current: start, offset: 0.03, fps: 24, limits: limits), start)
+        XCTAssertEqual(CineExposure.readout(start), "1/48 · ISO 200")
+    }
+
+    func testFrameRatesOnlyListWhatTheCameraRuns() {
+        let formats = [
+            FormatDescriptor(index: 0, width: 1920, height: 1440, maxFPS: 60, maxPhotoPixels: 12_000_000),
+            FormatDescriptor(index: 1, width: 1920, height: 1080, maxFPS: 240),
+            FormatDescriptor(index: 2, width: 3840, height: 2160, maxFPS: 60),
+        ]
+        XCTAssertEqual(FormatChooser.frameRates(formats, width: 1920), [24, 30, 60, 120])
+        XCTAssertEqual(FormatChooser.frameRates(formats, width: 3840), [24, 30, 60])
+        let pro = formats + [FormatDescriptor(index: 3, width: 3840, height: 2160, maxFPS: 120)]
+        XCTAssertEqual(FormatChooser.frameRates(pro, width: 3840), [24, 30, 60, 120])
+    }
+}

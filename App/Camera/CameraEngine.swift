@@ -41,6 +41,10 @@ final class CameraEngine {
     private(set) var recordingSeconds = 0.0
     private(set) var isCapturing = false
     private(set) var rawAvailable = false
+    /// Frame rates the camera runs, by video width.
+    private(set) var frameRates: [Int: [Int]] = [:]
+    /// Shutter and ISO while cine exposure runs, e.g. "1/48 · ISO 320".
+    private(set) var cineReadout: String?
     private(set) var appleLogActive = false
     /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
     private(set) var showsSwitchBlur = false
@@ -118,6 +122,17 @@ final class CameraEngine {
             }
         }
         updateHub()
+        syncCineExposure()
+    }
+
+    /// Cine exposure runs in video mode when the setting is on.
+    private func syncCineExposure() {
+        if controller.onCineReadout == nil {
+            controller.onCineReadout = { [weak self] text in
+                Task { @MainActor in self?.cineReadout = text }
+            }
+        }
+        controller.setCineExposure(settings.cineExposure && mode == .video, fps: settings.videoFPS)
     }
 
     // MARK: User actions
@@ -291,6 +306,8 @@ final class CameraEngine {
         focalLengths = info.focalLengths
         rawAvailable = info.rawAvailable
         appleLogActive = info.appleLogActive
+        if !info.frameRates.isEmpty { frameRates = info.frameRates }
+        syncCineExposure()
         refreshStops()
         updateHub()
         return info
