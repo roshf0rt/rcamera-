@@ -63,6 +63,37 @@ public enum DigitalZoomStop: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// The GRAIN switch on the camera screen steps through these. The preset's grain is scaled by `multiplier`.
+public enum GrainLevel: String, CaseIterable, Codable, Sendable {
+    case off
+    case low
+    case medium
+    case high
+
+    public var multiplier: Double {
+        switch self {
+        case .off: 0
+        case .low: 0.5
+        case .medium: 1
+        case .high: 1.7
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .off: "OFF"
+        case .low: "LOW"
+        case .medium: "MED"
+        case .high: "HIGH"
+        }
+    }
+
+    public var next: GrainLevel {
+        let all = Self.allCases
+        return all[(all.firstIndex(of: self)! + 1) % all.count]
+    }
+}
+
 /// Which RAW the camera keeps. ProRAW is Apple's merged, tone-mapped DNG; Bayer is the single sensor frame,
 /// flatter and noisier, closer to a classic camera RAW.
 public enum RAWFormat: String, CaseIterable, Codable, Sendable {
@@ -126,7 +157,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var savesLocation = true
     public var digitalZoomStop: DigitalZoomStop = .none
     /// Quick toggles on the camera screen. The amounts come from the selected preset.
-    public var grainEnabled = true
+    public var grainLevel: GrainLevel = .medium
+    /// Grain on at any level. Setting it on restores the preset's own amount.
+    public var grainEnabled: Bool {
+        get { grainLevel != .off }
+        set { grainLevel = newValue ? (grainLevel == .off ? .medium : grainLevel) : .off }
+    }
     public var halationEnabled = true
     /// Photo border with the preset name. Off by default.
     public var frame: FrameStyle = .off
@@ -162,8 +198,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, rawFormat, savesLocation, digitalZoomStop
-        case grainEnabled, halationEnabled, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle, photoResolution
+        case grainLevel, halationEnabled, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle, photoResolution
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, revision
+    }
+
+    /// Keys older settings files used.
+    enum LegacyKeys: String, CodingKey {
+        case grainEnabled
     }
 
     /// Missing or unreadable keys keep their defaults, so older settings files keep working.
@@ -182,7 +223,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         rawFormat = (try? c.decode(RAWFormat.self, forKey: .rawFormat)) ?? rawFormat
         savesLocation = (try? c.decode(Bool.self, forKey: .savesLocation)) ?? savesLocation
         digitalZoomStop = (try? c.decode(DigitalZoomStop.self, forKey: .digitalZoomStop)) ?? digitalZoomStop
-        grainEnabled = (try? c.decode(Bool.self, forKey: .grainEnabled)) ?? grainEnabled
+        if let level = try? c.decode(GrainLevel.self, forKey: .grainLevel) {
+            grainLevel = level
+        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self).decode(Bool.self, forKey: .grainEnabled) {
+            grainLevel = legacy ? .medium : .off
+        }
         halationEnabled = (try? c.decode(Bool.self, forKey: .halationEnabled)) ?? halationEnabled
         frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? frame
         volumeShutter = (try? c.decode(Bool.self, forKey: .volumeShutter)) ?? volumeShutter
@@ -190,7 +235,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         portrait = (try? c.decode(Bool.self, forKey: .portrait)) ?? portrait
         portraitFNumber = PortraitAperture.nearest(to: (try? c.decode(Double.self, forKey: .portraitFNumber)) ?? portraitFNumber)
         lensStyle = (try? c.decode(LensStyle.self, forKey: .lensStyle)) ?? lensStyle
-        photoResolution = (try? c.decode(PhotoResolution.self, forKey: .photoResolution)) ?? photoResolution
+        // 48 MP was taken out of the camera screen; a stored choice falls back to 12 MP.
+        photoResolution = .mp12
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo

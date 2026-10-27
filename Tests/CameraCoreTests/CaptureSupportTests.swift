@@ -227,6 +227,30 @@ final class VideoGapFillerTests: XCTestCase {
 }
 
 final class SettingsMigrationTests: XCTestCase {
+    func testGrainLevelStepsAndOldSwitchStillLoads() throws {
+        XCTAssertEqual(GrainLevel.off.next, .low)
+        XCTAssertEqual(GrainLevel.high.next, .off)
+        XCTAssertEqual(GrainLevel.medium.multiplier, 1)
+        var settings = AppSettings()
+        XCTAssertEqual(settings.grainLevel, .medium)
+        settings.grainEnabled = false
+        XCTAssertEqual(settings.grainLevel, .off)
+        settings.grainEnabled = true
+        XCTAssertEqual(settings.grainLevel, .medium)
+
+        let old = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"grainEnabled":false}"#.utf8))
+        XCTAssertEqual(old.grainLevel, .off)
+        var high = AppSettings()
+        high.grainLevel = .high
+        let roundTrip = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(high))
+        XCTAssertEqual(roundTrip.grainLevel, .high)
+    }
+
+    func testStoredFortyEightMegapixelsFallsBackToTwelve() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"photoResolution":"mp48"}"#.utf8))
+        XCTAssertEqual(settings.photoResolution, .mp12)
+    }
+
     func testOldSettingsFileKeepsValuesAndGainsDefaults() throws {
         // Written by the first release: boolean stabilization, no crop stop, no Apple Log.
         let json = """

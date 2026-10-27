@@ -15,6 +15,8 @@ struct CameraView: View {
     @State private var showDynamicRange = false
     @State private var apertureOpen = false
     @State private var showLenses = false
+    /// The lens is being picked by holding its pill and sliding.
+    @State private var lensScrubbing = false
     /// The preset name shown over the picture for a moment after a switch.
     @State private var presetToast: String?
     /// The version, shown for a few seconds at launch so an installed build can be told apart.
@@ -59,36 +61,23 @@ struct CameraView: View {
                 }
 
                 if model.settings.portrait, engine.mode == .photo {
-                    HStack(spacing: 8) {
-                        ApertureControl(
-                            fNumber: model.settings.portraitFNumber,
-                            expanded: $apertureOpen
-                        ) { stop in
-                            model.updateSettings { $0.portraitFNumber = stop }
-                            apertureOpen = false
+                    portraitControls
+                        .frame(width: geo.size.width, height: 44)
+                        .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50)
+                        .transition(.opacity)
+                }
+
+                if apertureOpen || lensScrubbing {
+                    Group {
+                        if apertureOpen {
+                            ApertureOverlay(fNumber: model.settings.portraitFNumber)
+                        } else {
+                            LensOverlay(lens: model.settings.lensStyle)
                         }
-                        Button {
-                            withAnimation(Self.panelSpring) { showLenses.toggle(); showPresets = false; showOptions = false }
-                        } label: {
-                            HStack(spacing: 8) {
-                                LensPreview(lens: model.settings.lensStyle)
-                                    .frame(width: 24, height: 24)
-                                    .clipShape(Circle())
-                                Text(model.settings.lensStyle.label)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .tracking(0.6)
-                            }
-                            .foregroundStyle(showLenses ? Theme.accent : .white)
-                            .padding(.leading, 7)
-                            .padding(.trailing, 14)
-                            .frame(height: 38)
-                            .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
-                        }
-                        .buttonStyle(PressableStyle())
                     }
-                    .frame(width: geo.size.width, height: 44)
-                    .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50)
-                    .transition(.opacity)
+                    .frame(width: geo.size.width)
+                    .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50 - 290)
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
                 }
 
                 if showLenses, model.settings.portrait, engine.mode == .photo {
@@ -277,8 +266,8 @@ struct CameraView: View {
             if engine.isRecording {
                 recordingBadge(engine: engine)
             } else {
-                EffectToggle(title: "GRAIN", isOn: model.settings.grainEnabled) {
-                    model.updateSettings { $0.grainEnabled.toggle() }
+                GrainToggle(level: model.settings.grainLevel) {
+                    model.updateSettings { $0.grainLevel = $0.grainLevel.next }
                 }
                 EffectToggle(title: "HALATION", isOn: model.settings.halationEnabled) {
                     model.updateSettings { $0.halationEnabled.toggle() }
@@ -296,6 +285,70 @@ struct CameraView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
+    }
+
+    // MARK: Portrait
+
+    private var sortedLenses: [LensStyle] { LensStyle.allCases.sorted { $0.order < $1.order } }
+
+    /// The f-number and lens pills. Hold either and slide to change it, as in mood; a tap on the lens
+    /// opens the lens cards, a tap on the f-number steps to the next stop.
+    private var portraitControls: some View {
+        let stops = PortraitAperture.stops
+        let stopIndex = stops.firstIndex(of: model.settings.portraitFNumber) ?? 0
+        let lensIndex = sortedLenses.firstIndex(of: model.settings.lensStyle) ?? 0
+        return HStack(spacing: 8) {
+            HStack(spacing: 7) {
+                ApertureShape(roundness: 0.3, rotation: .zero)
+                    .stroke(.white, lineWidth: 1.8)
+                    .frame(width: 16, height: 16)
+                Text("ƒ" + ApertureOverlay.format(model.settings.portraitFNumber))
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .contentTransition(.numericText())
+            }
+            .foregroundStyle(apertureOpen ? Theme.accent : .white)
+            .padding(.horizontal, 14)
+            .frame(height: 38)
+            .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
+            .scaleEffect(apertureOpen ? 1.08 : 1)
+            .contentShape(Capsule())
+            .modifier(HoldScrub(
+                count: stops.count,
+                index: stopIndex,
+                began: { withAnimation(Self.panelSpring) { apertureOpen = true; showLenses = false } },
+                changed: { model.updateSettings { $0.portraitFNumber = stops[$0] } },
+                ended: { withAnimation(Self.panelSpring) { apertureOpen = false } },
+                tapped: { model.updateSettings { $0.portraitFNumber = stops[(stopIndex + 1) % stops.count] } }
+            ))
+
+            HStack(spacing: 8) {
+                LensPreview(lens: model.settings.lensStyle)
+                    .frame(width: 24, height: 24)
+                    .clipShape(Circle())
+                Text(model.settings.lensStyle.label)
+                    .font(.system(size: 14, weight: .semibold))
+                    .tracking(0.6)
+            }
+            .foregroundStyle(showLenses || lensScrubbing ? Theme.accent : .white)
+            .padding(.leading, 7)
+            .padding(.trailing, 14)
+            .frame(height: 38)
+            .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
+            .scaleEffect(lensScrubbing ? 1.08 : 1)
+            .contentShape(Capsule())
+            .modifier(HoldScrub(
+                count: sortedLenses.count,
+                index: lensIndex,
+                step: 40,
+                began: { withAnimation(Self.panelSpring) { lensScrubbing = true; showLenses = false } },
+                changed: { index in model.updateSettings { $0.lensStyle = sortedLenses[index] } },
+                ended: { withAnimation(Self.panelSpring) { lensScrubbing = false } },
+                tapped: { withAnimation(Self.panelSpring) { showLenses.toggle(); showPresets = false; showOptions = false } }
+            ))
+        }
+        .animation(Self.panelSpring, value: apertureOpen)
+        .animation(Self.panelSpring, value: lensScrubbing)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: model.settings.portraitFNumber)
     }
 
     // MARK: Viewfinder
@@ -610,6 +663,46 @@ struct EffectToggle: View {
         }
         .buttonStyle(.plain)
         .sensoryFeedback(.selection, trigger: isOn)
+    }
+}
+
+/// The GRAIN switch: each tap steps Off, Low, Med, High. Three bars show the level.
+struct GrainToggle: View {
+    let level: GrainLevel
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                HStack(alignment: .bottom, spacing: 2) {
+                    ForEach(1 ... 3, id: \.self) { bar in
+                        Capsule()
+                            .fill(bar <= Self.bars(level) ? Theme.accent : Color(white: 0.35))
+                            .frame(width: 3, height: CGFloat(4 + bar * 3))
+                    }
+                }
+                Text(level == .off ? "GRAIN" : "GRAIN \(level.label)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .tracking(0.6)
+                    .contentTransition(.numericText())
+            }
+            .foregroundStyle(level == .off ? Theme.secondaryText : .white)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(Capsule().fill(Theme.chrome))
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: level)
+        }
+        .buttonStyle(PressableStyle())
+        .sensoryFeedback(.selection, trigger: level)
+    }
+
+    private static func bars(_ level: GrainLevel) -> Int {
+        switch level {
+        case .off: 0
+        case .low: 1
+        case .medium: 2
+        case .high: 3
+        }
     }
 }
 

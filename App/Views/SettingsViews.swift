@@ -52,7 +52,16 @@ struct SettingsView: View {
                 }
 
                 Section("My presets") {
-                    ForEach(model.presets.filter(\.isCustom)) { preset in presetRow(preset) }
+                    ForEach(model.presets.filter(\.isCustom)) { preset in
+                        presetRow(preset)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    withAnimation { model.deletePreset(id: preset.id) }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                    }
                     Button {
                         showNewPreset = true
                     } label: {

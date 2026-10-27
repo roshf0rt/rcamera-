@@ -270,7 +270,7 @@ struct EVBubble: View {
 }
 
 /// The panel under the "..." button, a grid of four fixed-width cells per row so labels never wrap.
-/// Photo: Flash, Timer, Aspect, Frame, Range, Portrait, Size. Video: FPS, Resolution, Range, Stabilization.
+/// Photo: Flash, Timer, Aspect, Frame, Range, Portrait. Video: FPS, Resolution, Stabilization.
 struct OptionsPanel: View {
     let mode: CaptureMode
     let settings: AppSettings
@@ -311,9 +311,6 @@ struct OptionsPanel: View {
         option(title: "Portrait", active: settings.portrait, action: { update { $0.portrait.toggle() } }) {
             Image(systemName: "person.crop.circle").font(.system(size: 22))
         }
-        option(title: "Size", active: settings.photoResolution != .mp12, action: { update { $0.photoResolution = $0.photoResolution.next } }) {
-            Text(settings.photoResolution.label).font(.system(size: 16, weight: .semibold))
-        }
     }
 
     private var dynamicRangeOption: some View {
@@ -335,7 +332,6 @@ struct OptionsPanel: View {
         }) {
             Text(settings.videoResolution.label).font(.system(size: 18, weight: .semibold))
         }
-        dynamicRangeOption
         option(title: "Stabilize", active: settings.videoStabilization != .off, action: { update { $0.videoStabilization = $0.videoStabilization.next } }) {
             Text(settings.videoStabilization.label)
                 .font(.system(size: 12, weight: .bold))
@@ -408,38 +404,201 @@ struct DynamicRangeStrip: View {
     }
 }
 
-/// The f-number pill over the viewfinder in portrait mode. Tapped open, it lists the stops.
-struct ApertureControl: View {
-    let fNumber: Double
-    @Binding var expanded: Bool
-    let pick: (Double) -> Void
+/// Hold, then slide sideways to pick from a list, as mood's aperture and lens controls work: the control
+/// opens when the press is held, follows the finger while it stays down, and closes on release. A quick
+/// tap runs `tapped` instead.
+struct HoldScrub: ViewModifier {
+    let count: Int
+    let index: Int
+    var step: CGFloat = 34
+    let began: () -> Void
+    let changed: (Int) -> Void
+    let ended: () -> Void
+    let tapped: () -> Void
+
+    @State private var start: Int?
+
+    func body(content: Content) -> some View {
+        content.gesture(
+            LongPressGesture(minimumDuration: 0.18)
+                .sequenced(before: DragGesture(minimumDistance: 0))
+                .onChanged { value in
+                    switch value {
+                    case .first(true):
+                        begin()
+                    case .second(true, let drag):
+                        begin()
+                        guard let drag, let start else { return }
+                        // The scale follows the finger: sliding right brings the lower values in.
+                        let moved = Int((drag.translation.width / step).rounded())
+                        let target = min(max(start - moved, 0), count - 1)
+                        if target != index {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            changed(target)
+                        }
+                    default:
+                        break
+                    }
+                }
+                .onEnded { _ in
+                    start = nil
+                    ended()
+                }
+                .exclusively(before: TapGesture().onEnded { tapped() })
+        )
+    }
+
+    private func begin() {
+        guard start == nil else { return }
+        start = index
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        began()
+    }
+}
+
+/// A sideways scale of values centred on the current one, the neighbours fading out, as under mood's
+/// aperture dial.
+struct ScaleStrip: View {
+    let labels: [String]
+    let index: Int
+    var spacing: CGFloat = 64
 
     var body: some View {
-        HStack(spacing: 8) {
-            if expanded {
-                ForEach(PortraitAperture.stops, id: \.self) { stop in
-                    Button { pick(stop) } label: {
-                        Text(String(format: "%.1f", stop))
-                            .font(.system(size: 15, weight: .medium, design: .monospaced))
-                            .foregroundStyle(stop == fNumber ? Theme.accent : .white)
-                            .frame(minWidth: 42)
-                    }
-                    .buttonStyle(.plain)
+        GeometryReader { geo in
+            ZStack {
+                ForEach(labels.indices, id: \.self) { item in
+                    let distance = abs(item - index)
+                    Text(labels[item])
+                        .font(.system(size: item == index ? 26 : 22, weight: item == index ? .semibold : .medium))
+                        .foregroundStyle(item == index ? Theme.accent : .white.opacity(distance == 1 ? 0.75 : 0.3))
+                        .fixedSize()
+                        .position(x: geo.size.width / 2 + CGFloat(item - index) * spacing, y: geo.size.height / 2)
                 }
-            } else {
-                Button { expanded = true } label: {
-                    HStack(spacing: 6) {
-                        Text("ƒ").font(.system(size: 16, weight: .semibold))
-                        Text(String(format: "%.1f", fNumber)).font(.system(size: 16, weight: .medium, design: .monospaced))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .frame(height: 38)
-                }
-                .buttonStyle(.plain)
             }
+            .animation(.spring(response: 0.28, dampingFraction: 0.82), value: index)
         }
-        .padding(.horizontal, 6)
-        .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
+        .frame(height: 36)
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.25),
+                                     .init(color: .black, location: 0.75), .init(color: .clear, location: 1)],
+                             startPoint: .leading, endPoint: .trailing))
+    }
+}
+
+/// A polygon with rounded corners: the aperture blades. Roundness 0 is sharp, 1 nearly a circle.
+struct ApertureShape: Shape {
+    var sides = 6
+    var roundness: CGFloat
+    var rotation: Angle
+
+    var animatableData: AnimatablePair<CGFloat, Double> {
+        get { AnimatablePair(roundness, rotation.radians) }
+        set { roundness = newValue.first; rotation = .radians(newValue.second) }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let centre = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+        let points = (0 ..< sides).map { side -> CGPoint in
+            let angle = rotation.radians + Double(side) * 2 * .pi / Double(sides) - .pi / 2
+            return CGPoint(x: centre.x + radius * cos(angle), y: centre.y + radius * sin(angle))
+        }
+        let edge = 2 * radius * sin(.pi / CGFloat(sides))
+        let corner = max(0.5, roundness * edge * 0.5)
+        var path = Path()
+        let last = points[sides - 1], first = points[0]
+        path.move(to: CGPoint(x: (last.x + first.x) / 2, y: (last.y + first.y) / 2))
+        for side in 0 ..< sides {
+            let point = points[side], next = points[(side + 1) % sides]
+            path.addArc(tangent1End: point, tangent2End: CGPoint(x: (point.x + next.x) / 2, y: (point.y + next.y) / 2), radius: corner)
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// The big aperture shown while the f-number is being dragged: a glowing out-of-focus light seen through
+/// six blades that close as the number goes up, a dotted ring, and the scale of stops.
+struct ApertureOverlay: View {
+    let fNumber: Double
+
+    private var index: Int { PortraitAperture.stops.firstIndex(of: fNumber) ?? 0 }
+    /// 1 wide open, about 0.45 at f/16.
+    private var openness: CGFloat {
+        let t = log(fNumber / 1.4) / log(16 / 1.4)
+        return CGFloat(1 - 0.55 * t)
+    }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [0.1, 10]))
+                    .frame(width: 150, height: 150)
+                let shape = ApertureShape(roundness: openness * 0.9, rotation: .degrees(Double(openness) * 30))
+                ZStack {
+                    Circle().fill(Color(red: 1, green: 0.62, blue: 0.2)).frame(width: 70).offset(x: 6, y: -24)
+                    Circle().fill(Color(red: 0.5, green: 0.15, blue: 0.95)).frame(width: 80).offset(x: -18, y: 14)
+                    Circle().fill(Color(red: 0.95, green: 0.3, blue: 0.15)).frame(width: 64).offset(x: 24, y: 16)
+                }
+                .blur(radius: 14)
+                .frame(width: 110, height: 110)
+                .clipShape(shape)
+                .overlay(shape.stroke(.white, lineWidth: 4))
+                .frame(width: 110 * openness + 20, height: 110 * openness + 20)
+                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: fNumber)
+            }
+            .frame(height: 160)
+            ScaleStrip(labels: PortraitAperture.stops.map(Self.format), index: index)
+                .frame(width: 300)
+            Text("APERTURE")
+                .font(.system(size: 13, weight: .semibold))
+                .tracking(1)
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Color.black.opacity(0.55)))
+        }
+        .shadow(color: .black.opacity(0.35), radius: 12)
+        .allowsHitTesting(false)
+    }
+
+    static func format(_ value: Double) -> String {
+        value == value.rounded() && value >= 10 ? String(Int(value)) : String(format: "%.1f", value)
+    }
+}
+
+/// The big lens shown while the lens is being dragged: its bokeh in a ring, its name and character.
+struct LensOverlay: View {
+    let lens: LensStyle
+
+    private var lenses: [LensStyle] { LensStyle.allCases.sorted { $0.order < $1.order } }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [0.1, 10]))
+                    .frame(width: 150, height: 150)
+                LensPreview(lens: lens)
+                    .frame(width: 118, height: 118)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(.white, lineWidth: 3))
+                    .id(lens)
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+            }
+            .frame(height: 160)
+            .animation(.spring(response: 0.3, dampingFraction: 0.78), value: lens)
+            ScaleStrip(labels: lenses.map(\.label), index: lenses.firstIndex(of: lens) ?? 0, spacing: 76)
+                .frame(width: 320)
+            Text(lens.summary.uppercased())
+                .font(.system(size: 12, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Color.black.opacity(0.55)))
+        }
+        .shadow(color: .black.opacity(0.35), radius: 12)
+        .allowsHitTesting(false)
     }
 }

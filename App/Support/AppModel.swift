@@ -160,7 +160,7 @@ final class AppModel {
         var updated = settings
         change(&updated)
         guard updated != settings else { return }
-        let togglesChanged = updated.grainEnabled != settings.grainEnabled
+        let togglesChanged = updated.grainLevel != settings.grainLevel
             || updated.halationEnabled != settings.halationEnabled
             || updated.dynamicRange != settings.dynamicRange
         settings = updated
@@ -282,8 +282,14 @@ final class AppModel {
 
     /// The preset's look with the camera-screen grain and halation toggles applied.
     func cameraLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
-        let look = await baseLook(for: preset, slot: slot).with(grain: settings.grainEnabled, halation: settings.halationEnabled)
-        guard let range = settings.dynamicRange.value else { return look }
+        let base = await baseLook(for: preset, slot: slot)
+        let look = base.with(
+            grain: min(1, base.grain * settings.grainLevel.multiplier),
+            halation: settings.halationEnabled ? base.halation : 0,
+            adjustments: base.adjustments
+        )
+        // The dynamic-range strip is a photo control; video keeps the preset's own range.
+        guard slot == .photo, let range = settings.dynamicRange.value else { return look }
         return look.with { $0.dynamicRange = range }
     }
 
