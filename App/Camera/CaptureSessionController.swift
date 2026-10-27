@@ -37,6 +37,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var didReconfigure: Bool
         /// Frame rates the camera runs for each video width (1920, 3840).
         var frameRates: [Int: [Int]] = [:]
+        /// The camera in use, for `AVCaptureDevice(uniqueID:)`.
+        var deviceID: String?
     }
 
     struct PhotoOutcome: @unchecked Sendable {
@@ -96,6 +98,13 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     /// `AVCaptureIndexPicker`s by title, kept to move their selection when the app changes it.
     private var indexPickers: [String: AnyObject] = [:]
     private var controlsDelegate: AnyObject?
+    /// The rotation that stands each camera's frames upright on the portrait screen, by device. 90 for the
+    /// back cameras; front cameras are measured (`setPortraitAngle`), as some are mounted differently.
+    private var portraitAngles: [String: CGFloat] = [:]
+
+    private var portraitAngle: CGFloat {
+        videoInput.flatMap { portraitAngles[$0.device.uniqueID] } ?? 90
+    }
 
     override init() {
         hub = FrameHub(queue: captureQueue)
@@ -265,56 +274,108 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             rawAvailable: !photoOutput.availableRawPhotoPixelFormatTypes.isEmpty,
             appleLogActive: formatPlan.appleLog,
             didReconfigure: structural && wasRunning,
-            frameRates: [1920: FormatChooser.frameRates(described, width: 1920), 3840: FormatChooser.frameRates(described, width: 3840)]
+            frameRates: [1920: FormatChooser.frameRates(described, width: 1920), 3840: FormatChooser.frameRates(described, width: 3840)],
+            deviceID: device.uniqueID
         )
     }
 
-    // MARK: Cine exposure
-
-    private var cineTimer: DispatchSourceTimer?
-    private var cineFPS = 24
-    private var userLocked = false
-    /// What the cine loop shows: shutter and ISO, and how they stand against the cinematic rule.
-    struct CineState: Equatable, Sendable {
-        var readout: String
-        var status: CineExposure.Status
-    }
-
-    /// Called on the main queue with the loop's state, or nil when it stops.
-    var onCineState: (@Sendable (CineState?) -> Void)?
-    /// Mains frequency where the phone is, for flicker-free shutter times.
-    private let mainsHz = CineExposure.mainsFrequency(regionCode: Locale.current.region?.identifier)
-
-    /// Starts or stops cinematic auto exposure (`CineExposure`) for video at `fps`.
-    func setCineExposure(_ enabled: Bool, fps: Int) {
+    /// Sets how far a camera's frames are turned, and turns them at once when it is the camera in use.
+    func setPortraitAngle(_ angle: CGFloat, deviceID: String) {
         sessionQueue.async {
-            self.cineFPS = fps
-            if enabled {
-                guard self.cineTimer == nil else { return }
-                let timer = DispatchSource.makeTimerSource(queue: self.sessionQueue)
-                timer.schedule(deadline: .now(), repeating: .milliseconds(120))
-                timer.setEventHandler { [weak self] in self?.cineTick() }
-                self.cineTimer = timer
-                timer.resume()
-            } else if let timer = self.cineTimer {
-                timer.cancel()
-                self.cineTimer = nil
-                if let device = self.videoInput?.device, !self.userLocked, device.isExposureModeSupported(.continuousAutoExposure) {
-                    try? device.lockForConfiguration()
-                    device.exposureMode = .continuousAutoExposure
-                    device.unlockForConfiguration()
-                }
-                self.lastCineState = nil
-                let report = self.onCineState
-                DispatchQueue.main.async { report?(nil) }
+            guard self.portraitAngles[deviceID] != angle else { return }
+            self.portraitAngles[deviceID] = angle
+            guard self.videoInput?.device.uniqueID == deviceID else { return }
+            for connection in [self.previewOutput, self.recordOutput, self.photoOutput].compactMap({ $0.connection(with: .video) }) {
+                self.rotate(connection)
             }
         }
     }
 
+    private func rotate(_ connection: AVCaptureConnection) {
+        let angle = portraitAngle
+        if connection.isVideoRotationAngleSupported(angle), connection.videoRotationAngle != angle { connection.videoRotationAngle = angle }
+        // Mirroring is the grader's job, so the connection never mirrors.
+        if connection.isVideoMirroringSupported, connection.isVideoMirrored {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+        }
+    }
+
+    // MARK: Exposure readout and cine exposure
+
+    private var meterTimer: DispatchSourceTimer?
+    private var cineEnabled = false
+    private var cineFPS = 24
+    private var userLocked = false
+
+    /// What the video viewfinder shows: shutter, shutter angle and ISO as the camera runs them, and with
+    /// cine exposure on, how they stand against the cinematic rule.
+    struct CineState: Equatable, Sendable {
+        var shutter: String
+        var angle: Int
+        var iso: Int
+        /// Nil while the camera's own auto exposure runs.
+        var status: CineExposure.Status?
+    }
+
+    /// Called on the main queue with the readout, or nil when it stops (outside video).
+    var onCineState: (@Sendable (CineState?) -> Void)?
+    /// Mains frequency where the phone is, for flicker-free shutter times.
+    private let mainsHz = CineExposure.mainsFrequency(regionCode: Locale.current.region?.identifier)
     private var lastCineState: CineState?
 
-    private func cineTick() {
-        guard !userLocked, let device = videoInput?.device, device.isExposureModeSupported(.custom) else { return }
+    /// Reads exposure out in video mode, and with `cine` runs cinematic auto exposure (`CineExposure`) at `fps`.
+    func setExposureMonitor(video: Bool, cine: Bool, fps: Int) {
+        sessionQueue.async {
+            self.cineFPS = fps
+            let wasCine = self.cineEnabled
+            self.cineEnabled = video && cine
+            if video, self.meterTimer == nil {
+                let timer = DispatchSource.makeTimerSource(queue: self.sessionQueue)
+                timer.schedule(deadline: .now(), repeating: .milliseconds(120))
+                timer.setEventHandler { [weak self] in self?.meterTick() }
+                self.meterTimer = timer
+                timer.resume()
+            } else if !video, let timer = self.meterTimer {
+                timer.cancel()
+                self.meterTimer = nil
+                self.lastCineState = nil
+                let report = self.onCineState
+                DispatchQueue.main.async { report?(nil) }
+            }
+            // Leaving cine hands exposure back to the camera.
+            if wasCine, !self.cineEnabled, !self.userLocked, let device = self.videoInput?.device,
+               device.isExposureModeSupported(.continuousAutoExposure) {
+                try? device.lockForConfiguration()
+                device.exposureMode = .continuousAutoExposure
+                device.unlockForConfiguration()
+            }
+        }
+    }
+
+    private func meterTick() {
+        guard let device = videoInput?.device else { return }
+        let current = CineExposure.Setting(iso: Double(device.iso), duration: device.exposureDuration.seconds)
+        guard current.duration > 0, current.iso > 0 else { return }
+        var status: CineExposure.Status?
+        if cineEnabled, !userLocked, device.isExposureModeSupported(.custom) {
+            status = cineStep(device: device, current: current)
+        }
+        let state = CineState(
+            shutter: CineExposure.shutterText(current.duration),
+            angle: CineExposure.shutterAngle(duration: current.duration, fps: cineFPS),
+            iso: Int(current.iso.rounded()),
+            status: status
+        )
+        if state != lastCineState {
+            lastCineState = state
+            let report = onCineState
+            DispatchQueue.main.async { report?(state) }
+        }
+    }
+
+    /// One step of the cine loop: sets the next shutter and ISO and returns how they stand.
+    private func cineStep(device: AVCaptureDevice, current: CineExposure.Setting) -> CineExposure.Status? {
         let format = device.activeFormat
         let limits = CineExposure.Limits(
             minISO: Double(format.minISO),
@@ -322,8 +383,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             minDuration: format.minExposureDuration.seconds,
             maxDuration: format.maxExposureDuration.seconds
         )
-        let current = CineExposure.Setting(iso: Double(device.iso), duration: device.exposureDuration.seconds)
-        guard current.duration > 0, current.iso > 0 else { return }
         let step = CineExposure.step(current: current, offset: Double(device.exposureTargetOffset), fps: cineFPS, limits: limits, mainsHz: mainsHz)
         let next = step.setting
         let changed = abs(next.iso - current.iso) / current.iso > 0.01 || abs(next.duration - current.duration) / current.duration > 0.01
@@ -337,15 +396,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 )
                 device.unlockForConfiguration()
             } catch {
-                return
+                return nil
             }
         }
-        let state = CineState(readout: CineExposure.readout(next), status: step.status)
-        if state != lastCineState {
-            lastCineState = state
-            let report = onCineState
-            DispatchQueue.main.async { report?(state) }
-        }
+        return step.status
     }
 
     // MARK: Camera Control
@@ -608,16 +662,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         } else {
             configure(previewOutput.connection(with: .video), stabilization: config.mode == .video ? recordMode : .off)
         }
-        if let connection = photoOutput.connection(with: .video) {
-            if connection.isVideoRotationAngleSupported(90), connection.videoRotationAngle != 90 { connection.videoRotationAngle = 90 }
-            if connection.isVideoMirroringSupported, connection.isVideoMirrored { connection.isVideoMirrored = false }
-        }
+        if let connection = photoOutput.connection(with: .video) { rotate(connection) }
     }
 
     private func configure(_ connection: AVCaptureConnection?, stabilization: AVCaptureVideoStabilizationMode) {
         guard let connection else { return }
-        if connection.isVideoRotationAngleSupported(90), connection.videoRotationAngle != 90 { connection.videoRotationAngle = 90 }
-        if connection.isVideoMirroringSupported, connection.isVideoMirrored { connection.isVideoMirrored = false }
+        rotate(connection)
         if connection.isVideoStabilizationSupported, connection.preferredVideoStabilizationMode != stabilization {
             connection.preferredVideoStabilizationMode = stabilization
         }
@@ -689,7 +739,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             self.userLocked = locked
             guard let device = self.videoInput?.device else { return }
             // Unlocking hands exposure back to the cine loop when it runs.
-            if !locked, self.cineTimer != nil {
+            if !locked, self.cineEnabled {
                 try? device.lockForConfiguration()
                 if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
                 device.unlockForConfiguration()
@@ -714,7 +764,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 device.focusMode = lockAfter ? .autoFocus : .continuousAutoFocus
             }
             // The cine loop owns exposure while it runs; a tap only moves the focus.
-            if self.cineTimer == nil, device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.autoExpose) {
+            if !self.cineEnabled, device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.autoExpose) {
                 device.exposurePointOfInterest = point
                 device.exposureMode = lockAfter ? .autoExpose : .continuousAutoExposure
             }
@@ -749,9 +799,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             if self.photoOutput.supportedFlashModes.contains(flashMode) { settings.flashMode = flashMode }
             settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
 
-            if let connection = self.photoOutput.connection(with: .video), connection.isVideoRotationAngleSupported(90) {
-                connection.videoRotationAngle = 90
-            }
+            if let connection = self.photoOutput.connection(with: .video) { self.rotate(connection) }
 
             settings.isDepthDataDeliveryEnabled = portrait && self.photoOutput.isDepthDataDeliveryEnabled
 

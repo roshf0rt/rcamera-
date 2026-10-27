@@ -246,6 +246,18 @@ final class SettingsMigrationTests: XCTestCase {
         XCTAssertEqual(roundTrip.grainLevel, .high)
     }
 
+    func testHalationLevelAndOldSwitchStillLoads() throws {
+        let old = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"halationEnabled":false}"#.utf8))
+        XCTAssertEqual(old.halationLevel, .off)
+        XCTAssertFalse(old.halationEnabled)
+        var low = AppSettings()
+        low.halationLevel = .low
+        let roundTrip = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(low))
+        XCTAssertEqual(roundTrip.halationLevel, .low)
+        XCTAssertEqual(AppSettings().halationLevel, .medium)
+        XCTAssertGreaterThan(FilmMath.halationStrength(1.7), FilmMath.halationStrength(1))
+    }
+
     func testStoredFortyEightMegapixelsFallsBackToTwelve() throws {
         let settings = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"photoResolution":"mp48"}"#.utf8))
         XCTAssertEqual(settings.photoResolution, .mp12)

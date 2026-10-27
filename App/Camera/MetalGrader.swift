@@ -294,9 +294,7 @@ final class MetalGrader: @unchecked Sendable {
             dispatch(encoder, state: bokehState, width: targets.raw.width, height: targets.raw.height)
             encoder.endEncoding()
             let sigma = max(1, Float(min(targets.raw.width, targets.raw.height)) * 0.018 * portrait.strength * portrait.softness)
-            let blur = MPSImageGaussianBlur(device: device, sigma: sigma)
-            blur.edgeMode = .clamp
-            blur.encode(commandBuffer: commandBuffer, sourceTexture: targets.raw, destinationTexture: targets.blurred)
+            blur(sigma: (sigma * 4).rounded() / 4, cached: cachedMasks).encode(commandBuffer: commandBuffer, sourceTexture: targets.raw, destinationTexture: targets.blurred)
             depthTexture = depth
             bokehTexture = targets.blurred
         }
@@ -420,7 +418,11 @@ final class MetalGrader: @unchecked Sendable {
     /// The glow spreads about 1.5% of the short side, whatever the resolution.
     /// MPS kernels are not thread-safe, so only the capture queue shares cached ones.
     private func blur(for mask: MTLTexture, cached: Bool) -> MPSImageGaussianBlur {
-        let sigma = max(1.5, Float(min(mask.width, mask.height)) * 0.015)
+        blur(sigma: max(1.5, Float(min(mask.width, mask.height)) * 0.015), cached: cached)
+    }
+
+    /// A Gaussian blur, shared per sigma (to a quarter) on the capture queue: building one costs more than running it.
+    private func blur(sigma: Float, cached: Bool) -> MPSImageGaussianBlur {
         guard cached else {
             let blur = MPSImageGaussianBlur(device: device, sigma: sigma)
             blur.edgeMode = .clamp

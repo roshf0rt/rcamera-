@@ -13,20 +13,13 @@ struct SettingsView: View {
             PresetEditorView(presetID: preset.id)
         } label: {
             HStack(spacing: 12) {
-                Group {
-                    if let cover = model.cover(for: preset.id) {
-                        Image(uiImage: cover).resizable().scaledToFill()
-                    } else {
-                        PresetSwatch(preset: preset, corner: 7)
-                    }
-                }
-                .frame(width: 52, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                PresetSwatch(preset: preset, corner: 7)
+                    .frame(width: 52, height: 34)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(preset.name)
-                    Text(PresetCardStyle.of(preset).subtitle)
+                    Text(PresetCardStyle.subtitle(of: preset))
                         .font(.system(size: 12))
-                        .foregroundStyle(Theme.secondaryText)
+                        .foregroundStyle(preset.isCustom ? Theme.accent.opacity(0.8) : Theme.secondaryText)
                 }
             }
         }
@@ -44,29 +37,37 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    ForEach(model.presets.filter { !$0.isCustom }) { preset in presetRow(preset) }
-                } header: {
-                    Text("Built-in presets")
-                } footer: {
-                    Text("Built-in presets change only film speed, contrast curve and dynamic range. Make your own to change everything.")
-                }
-
-                Section("My presets") {
-                    ForEach(model.presets.filter(\.isCustom)) { preset in
+                    // One list in the camera's order: hold a row and drag to move it, or use Edit.
+                    ForEach(model.presets) { preset in
                         presetRow(preset)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    withAnimation { model.deletePreset(id: preset.id) }
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+                            .swipeActions(edge: .trailing, allowsFullSwipe: preset.isCustom) {
+                                if preset.isCustom {
+                                    Button(role: .destructive) {
+                                        withAnimation { model.deletePreset(id: preset.id) }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
                                 }
                             }
+                    }
+                    .onMove { source, destination in
+                        withAnimation { model.movePresets(from: source, to: destination) }
                     }
                     Button {
                         showNewPreset = true
                     } label: {
                         Label("New preset", systemImage: "plus")
                     }
+                } header: {
+                    HStack {
+                        Text("Presets")
+                        Spacer()
+                        EditButton()
+                            .font(.system(size: 13, weight: .semibold))
+                            .textCase(nil)
+                    }
+                } footer: {
+                    Text("Hold a preset and drag it to change the order on the camera. Built-in presets change only film speed, contrast curve, dynamic range and their card; make your own to change everything. Swipe your own presets to delete them.")
                 }
 
                 Section {

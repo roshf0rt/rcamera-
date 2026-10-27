@@ -64,6 +64,9 @@ public enum DigitalZoomStop: String, CaseIterable, Codable, Sendable {
 }
 
 /// The GRAIN switch on the camera screen steps through these. The preset's grain is scaled by `multiplier`.
+/// How strong a camera-screen effect is, as a share of the preset's own amount. Used by grain and halation.
+public typealias EffectLevel = GrainLevel
+
 public enum GrainLevel: String, CaseIterable, Codable, Sendable {
     case off
     case low
@@ -163,7 +166,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
         get { grainLevel != .off }
         set { grainLevel = newValue ? (grainLevel == .off ? .medium : grainLevel) : .off }
     }
-    public var halationEnabled = true
+    public var halationLevel: EffectLevel = .medium
+    /// Halation on at any level.
+    public var halationEnabled: Bool {
+        get { halationLevel != .off }
+        set { halationLevel = newValue ? (halationLevel == .off ? .medium : halationLevel) : .off }
+    }
     /// Photo border with the preset name. Off by default.
     public var frame: FrameStyle = .off
     /// Volume buttons take a photo while the camera is on screen. Off by default.
@@ -200,13 +208,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, rawFormat, savesLocation, digitalZoomStop
-        case grainLevel, halationEnabled, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle, photoResolution
+        case grainLevel, halationLevel, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle, photoResolution
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, cineExposure, revision
     }
 
     /// Keys older settings files used.
     enum LegacyKeys: String, CodingKey {
-        case grainEnabled
+        case grainEnabled, halationEnabled
     }
 
     /// Missing or unreadable keys keep their defaults, so older settings files keep working.
@@ -230,7 +238,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self).decode(Bool.self, forKey: .grainEnabled) {
             grainLevel = legacy ? .medium : .off
         }
-        halationEnabled = (try? c.decode(Bool.self, forKey: .halationEnabled)) ?? halationEnabled
+        if let level = try? c.decode(EffectLevel.self, forKey: .halationLevel) {
+            halationLevel = level
+        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self).decode(Bool.self, forKey: .halationEnabled) {
+            halationLevel = legacy ? .medium : .off
+        }
         frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? frame
         volumeShutter = (try? c.decode(Bool.self, forKey: .volumeShutter)) ?? volumeShutter
         dynamicRange = (try? c.decode(DynamicRangeChoice.self, forKey: .dynamicRange)) ?? dynamicRange

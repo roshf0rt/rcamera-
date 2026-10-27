@@ -48,7 +48,7 @@ final class CameraEngine {
     private(set) var rawAvailable = false
     /// Frame rates the camera runs, by video width.
     private(set) var frameRates: [Int: [Int]] = [:]
-    /// Shutter, ISO and status while cine exposure runs.
+    /// Shutter, ISO and, with cine exposure on, its status, in video mode.
     private(set) var cineState: CaptureSessionController.CineState?
     private(set) var appleLogActive = false
     /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
@@ -75,6 +75,9 @@ final class CameraEngine {
     @ObservationIgnored private var recordingTimer: Timer?
     @ObservationIgnored private var recordingStart: Date?
     @ObservationIgnored private var countdownTask: Task<Void, Never>?
+    /// How far the frames of the camera in use are turned (90 almost everywhere), and what was measured per camera.
+    @ObservationIgnored private var rotationAngle: CGFloat = 90
+    @ObservationIgnored private var portraitAngles: [String: CGFloat] = [:]
 
     var displayLayer: AVSampleBufferDisplayLayer { controller.hub.displayLayer }
 
@@ -130,14 +133,14 @@ final class CameraEngine {
         syncCineExposure()
     }
 
-    /// Cine exposure runs in video mode when the setting is on.
+    /// Video mode reads shutter and ISO out; cine exposure runs there when the setting is on.
     private func syncCineExposure() {
         if controller.onCineState == nil {
             controller.onCineState = { [weak self] state in
                 Task { @MainActor in self?.cineState = state }
             }
         }
-        controller.setCineExposure(settings.cineExposure && mode == .video, fps: settings.videoFPS)
+        controller.setExposureMonitor(video: mode == .video, cine: settings.cineExposure, fps: settings.videoFPS)
     }
 
     // MARK: User actions
@@ -203,8 +206,14 @@ final class CameraEngine {
         if mirrorsOutput { x = 1 - x }
         let frameX = (CGFloat(geometry.crop.x) + x * CGFloat(geometry.crop.width)) / geometry.source.width
         let frameY = (CGFloat(geometry.crop.y) + point.y * CGFloat(geometry.crop.height)) / geometry.source.height
-        // The portrait frame is the landscape sensor rotated a quarter turn, so the axes swap.
-        controller.focus(at: CGPoint(x: frameY, y: 1 - frameX), lockAfter: isAELocked)
+        // The frame is the sensor turned clockwise by the rotation angle; focus points are in sensor space.
+        let sensor: CGPoint = switch Int(rotationAngle) {
+        case 0: CGPoint(x: frameX, y: frameY)
+        case 180: CGPoint(x: 1 - frameX, y: 1 - frameY)
+        case 270: CGPoint(x: 1 - frameY, y: frameX)
+        default: CGPoint(x: frameY, y: 1 - frameX)
+        }
+        controller.focus(at: sensor, lockAfter: isAELocked)
     }
 
     func shutterTapped() {
@@ -313,10 +322,50 @@ final class CameraEngine {
         rawAvailable = info.rawAvailable
         appleLogActive = info.appleLogActive
         if !info.frameRates.isEmpty { frameRates = info.frameRates }
+        settleRotation(deviceID: info.deviceID)
         syncCineExposure()
         refreshStops()
         updateHub()
         return info
+    }
+
+    /// Back cameras turn a quarter turn to stand upright. Front cameras are measured with a rotation
+    /// coordinator while the phone is upright, since newer ones (the square sensor of iPhone 17) are mounted
+    /// differently; and if their frames still arrive lying down, they are turned a quarter turn back.
+    private func settleRotation(deviceID: String?) {
+        guard let deviceID, let device = AVCaptureDevice(uniqueID: deviceID) else { return }
+        if let known = portraitAngles[deviceID] {
+            rotationAngle = known
+            return
+        }
+        guard device.position == .front else {
+            rotationAngle = 90
+            return
+        }
+        var angle: CGFloat = 90
+        if deviceOrientation == .portrait {
+            let measured = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil).videoRotationAngleForHorizonLevelCapture
+            angle = Self.quarterTurn(measured)
+        }
+        apply(angle: angle, deviceID: deviceID, remember: deviceOrientation == .portrait)
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let self, self.lens == .front, let geometry = self.controller.hub.currentGeometry,
+                  geometry.source.width > geometry.source.height * 1.05 else { return }
+            self.apply(angle: Self.quarterTurn(angle - 90), deviceID: deviceID, remember: true)
+        }
+    }
+
+    private func apply(angle: CGFloat, deviceID: String, remember: Bool) {
+        if remember { portraitAngles[deviceID] = angle }
+        rotationAngle = angle
+        controller.setPortraitAngle(angle, deviceID: deviceID)
+    }
+
+    /// 0, 90, 180 or 270.
+    private static func quarterTurn(_ angle: CGFloat) -> CGFloat {
+        let turns = Int((angle / 90).rounded()) % 4
+        return CGFloat((turns + 4) % 4 * 90)
     }
 
     private func refreshStops() {

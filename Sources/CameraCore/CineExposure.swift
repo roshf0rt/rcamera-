@@ -140,7 +140,18 @@ public enum CineExposure {
 
     /// "1/48 · ISO 320", for the viewfinder.
     public static func readout(_ setting: Setting) -> String {
-        let denominator = Int((1 / setting.duration).rounded())
-        return "1/\(denominator) · ISO \(Int(setting.iso.rounded()))"
+        "\(shutterText(setting.duration)) · ISO \(Int(setting.iso.rounded()))"
+    }
+
+    /// "1/50", or "0.5s" for times of a quarter second and longer.
+    public static func shutterText(_ duration: Double) -> String {
+        guard duration > 0 else { return "—" }
+        if duration >= 0.25 { return String(format: "%.1fs", duration) }
+        return "1/\(Int((1 / duration).rounded()))"
+    }
+
+    /// The shutter as a film camera's rotating shutter would be set: 180° is half the frame time.
+    public static func shutterAngle(duration: Double, fps: Int) -> Int {
+        Int((duration * Double(max(fps, 1)) * 360).rounded())
     }
 }

@@ -285,6 +285,14 @@ final class CineExposureTests: XCTestCase {
         XCTAssertEqual(CineExposure.readout(start), "1/48 · ISO 200")
     }
 
+    func testShutterAngleAndText() {
+        XCTAssertEqual(CineExposure.shutterAngle(duration: 1.0 / 48, fps: 24), 180)
+        XCTAssertEqual(CineExposure.shutterAngle(duration: 1.0 / 50, fps: 24), 173)
+        XCTAssertEqual(CineExposure.shutterAngle(duration: 1.0 / 24, fps: 24), 360)
+        XCTAssertEqual(CineExposure.shutterText(1.0 / 50), "1/50")
+        XCTAssertEqual(CineExposure.shutterText(0.5), "0.5s")
+    }
+
     func testFrameRatesOnlyListWhatTheCameraRuns() {
         let formats = [
             FormatDescriptor(index: 0, width: 1920, height: 1440, maxFPS: 60, maxPhotoPixels: 12_000_000),

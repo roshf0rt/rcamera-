@@ -84,6 +84,20 @@ struct CameraView: View {
                         .transition(.scale(scale: 0.85).combined(with: .opacity))
                 }
 
+                if engine.mode == .video, !engine.isSwitchingMode, !showPresets {
+                    ExposureHUD(
+                        state: engine.cineState,
+                        cineOn: model.settings.cineExposure,
+                        locked: engine.isAELocked,
+                        fps: model.settings.videoFPS
+                    ) {
+                        model.updateSettings { $0.cineExposure.toggle() }
+                    }
+                    .frame(width: geo.size.width, height: 34)
+                    .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 40)
+                    .transition(.opacity)
+                }
+
                 zoomLine(engine: engine)
                     .frame(width: geo.size.width, height: zoomLineHeight)
                     .offset(y: geo.size.height - controlsHeight - zoomLineHeight)
@@ -134,8 +148,8 @@ struct CameraView: View {
                     )
                     .frame(width: geo.size.width)
                     .offset(y: topBarHeight + 6)
-                    // A shade that slides down from the top bar.
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    // The shade comes into focus out of a blur, grown from the top bar.
+                    .transition(.blurReveal)
                 }
 
                 if showDynamicRange {
@@ -145,7 +159,7 @@ struct CameraView: View {
                     }
                     .frame(width: geo.size.width)
                     .offset(y: topBarHeight + 6)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(.blurReveal)
                 }
             }
             .animation(.easeInOut(duration: 0.22), value: engine.mode)
@@ -268,11 +282,11 @@ struct CameraView: View {
             if engine.isRecording {
                 recordingBadge(engine: engine)
             } else {
-                GrainToggle(level: model.settings.grainLevel) {
+                LevelToggle(title: "GRAIN", level: model.settings.grainLevel) {
                     model.updateSettings { $0.grainLevel = $0.grainLevel.next }
                 }
-                EffectToggle(title: "HALATION", isOn: model.settings.halationEnabled) {
-                    model.updateSettings { $0.halationEnabled.toggle() }
+                LevelToggle(title: "HALATION", level: model.settings.halationLevel) {
+                    model.updateSettings { $0.halationLevel = $0.halationLevel.next }
                 }
             }
             Spacer(minLength: 0)
@@ -450,21 +464,9 @@ struct CameraView: View {
             if engine.showsSwitchBlur {
                 Rectangle().fill(.ultraThinMaterial).transition(.opacity)
             }
-            if engine.mode == .video, let cine = engine.cineState {
-                VStack {
-                    HStack {
-                        CineIndicator(state: cine)
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .padding(12)
-                .allowsHitTesting(false)
-                .transition(.opacity)
-            }
             if let toast = presetToast {
                 VStack(spacing: 2) {
-                    Text(PresetCardStyle.of(model.selectedPreset).subtitle.uppercased())
+                    Text(PresetCardStyle.subtitle(of: model.selectedPreset).uppercased())
                         .font(.system(size: 11, weight: .semibold))
                         .tracking(1.2)
                         .foregroundStyle(.white.opacity(0.7))
@@ -756,52 +758,99 @@ struct EffectToggle: View {
     }
 }
 
-/// The cine light: green when the shutter sits on its cinematic reference and the picture is exposed
-/// right, amber while it settles, red when the light forced the shutter off the rule, with the reason.
-struct CineIndicator: View {
-    let state: CaptureSessionController.CineState
+/// Shutter, shutter angle and ISO over the video picture, as the camera runs them. With cine exposure on,
+/// a light says how they stand against the rule: green on the cinematic shutter with the picture exposed
+/// right, amber while it settles, red when the light forced the shutter off it (with the ND filter that
+/// would fix it, or LOW LIGHT). A tap switches cine exposure on and off.
+struct ExposureHUD: View {
+    let state: CaptureSessionController.CineState?
+    let cineOn: Bool
+    let locked: Bool
+    let fps: Int
+    let toggle: () -> Void
+
+    private static let green = Color(red: 0.25, green: 0.9, blue: 0.4)
+    private static let amber = Color(red: 1, green: 0.78, blue: 0.2)
+    private static let red = Color(red: 1, green: 0.27, blue: 0.23)
 
     private var color: Color {
-        switch state.status {
-        case .cinematic: Color(red: 0.25, green: 0.9, blue: 0.4)
-        case .settling: Color(red: 1, green: 0.78, blue: 0.2)
-        case .tooBright, .tooDark: Color(red: 1, green: 0.27, blue: 0.23)
+        guard cineOn, !locked else { return Color(white: 0.6) }
+        switch state?.status {
+        case .cinematic: return Self.green
+        case .settling, .none: return Self.amber
+        case .tooBright, .tooDark: return Self.red
         }
     }
 
     private var label: String {
-        switch state.status {
-        case .cinematic, .settling: "180°"
-        case .tooBright(let stops): String(format: "ND %.1f", max(stops, 0.1))
-        case .tooDark: "LOW LIGHT"
+        if locked { return "AE LOCK" }
+        guard cineOn else { return "AUTO" }
+        switch state?.status {
+        case .cinematic: return "CINE"
+        case .settling, .none: return "CINE…"
+        case .tooBright(let stops): return String(format: "ND %.1f", max(stops, 0.1))
+        case .tooDark: return "LOW LIGHT"
         }
     }
 
     var body: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(color)
-                .frame(width: 8, height: 8)
-                .shadow(color: color.opacity(0.9), radius: 4)
-            Text(label)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(color)
-            Text(state.readout)
+        Button(action: toggle) {
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 8, height: 8)
+                        .shadow(color: cineOn ? color.opacity(0.9) : .clear, radius: 4)
+                    Text(label)
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(0.5)
+                        .foregroundStyle(color)
+                }
+                divider
+                value(state?.shutter ?? "—", caption: nil)
+                divider
+                value(state.map { "\($0.angle)°" } ?? "—", caption: nil)
+                divider
+                value(state.map { "\($0.iso)" } ?? "—", caption: "ISO")
+                divider
+                value("\(fps)", caption: "FPS")
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(Capsule().fill(Color.black.opacity(0.55)))
+            .overlay(Capsule().strokeBorder(cineOn ? color.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 1))
+            .animation(.easeOut(duration: 0.25), value: state)
+            .animation(.easeOut(duration: 0.25), value: cineOn)
+        }
+        .buttonStyle(PressableStyle())
+        .sensoryFeedback(.selection, trigger: cineOn)
+        .accessibilityLabel("Exposure \(state?.shutter ?? ""), ISO \(state?.iso ?? 0). Cine exposure \(cineOn ? "on" : "off")")
+    }
+
+    private var divider: some View {
+        Rectangle().fill(Color.white.opacity(0.2)).frame(width: 1, height: 12)
+    }
+
+    private func value(_ text: String, caption: String?) -> some View {
+        HStack(spacing: 3) {
+            if let caption {
+                Text(caption)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Text(text)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white)
                 .contentTransition(.numericText())
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Capsule().fill(Color.black.opacity(0.5)))
-        .overlay(Capsule().strokeBorder(color.opacity(0.5), lineWidth: 1))
-        .animation(.easeOut(duration: 0.25), value: state)
     }
 }
 
-/// The GRAIN switch: each tap steps Off, Low, Med, High. Three bars show the level.
-struct GrainToggle: View {
-    let level: GrainLevel
+/// The GRAIN and HALATION switches: each tap steps Off, Low, Med, High. Three bars show the level, so
+/// both fit in the top bar on every phone.
+struct LevelToggle: View {
+    let title: String
+    let level: EffectLevel
     let action: () -> Void
 
     var body: some View {
@@ -814,7 +863,7 @@ struct GrainToggle: View {
                             .frame(width: 3, height: CGFloat(4 + bar * 3))
                     }
                 }
-                Text(level == .off ? "GRAIN" : "GRAIN \(level.label)")
+                Text(title)
                     .font(.system(size: 12, weight: .semibold))
                     .tracking(0.6)
                     .contentTransition(.numericText())
@@ -827,6 +876,7 @@ struct GrainToggle: View {
         }
         .buttonStyle(PressableStyle())
         .sensoryFeedback(.selection, trigger: level)
+        .accessibilityLabel("\(title.capitalized), \(level.label.lowercased())")
     }
 
     private static func bars(_ level: GrainLevel) -> Int {
@@ -872,5 +922,23 @@ private struct ShutterButton: View {
             .animation(.easeOut(duration: 0.1), value: isCapturing)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Comes into focus out of a blur, slightly grown from the top, as the system's own panels appear.
+private struct BlurReveal: ViewModifier {
+    let hidden: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .blur(radius: hidden ? 14 : 0)
+            .scaleEffect(hidden ? 0.92 : 1, anchor: .top)
+            .opacity(hidden ? 0 : 1)
+    }
+}
+
+extension AnyTransition {
+    static var blurReveal: AnyTransition {
+        .modifier(active: BlurReveal(hidden: true), identity: BlurReveal(hidden: false))
     }
 }

@@ -36,6 +36,13 @@ struct PresetCardStyle {
         all[((preset.accentIndex % all.count) + all.count) % all.count]
     }
 
+    /// What the preset is: a built-in keeps its own description whatever colours its card is given.
+    static func subtitle(of preset: Preset) -> String {
+        if preset.isCustom { return "My preset" }
+        let number = Int(preset.id.replacingOccurrences(of: "preset-", with: "")) ?? 0
+        return all.indices.contains(number - 1) ? all[number - 1].subtitle : of(preset).subtitle
+    }
+
     private static func hex(_ values: UInt32...) -> [Color] {
         values.map { rgb in
             Color(.sRGB, red: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255)
@@ -113,8 +120,8 @@ struct PresetCard: View {
     @Environment(AppModel.self) private var model
 
     private var style: PresetCardStyle { PresetCardStyle.of(preset) }
-    /// The redevelop thumbnail, or the photo the user chose for a custom preset.
-    private var picture: UIImage? { thumbnail ?? (preset.isCustom ? model.cover(for: preset.id) : nil) }
+    /// The redevelop thumbnail, or the photo the user chose for the card.
+    private var picture: UIImage? { thumbnail ?? model.cover(for: preset.id) }
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Self.corner, style: .continuous) }
     private var foreground: Color { isSelected && style.light && picture == nil ? .black : .white }
 
@@ -123,7 +130,7 @@ struct PresetCard: View {
             ZStack(alignment: .topLeading) {
                 background
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(style.subtitle)
+                    Text(PresetCardStyle.subtitle(of: preset))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(foreground.opacity(isSelected ? 0.65 : 0.5))
                         .lineLimit(1)
@@ -152,7 +159,7 @@ struct PresetCard: View {
         }
         .buttonStyle(.plain)
         .sensoryFeedback(.selection, trigger: isSelected)
-        .accessibilityLabel("\(preset.name), \(style.subtitle)")
+        .accessibilityLabel("\(preset.name), \(PresetCardStyle.subtitle(of: preset))")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -173,13 +180,23 @@ struct PresetCard: View {
     }
 }
 
-/// A small square of the preset's card colours, for lists and the camera's preset button.
+/// A small square of the preset's card: its photo if it has one, otherwise its colours. For lists and the
+/// camera's preset button.
 struct PresetSwatch: View {
+    @Environment(AppModel.self) private var model
     let preset: Preset
     var corner: CGFloat = 8
 
     var body: some View {
-        RoundedRectangle(cornerRadius: corner, style: .continuous).fill(PresetCardStyle.of(preset).gradient)
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        if let cover = model.cover(for: preset.id) {
+            Color.clear
+                .overlay { Image(uiImage: cover).resizable().scaledToFill() }
+                .overlay(LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .center, endPoint: .bottom))
+                .clipShape(shape)
+        } else {
+            shape.fill(PresetCardStyle.of(preset).gradient)
+        }
     }
 }
 

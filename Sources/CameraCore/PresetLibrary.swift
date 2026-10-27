@@ -203,10 +203,11 @@ public final class PresetLibrary {
     }
 
     /// What may change on a built-in preset: the film speed's values (grain, grain size, sharpness,
-    /// fringing), the contrast curve's tone and dynamic range. Everything else stays as stored.
+    /// fringing), the contrast curve's tone, dynamic range and the card's colours. Everything else stays as stored.
     public static func lockedEdit(stored: Preset, edited: Preset) -> Preset {
         var result = stored
         result.grain = edited.grain
+        result.accentIndex = edited.accentIndex
         var look = stored.adjustments
         let wanted = edited.adjustments
         look.grainSize = wanted.grainSize
@@ -279,15 +280,15 @@ public final class PresetLibrary {
 
     private var coverDirectory: URL { storageDirectory.appendingPathComponent("Covers", isDirectory: true) }
 
-    /// The picture a custom preset's card shows, if the user chose one.
+    /// The picture a preset's card shows, if the user chose one.
     public func coverURL(for presetID: String) -> URL? {
         let url = coverDirectory.appendingPathComponent("\(presetID).jpg")
         return fileManager.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// Stores (or with nil removes) the card picture of a custom preset, as JPEG data.
+    /// Stores (or with nil removes) the card picture of a preset, as JPEG data.
     public func setCover(_ data: Data?, for presetID: String) throws {
-        guard preset(id: presetID)?.isCustom == true else { return }
+        guard preset(id: presetID) != nil else { return }
         let url = coverDirectory.appendingPathComponent("\(presetID).jpg")
         if let data {
             try fileManager.createDirectory(at: coverDirectory, withIntermediateDirectories: true)
@@ -306,6 +307,20 @@ public final class PresetLibrary {
         lutCache = lutCache.filter { !$0.key.hasPrefix("\(preset.id)|") }
         try? setCover(nil, for: preset.id)
         presets.removeAll { $0.id == preset.id }
+        try save()
+    }
+
+    /// Puts the presets in the order of `ids`, as the camera's picker shows them. Presets missing from
+    /// `ids` keep their relative order after the listed ones.
+    public func reorder(_ ids: [String]) throws {
+        let rank = Dictionary(ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let ordered = presets.enumerated().sorted { lhs, rhs in
+            let a = rank[lhs.element.id] ?? ids.count + lhs.offset
+            let b = rank[rhs.element.id] ?? ids.count + rhs.offset
+            return a < b
+        }.map(\.element)
+        guard ordered != presets else { return }
+        presets = ordered
         try save()
     }
 

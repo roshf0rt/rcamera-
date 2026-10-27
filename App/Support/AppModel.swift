@@ -60,7 +60,7 @@ final class AppModel {
         syncCameraControls()
     }
 
-    /// The Camera Control button's lists: presets and grain, plus aperture and lens in portrait mode.
+    /// The Camera Control button's lists: presets, grain and halation, plus aperture and lens in portrait mode.
     func syncCameraControls() {
         let presets = presets
         let selected = presets.firstIndex { $0.id == settings.selectedPresetID } ?? 0
@@ -76,6 +76,9 @@ final class AppModel {
             },
             .init(title: "Grain", symbol: "circle.grid.3x3", titles: levels.map(\.label), selected: levels.firstIndex(of: settings.grainLevel) ?? 0) { [weak self] index in
                 Task { @MainActor in self?.updateSettings { $0.grainLevel = levels[index] } }
+            },
+            .init(title: "Halation", symbol: "sun.max", titles: levels.map(\.label), selected: levels.firstIndex(of: settings.halationLevel) ?? 0) { [weak self] index in
+                Task { @MainActor in self?.updateSettings { $0.halationLevel = levels[index] } }
             },
         ]
         if settings.portrait {
@@ -133,7 +136,7 @@ final class AppModel {
         return image
     }
 
-    /// Stores a photo (or with nil removes it) as a custom preset's card picture, downsized to 600 px.
+    /// Stores a photo (or with nil removes it) as a preset's card picture, downsized to 600 px.
     func setCover(_ data: Data?, for presetID: String) {
         let jpeg = data.flatMap { UIImage(data: $0) }.flatMap { Self.coverJPEG($0) }
         do {
@@ -155,6 +158,19 @@ final class AppModel {
     }
 
     /// Deletes a custom preset. Built-in presets are never removed.
+    /// Reorders the presets, as the camera's picker and Camera Control list them.
+    func movePresets(from source: IndexSet, to destination: Int) {
+        var ids = presets.map(\.id)
+        ids.move(fromOffsets: source, toOffset: destination)
+        do {
+            try presetLibrary.reorder(ids)
+            presets = presetLibrary.presets
+            syncCameraControls()
+        } catch {
+            alert = error.localizedDescription
+        }
+    }
+
     func deletePreset(id: String) {
         do {
             try presetLibrary.removeCustom(id: id)
@@ -198,7 +214,7 @@ final class AppModel {
         change(&updated)
         guard updated != settings else { return }
         let togglesChanged = updated.grainLevel != settings.grainLevel
-            || updated.halationEnabled != settings.halationEnabled
+            || updated.halationLevel != settings.halationLevel
             || updated.dynamicRange != settings.dynamicRange
         settings = updated
         try? settingsStore.save(updated)
@@ -324,7 +340,7 @@ final class AppModel {
         let base = await baseLook(for: preset, slot: slot)
         let look = base.with(
             grain: min(1, base.grain * settings.grainLevel.multiplier),
-            halation: settings.halationEnabled ? base.halation : 0,
+            halation: base.halation * settings.halationLevel.multiplier,
             adjustments: base.adjustments
         )
         // The dynamic-range strip is a photo control; video keeps the preset's own range.

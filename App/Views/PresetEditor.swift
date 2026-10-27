@@ -155,7 +155,9 @@ struct PresetEditorView: View {
                     adjustments.dynamicRange = Self.rangeValues[index]
                     save()
                 }
-                Text("Built-in presets keep their LUT and colour. To change anything else, make your own preset from this one.")
+                cardSection
+                    .padding(.top, 6)
+                Text("Built-in presets keep their LUT and colour grade. To change anything else, make your own preset from this one.")
                     .font(.footnote)
                     .foregroundStyle(Theme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -510,7 +512,7 @@ struct PresetEditorView: View {
         }
     }
 
-    /// The custom preset's card: colours, an optional photo, and deleting the preset.
+    /// The preset's card: colours and an optional photo; custom presets can be deleted here too.
     private var cardSection: some View {
         section("Card") {
             VStack(alignment: .leading, spacing: 12) {
@@ -537,8 +539,10 @@ struct PresetEditorView: View {
                         Button("Remove photo", role: .destructive) { model.setCover(nil, for: presetID) }
                     }
                     Spacer()
-                    Button(role: .destructive) { confirmDelete = true } label: {
-                        Label("Delete", systemImage: "trash")
+                    if isCustom {
+                        Button(role: .destructive) { confirmDelete = true } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
                     }
                 }
                 .font(.system(size: 15, weight: .semibold))

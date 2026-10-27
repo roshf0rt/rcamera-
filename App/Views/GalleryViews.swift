@@ -41,12 +41,58 @@ struct GalleryView: View {
     @State private var selection: UUID?
     /// The capture waiting for the delete confirmation, set from the long-press menu.
     @State private var pendingDelete: CaptureRecord?
+    /// How far the library is pulled down to close it; the camera shows through behind.
+    @State private var pullDown: CGFloat = 0
+    /// The grid is scrolled to its top, so a downward drag closes instead of scrolling.
+    @State private var atTop = true
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
     var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black
+                    .opacity(1 - min(pullDown / geo.size.height, 1) * 0.9)
+                    .ignoresSafeArea()
+                library
+                    .clipShape(RoundedRectangle(cornerRadius: min(pullDown / 3, 38), style: .continuous))
+                    .scaleEffect(1 - min(pullDown / geo.size.height, 1) * 0.12, anchor: .top)
+                    .offset(y: pullDown)
+                    .simultaneousGesture(pullToClose(height: geo.size.height), including: selection == nil ? .all : .subviews)
+                viewer
+            }
+        }
+        .presentationBackground(.clear)
+        .preferredColorScheme(.dark)
+    }
+
+    /// Dragging down from the top of the grid (or anywhere when it is empty) slides the library away.
+    private func pullToClose(height: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                let dy = value.translation.height
+                guard pullDown > 0 || (atTop && dy > 0 && dy > abs(value.translation.width) * 1.2) else { return }
+                pullDown = max(0, dy)
+            }
+            .onEnded { value in
+                guard pullDown > 0 else { return }
+                if pullDown > 130 || value.predictedEndTranslation.height > 420 {
+                    withAnimation(.easeIn(duration: 0.22)) { pullDown = height }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(220))
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { dismiss() }
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { pullDown = 0 }
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var viewer: some View {
         ZStack {
-            library
             if let id = selection {
                 CaptureViewer(startID: id) {
                     withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) { selection = nil }
@@ -58,7 +104,6 @@ struct GalleryView: View {
                 .zIndex(1)
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     private var library: some View {
@@ -73,6 +118,10 @@ struct GalleryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
+                        GeometryReader { marker in
+                            Color.clear.preference(key: GridTopKey.self, value: marker.frame(in: .named("libraryScroll")).minY)
+                        }
+                        .frame(height: 0)
                         LazyVGrid(columns: columns, spacing: 3) {
                             ForEach(model.captures) { record in
                                 Button {
@@ -99,6 +148,8 @@ struct GalleryView: View {
                             }
                         }
                     }
+                    .coordinateSpace(name: "libraryScroll")
+                    .onPreferenceChange(GridTopKey.self) { top in atTop = top >= -2 }
                 }
             }
             .background(Color.black)
@@ -120,6 +171,11 @@ struct GalleryView: View {
                 }
             }
         }
+    }
+
+    private struct GridTopKey: PreferenceKey {
+        static let defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
     }
 
     private func badges(for record: CaptureRecord) -> some View {

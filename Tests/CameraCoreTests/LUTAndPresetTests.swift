@@ -411,6 +411,24 @@ final class CustomPresetTests: XCTestCase {
 
         try library.resetBuiltIn(id: original.id)
         XCTAssertEqual(library.preset(id: original.id), original)
+
+        var recoloured = original
+        recoloured.accentIndex = 7
+        try library.update(recoloured)
+        XCTAssertEqual(library.preset(id: original.id)?.accentIndex, 7, "card colours are not part of the look")
+    }
+
+    func testReorderingKeepsEveryPresetAndSurvivesReopening() throws {
+        let (library, directory) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let added = try library.addCustom(copying: nil, name: "Mine")
+        try library.reorder([added.id, "preset-3", "preset-1"])
+        let ids = library.presets.map(\.id)
+        XCTAssertEqual(Array(ids.prefix(3)), [added.id, "preset-3", "preset-1"])
+        XCTAssertEqual(ids[3], "preset-2", "unlisted presets follow in their old order")
+        XCTAssertEqual(Set(ids).count, PresetCatalog.defaultCount + 1)
+        let reopened = try PresetLibrary(storageDirectory: directory)
+        XCTAssertEqual(reopened.presets.map(\.id), ids)
     }
 
     func testCustomPresetsTakeEveryChange() throws {
@@ -450,7 +468,11 @@ final class CustomPresetTests: XCTestCase {
         let (library, directory) = try makeLibrary()
         defer { try? FileManager.default.removeItem(at: directory) }
         try library.setCover(Data([1, 2, 3]), for: "preset-1")
-        XCTAssertNil(library.coverURL(for: "preset-1"), "built-in presets keep their card")
+        XCTAssertNotNil(library.coverURL(for: "preset-1"), "built-in cards take a photo too")
+        try library.setCover(nil, for: "preset-1")
+        XCTAssertNil(library.coverURL(for: "preset-1"))
+        try library.setCover(Data([1]), for: "no-such-preset")
+        XCTAssertNil(library.coverURL(for: "no-such-preset"))
         let added = try library.addCustom(copying: nil, name: "Mine")
         try library.setCover(Data([1, 2, 3]), for: added.id)
         let url = try XCTUnwrap(library.coverURL(for: added.id))

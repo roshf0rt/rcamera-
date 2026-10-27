@@ -223,6 +223,11 @@ kernel void halationMask(texture2d<float, access::read> luma [[texture(0)]],
     mask.write(float4(m, m, m, 1.0), gid);
 }
 
+/// NaN and infinity test on the bits, which fast math cannot optimise away.
+static inline bool finiteValue(float x) {
+    return (as_type<uint>(x) & 0x7f800000u) != 0x7f800000u;
+}
+
 kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
                   texture2d<float, access::read> chroma [[texture(1)]],
                   texture3d<float> lut [[texture(2)]],
@@ -254,13 +259,22 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
         float2 sp = (float2(sourcePoint(gid, p)) + 0.5) / float2(float(p.sourceWidth), float(p.sourceHeight));
         float2 duv = p.depthRotated != 0 ? sp : float2(sp.y, 1.0 - sp.x);
         float d = depth.sample(linearClamp, duv).r;
+        // Holes in the depth map count as the subject, so they stay sharp instead of going black.
+        if (!finiteValue(d)) {
+            d = p.depthFocus;
+        }
         float mask = saturate((p.depthFocus * 0.85 - d) / max(p.depthFocus * 0.3, 0.0001));
+        if (!finiteValue(mask)) {
+            mask = 0.0;
+        }
         float2 centred = uv - 0.5;
         float r = length(centred * float2(float(p.width) / float(p.height), 1.0));
         float a = p.swirl * 1.1 * r * r;
         float2 turned = float2(centred.x * cos(a) - centred.y * sin(a), centred.x * sin(a) + centred.y * cos(a));
         float3 background = bokeh.sample(linearClamp, turned + 0.5).rgb;
-        color = mix(color, saturate(background), mask);
+        if (finiteValue(background.r) && finiteValue(background.g) && finiteValue(background.b)) {
+            color = mix(color, saturate(background), mask);
+        }
         color *= 1.0 - p.lensVignette * 0.9 * smoothstep(0.3, 0.95, length(centred) * 1.414);
     }
 

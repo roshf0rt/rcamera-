@@ -39,7 +39,8 @@ public enum FilmMath {
 
     /// Preset value 0...1 to shader strength. 1 is Lampa's video strength (4.5); its photo path uses 2.8.
     public static func halationStrength(_ amount: Double) -> Float {
-        Float(min(max(amount, 0), 1)) * 4.5
+        // Presets go up to 1; the camera screen's HIGH level pushes past it.
+        Float(min(max(amount, 0), 2)) * 4.5
     }
 
     // MARK: Grain
