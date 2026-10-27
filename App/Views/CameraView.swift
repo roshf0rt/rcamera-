@@ -332,25 +332,20 @@ struct CameraView: View {
     private var presetButton: some View {
         let preset = model.selectedPreset
         return Button { withAnimation(.easeOut(duration: 0.2)) { showPresets.toggle(); showOptions = false } } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(Theme.swatch(model.swatches[preset.id], fallback: preset.accentIndex))
-                    .frame(width: 58, height: 58)
-                    .offset(x: 4, y: 4)
-                    .opacity(showPresets ? 0 : 0.8)
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(Color(white: showPresets ? 0.1 : 0.14))
-                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color(white: showPresets ? 0.5 : 0.3), lineWidth: 1))
-                    .overlay(
-                        Text(preset.name.uppercased())
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .minimumScaleFactor(0.6)
-                            .padding(4)
-                    )
-                    .frame(width: 58, height: 58)
+            ZStack(alignment: .bottom) {
+                PresetArtView(preset: preset)
+                LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
+                Text(preset.name.uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 5)
             }
+            .frame(width: 58, height: 58)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(showPresets ? Theme.accent : Color.white.opacity(0.3), lineWidth: showPresets ? 2 : 1))
             .frame(width: 64, height: 64)
         }
         .buttonStyle(.plain)
@@ -412,7 +407,7 @@ struct CameraView: View {
 
 /// A small on/off switch in the top bar, like Lampa's grain and halation switches: a dot and a label,
 /// lit in the accent color when on.
-private struct EffectToggle: View {
+struct EffectToggle: View {
     let title: String
     let isOn: Bool
     let action: () -> Void

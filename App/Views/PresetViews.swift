@@ -24,74 +24,88 @@ struct PresetPicker: View {
     }
 }
 
-struct PresetCard: View {
+/// The preset's picture: the same soft landscape on every card, graded by that preset's LUT.
+/// Until it is ready (it is built in the background) a neutral gradient stands in.
+struct PresetArtView: View {
     @Environment(AppModel.self) private var model
     let preset: Preset
-    let isSelected: Bool
-    let action: () -> Void
+    /// Shown instead of the landscape, e.g. the user's own photo graded with this preset.
+    var override: UIImage?
 
     var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(model.hasAnyLUT(preset.id) ? "LUT" : "No LUT")
-                    .font(.system(size: 12))
-                    .foregroundStyle(isSelected ? Color.black.opacity(0.5) : Theme.secondaryText)
-                Spacer(minLength: 0)
-                Text(preset.name)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(isSelected ? .black : .white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Theme.swatch(model.swatches[preset.id], fallback: preset.accentIndex))
-                    .frame(height: 12)
-                    .padding(.top, 6)
+        GeometryReader { geo in
+            Group {
+                if let image = override ?? model.presetArt[preset.id]?.image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Theme.gradient(preset.accentIndex).opacity(0.5)
+                }
             }
-            .padding(13)
-            .frame(width: 150, height: 92)
-            .background(RoundedRectangle(cornerRadius: 22).fill(isSelected ? Theme.cardLight : Theme.chromeDark))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22)
-                    .strokeBorder(isSelected ? Color.white : Color(white: 0.25), lineWidth: isSelected ? 2.5 : 1.5)
-            )
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
         }
-        .buttonStyle(.plain)
-        .sensoryFeedback(.selection, trigger: isSelected)
     }
 }
 
-/// Compact card with initials, used on the Redevelop screen.
-struct PresetChip: View {
+/// The words for a preset's look, e.g. "Teal & Orange · Punchy".
+struct PresetTags: View {
     @Environment(AppModel.self) private var model
     let preset: Preset
+    var limit = 2
+
+    var body: some View {
+        Text((model.presetArt[preset.id]?.tags ?? []).prefix(limit).joined(separator: " · "))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+    }
+}
+
+/// A card for the camera's preset picker: the preset's picture, its name and the words for its look.
+struct PresetCard: View {
+    let preset: Preset
     let isSelected: Bool
+    var thumbnail: UIImage?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .top) {
-                    Text(preset.initials).font(.system(size: 28, weight: .bold))
-                    Spacer(minLength: 6)
+            ZStack(alignment: .bottomLeading) {
+                PresetArtView(preset: preset, override: thumbnail)
+                LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
+                VStack(alignment: .leading, spacing: 1) {
+                    PresetTags(preset: preset)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
                     Text(preset.name)
-                        .font(.system(size: 12))
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                 }
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(Theme.swatch(model.swatches[preset.id], fallback: preset.accentIndex))
-                    .frame(height: 10)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
             }
-            .foregroundStyle(isSelected ? .black : .white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(width: 150, height: 72)
-            .background(RoundedRectangle(cornerRadius: 20).fill(isSelected ? Theme.cardLight : Theme.chromeDark))
+            .frame(width: 140, height: 88)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
             .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .strokeBorder(isSelected ? Color.clear : Color(white: 0.25), lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(isSelected ? Color.white : Color.white.opacity(0.12), lineWidth: isSelected ? 2.5 : 1)
             )
+            .overlay(alignment: .topTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.black, .white)
+                        .padding(6)
+                }
+            }
+            .scaleEffect(isSelected ? 1 : 0.96)
+            .animation(.easeOut(duration: 0.15), value: isSelected)
         }
         .buttonStyle(.plain)
+        .sensoryFeedback(.selection, trigger: isSelected)
     }
 }

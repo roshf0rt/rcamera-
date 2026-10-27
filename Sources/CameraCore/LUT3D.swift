@@ -286,22 +286,3 @@ public struct RGBColor: Equatable, Codable, Sendable {
         self.b = b
     }
 }
-
-extension LUT3D {
-    /// Reference colors for a preset's swatch: shadow, skin, foliage, sky, highlight.
-    public static let swatchInputs: [RGBColor] = [
-        RGBColor(r: 0.12, g: 0.12, b: 0.13),
-        RGBColor(r: 0.78, g: 0.56, b: 0.45),
-        RGBColor(r: 0.36, g: 0.52, b: 0.30),
-        RGBColor(r: 0.50, g: 0.68, b: 0.88),
-        RGBColor(r: 0.93, g: 0.91, b: 0.87),
-    ]
-
-    /// What the LUT makes of the reference colors, for the colored strip on preset cards.
-    public func swatch() -> [RGBColor] {
-        Self.swatchInputs.map { input in
-            let out = apply(r: input.r, g: input.g, b: input.b)
-            return RGBColor(r: out.r, g: out.g, b: out.b)
-        }
-    }
-}

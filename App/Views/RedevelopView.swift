@@ -1,6 +1,11 @@
 import CameraCore
 import SwiftUI
 
+/// Redevelop a photo: another preset, push/pull, grain and halation on or off.
+///
+/// Kept fast by doing the slow part once: the RAW (or the camera's original) is decoded into a reduced
+/// "base" only when push/pull changes. Switching presets or effects just re-grades that base on the GPU,
+/// and every preset's LUT is loaded in the background when the screen opens.
 struct RedevelopView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -8,7 +13,12 @@ struct RedevelopView: View {
 
     @State private var presetID = ""
     @State private var pushPull = 0.0
+    @State private var grainOn = true
+    @State private var halationOn = true
     @State private var source: PhotoPipeline.Source?
+    @State private var base: CVPixelBuffer?
+    @State private var baseEV: Double?
+    @State private var thumbnails: [String: UIImage] = [:]
     @State private var preview: UIImage?
     @State private var isSaving = false
     @State private var loaded = false
@@ -18,23 +28,32 @@ struct RedevelopView: View {
 
     private var hasChanges: Bool {
         guard let record else { return false }
-        return presetID != record.presetID || abs(pushPull - record.evPushPull) > 0.01
+        return presetID != record.presetID
+            || abs(pushPull - record.evPushPull) > 0.01
+            || grainOn != record.grainEnabled
+            || halationOn != record.halationEnabled
+    }
+
+    private var renderKey: String {
+        "\(presetID)|\(pushPull)|\(grainOn)|\(halationOn)|\(source != nil)"
     }
 
     var body: some View {
         VStack(spacing: 0) {
             topBar
             previewArea
-            presetRow.padding(.top, 14)
-            evControl.padding(.top, 20)
-            Spacer(minLength: 0)
+            effects.padding(.top, 12)
+            presetRow.padding(.top, 10)
+            evControl.padding(.top, 14)
             footer
         }
         .padding(.horizontal, 16)
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .onAppear(perform: load)
-        .task(id: "\(presetID)-\(pushPull)-\(source != nil)") { await renderPreview() }
+        .task(id: renderKey) { await renderPreview() }
+        .task(id: source != nil) { await renderThumbnails() }
+        .task { await model.prepareLooks() }
     }
 
     private var topBar: some View {
@@ -71,7 +90,7 @@ struct RedevelopView: View {
     private var previewArea: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14).fill(Color(white: 0.08))
-            if let shown = hasChanges ? preview : (original ?? preview) {
+            if let shown = hasChanges ? (preview ?? original) : (original ?? preview) {
                 Image(uiImage: shown)
                     .resizable()
                     .scaledToFit()
@@ -85,15 +104,30 @@ struct RedevelopView: View {
         .padding(.top, 6)
     }
 
-    private var presetRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(model.presets) { preset in
-                    PresetChip(preset: preset, isSelected: preset.id == presetID) { presetID = preset.id }
-                }
-            }
+    private var effects: some View {
+        HStack(spacing: 10) {
+            EffectToggle(title: "GRAIN", isOn: grainOn) { grainOn.toggle() }
+            EffectToggle(title: "HALATION", isOn: halationOn) { halationOn.toggle() }
+            Spacer()
         }
-        .frame(height: 74)
+    }
+
+    private var presetRow: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(model.presets) { preset in
+                        PresetCard(preset: preset, isSelected: preset.id == presetID, thumbnail: thumbnails[preset.id]) {
+                            presetID = preset.id
+                        }
+                        .id(preset.id)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .onChange(of: loaded) { _, _ in proxy.scrollTo(presetID, anchor: .center) }
+        }
+        .frame(height: 96)
     }
 
     private var evControl: some View {
@@ -117,17 +151,19 @@ struct RedevelopView: View {
                 Text("No RAW for this photo: it is redeveloped from the camera image.")
             }
         }
-        .font(.system(size: 15))
+        .font(.system(size: 14))
         .foregroundStyle(Theme.secondaryText)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 16)
+        .padding(.vertical, 14)
     }
 
     private func load() {
         guard !loaded, let record else { return }
-        loaded = true
         presetID = record.presetID
         pushPull = record.evPushPull
+        grainOn = record.grainEnabled
+        halationOn = record.halationEnabled
+        loaded = true
         let url = model.url(.processed, for: record)
         Task {
             original = await Task.detached { UIImage(contentsOfFile: url.path) }.value
@@ -137,22 +173,48 @@ struct RedevelopView: View {
 
     private func renderPreview() async {
         guard loaded, let source, let record, let preset = model.preset(id: presetID) else { return }
-        try? await Task.sleep(for: .milliseconds(150))
+
+        // Decoding is only needed when push/pull changed; wait a moment so a drag on the wheel decodes once.
+        if base == nil || baseEV != pushPull {
+            if base != nil { try? await Task.sleep(for: .milliseconds(120)) }
+            if Task.isCancelled { return }
+            let value = pushPull, aspect = record.aspect, mirror = record.mirrored
+            let decoded = await Task.detached(priority: .userInitiated) {
+                PhotoPipeline.previewBase(source: source, pushPull: value, aspect: aspect, mirror: mirror, scale: 0.35)
+            }.value
+            if Task.isCancelled { return }
+            base = decoded
+            baseEV = value
+        }
+        guard let base else { return }
+
+        let look = await model.baseLook(for: preset).with(grain: grainOn, halation: halationOn)
         if Task.isCancelled { return }
-        let look = model.look(for: preset)
-        let aspect = record.aspect
-        let value = pushPull
-        let mirror = record.mirrored
-        let image = await Task.detached(priority: .userInitiated) {
-            PhotoPipeline.preview(source: source, look: look, pushPull: value, aspect: aspect, mirror: mirror)
-        }.value
+        let image = await Task.detached(priority: .userInitiated) { PhotoPipeline.gradePreview(base, look: look) }.value
         if !Task.isCancelled, let image { preview = image }
+    }
+
+    /// This photo, small, in every preset: the most honest way to compare looks.
+    private func renderThumbnails() async {
+        guard let source, let record, thumbnails.isEmpty else { return }
+        let aspect = record.aspect, mirror = record.mirrored
+        let small = await Task.detached(priority: .utility) {
+            PhotoPipeline.previewBase(source: source, pushPull: 0, aspect: aspect, mirror: mirror, scale: 0.08)
+        }.value
+        guard let small else { return }
+        for preset in model.presets {
+            if Task.isCancelled { return }
+            let look = await model.baseLook(for: preset).with(grain: false, halation: true)
+            if let image = await Task.detached(priority: .utility, operation: { PhotoPipeline.gradePreview(small, look: look) }).value {
+                thumbnails[preset.id] = image
+            }
+        }
     }
 
     private func save() async {
         guard let record else { return }
         isSaving = true
-        let ok = await model.redevelop(record, presetID: presetID, pushPull: pushPull)
+        let ok = await model.redevelop(record, presetID: presetID, pushPull: pushPull, grain: grainOn, halation: halationOn)
         isSaving = false
         if ok { dismiss() }
     }

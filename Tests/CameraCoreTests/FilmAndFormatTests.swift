@@ -126,36 +126,80 @@ final class FormatChooserTests: XCTestCase {
     }
 }
 
-final class SwatchAndCaptureTests: XCTestCase {
-    func testIdentitySwatchKeepsReferenceColors() throws {
-        let swatch = try LUT3D.identity(size: 17).swatch()
-        XCTAssertEqual(swatch.count, LUT3D.swatchInputs.count)
-        for (out, input) in zip(swatch, LUT3D.swatchInputs) {
-            XCTAssertEqual(out.r, input.r, accuracy: 1e-4)
-            XCTAssertEqual(out.g, input.g, accuracy: 1e-4)
-            XCTAssertEqual(out.b, input.b, accuracy: 1e-4)
-        }
-    }
-
-    func testSwatchFollowsTheLUT() throws {
-        // A LUT that swaps red and blue.
-        let size = 5
-        var values: [Float] = []
-        for b in 0 ..< size {
-            for g in 0 ..< size {
-                for r in 0 ..< size {
-                    let scale = Float(size - 1)
-                    values += [Float(b) / scale, Float(g) / scale, Float(r) / scale, 1]
-                }
-            }
-        }
-        let skin = try LUT3D(size: size, rgba: values).swatch()[1]
-        XCTAssertLessThan(skin.r, skin.b, "warm skin turns blue")
-    }
-
+final class CaptureRecordDecodingTests: XCTestCase {
     func testRecordsWithoutMirroredKeyStillDecode() throws {
         let json = #"{"id":"8D2C1E3A-7A64-4C4E-9E7E-3C1B2A0F5D11","date":0,"kind":"photo","presetID":"preset-1"}"#
         let record = try JSONDecoder().decode(CaptureRecord.self, from: Data(json.utf8))
         XCTAssertFalse(record.mirrored)
+        XCTAssertTrue(record.grainEnabled)
+        XCTAssertTrue(record.halationEnabled)
+    }
+}
+
+final class LUTProfileTests: XCTestCase {
+    private func makeLUT(size: Int = 17, _ transform: (Float, Float, Float) -> (Float, Float, Float)) throws -> LUT3D {
+        var values: [Float] = []
+        let scale = Float(size - 1)
+        for b in 0 ..< size {
+            for g in 0 ..< size {
+                for r in 0 ..< size {
+                    let out = transform(Float(r) / scale, Float(g) / scale, Float(b) / scale)
+                    values += [min(max(out.0, 0), 1), min(max(out.1, 0), 1), min(max(out.2, 0), 1), 1]
+                }
+            }
+        }
+        return try LUT3D(size: size, rgba: values)
+    }
+
+    func testIdentityIsNatural() throws {
+        let profile = LUTProfile(lut: try LUT3D.identity(size: 17))
+        XCTAssertEqual(profile.tags, ["Natural"])
+        XCTAssertEqual(profile.contrast, 1, accuracy: 0.01)
+        XCTAssertEqual(profile.saturation, 1, accuracy: 0.01)
+        XCTAssertEqual(profile.skinHueShift, 0, accuracy: 0.5)
+    }
+
+    func testWarmLUT() throws {
+        let profile = LUTProfile(lut: try makeLUT { r, g, b in (r + 0.06, g, b - 0.06) })
+        XCTAssertEqual(profile.tags.first, "Warm")
+    }
+
+    func testBlackAndWhite() throws {
+        let profile = LUTProfile(lut: try makeLUT { r, g, b in
+            let y = 0.3 * r + 0.59 * g + 0.11 * b
+            return (y, y, y)
+        })
+        XCTAssertEqual(profile.tags, ["Black & White"])
+    }
+
+    func testFadedSoftLook() throws {
+        let profile = LUTProfile(lut: try makeLUT { r, g, b in (0.12 + 0.75 * r, 0.12 + 0.75 * g, 0.12 + 0.75 * b) })
+        XCTAssertTrue(profile.tags.contains("Faded"))
+        XCTAssertTrue(profile.tags.contains("Soft"))
+    }
+
+    func testTealAndOrange() throws {
+        let profile = LUTProfile(lut: try makeLUT { r, g, b in
+            let y = (r + g + b) / 3
+            let shift: Float = (y - 0.5) * 0.3
+            return (r + shift, g, b - shift)
+        })
+        XCTAssertEqual(profile.tags.first, "Teal & Orange")
+    }
+
+    func testCardArtFollowsTheLUT() throws {
+        let plain = LUTCardArt.render(lut: nil, width: 24, height: 16)
+        XCTAssertEqual(plain.count, 24 * 16 * 4)
+        XCTAssertEqual(plain, LUTCardArt.render(lut: try LUT3D.identity(size: 17), width: 24, height: 16).enumerated().map { index, value in
+            // Identity can differ by a rounding step.
+            abs(Int(value) - Int(plain[index])) <= 1 ? plain[index] : value
+        })
+        let mono = LUTCardArt.render(lut: try makeLUT { r, g, b in
+            let y = (r + g + b) / 3
+            return (y, y, y)
+        }, width: 24, height: 16)
+        for index in stride(from: 0, to: mono.count, by: 4) {
+            XCTAssertLessThanOrEqual(abs(Int(mono[index]) - Int(mono[index + 2])), 1)
+        }
     }
 }

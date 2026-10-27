@@ -4,6 +4,7 @@ import Foundation
 // luttool convert <in.cube|in.lut> <out.lut>
 // luttool compose <target LUT> <LUT whose neutral curve is applied first> <out.lut>
 // luttool curve <LUT>
+// luttool profile <LUT>...   prints the look's tags, metrics and reference colors as JSON lines
 
 func load(_ path: String) throws -> LUT3D {
     let url = URL(fileURLWithPath: path)
@@ -31,8 +32,16 @@ do {
     case "curve" where arguments.count == 2:
         let curve = try load(arguments[1]).neutralCurve()
         print(curve.map { String(format: "%.3f", $0) }.joined(separator: " "))
+    case "profile" where arguments.count >= 2:
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        for path in arguments.dropFirst() {
+            let profile = LUTProfile(lut: try load(path))
+            let json = String(decoding: try encoder.encode(profile), as: UTF8.self)
+            print("{\"file\":\"\(URL(fileURLWithPath: path).lastPathComponent)\",\"profile\":\(json)}")
+        }
     default:
-        fail("usage: luttool convert <in> <out.lut> | compose <target> <curve source> <out.lut> | curve <lut>")
+        fail("usage: luttool convert <in> <out.lut> | compose <target> <curve source> <out.lut> | curve <lut> | profile <lut>...")
     }
 } catch {
     fail("error: \(error)")

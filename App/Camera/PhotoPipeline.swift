@@ -146,10 +146,32 @@ enum PhotoPipeline {
         return encode(finish(base, look: look, aspect: aspect, mirror: mirror), rawExposureOffset: offset)
     }
 
-    /// A reduced-size render for the Redevelop screen.
-    static func preview(source: Source, look: FilmLook, pushPull: Double, aspect: AspectOption, mirror: Bool) -> UIImage? {
-        guard let base = baseImage(source, pushPull: pushPull, scale: 0.35) else { return nil }
-        let image = finish(base, look: look, aspect: aspect, mirror: mirror)
+    // MARK: Interactive preview
+
+    /// The source developed, cropped and mirrored at reduced size, as an sRGB buffer. Decoding is the slow
+    /// part, so the Redevelop screen keeps this and only re-grades it when the preset or effects change.
+    static func previewBase(source: Source, pushPull: Double, aspect: AspectOption, mirror: Bool, scale: Float) -> CVPixelBuffer? {
+        guard let base = baseImage(source, pushPull: pushPull, scale: scale) else { return nil }
+        let extent = base.extent.integral
+        let crop = aspect.cropRect(sourceWidth: Int(extent.width), sourceHeight: Int(extent.height))
+        let rect = CGRect(x: extent.minX + CGFloat(crop.x), y: extent.minY + CGFloat(crop.y), width: CGFloat(crop.width), height: CGFloat(crop.height))
+        var image = base.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+        if mirror {
+            image = image.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: -rect.width, y: 0))
+        }
+        guard let buffer = MetalGrader.makePixelBuffer(width: crop.width, height: crop.height) else { return nil }
+        context.render(image, to: buffer, bounds: CGRect(x: 0, y: 0, width: crop.width, height: crop.height), colorSpace: sRGB)
+        return buffer
+    }
+
+    /// Grades a preview base with a look. A few milliseconds on the GPU.
+    static func gradePreview(_ base: CVPixelBuffer, look: FilmLook) -> UIImage? {
+        let width = CVPixelBufferGetWidth(base), height = CVPixelBufferGetHeight(base)
+        guard let grader = MetalGrader.shared,
+              let output = MetalGrader.makePixelBuffer(width: width, height: height),
+              grader.grade(source: base, crop: CropRect(x: 0, y: 0, width: width, height: height), mirror: false, look: look, into: output, cachedMasks: false)
+        else { return nil }
+        let image = CIImage(cvPixelBuffer: output, options: [.colorSpace: sRGB])
         guard let cgImage = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: sRGB) else { return nil }
         return UIImage(cgImage: cgImage)
     }

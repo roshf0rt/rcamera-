@@ -29,6 +29,9 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var rawExposureOffset: Double
     /// Front-camera photo saved mirrored; redevelop mirrors it again.
     public var mirrored: Bool
+    /// Whether the saved image has film grain and halation. Redevelop can switch them.
+    public var grainEnabled: Bool
+    public var halationEnabled: Bool
 
     public init(
         id: UUID = UUID(),
@@ -41,7 +44,9 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         placeName: String? = nil,
         isFavorite: Bool = false,
         rawExposureOffset: Double = 0,
-        mirrored: Bool = false
+        mirrored: Bool = false,
+        grainEnabled: Bool = true,
+        halationEnabled: Bool = true
     ) {
         self.id = id
         self.date = date
@@ -54,10 +59,13 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.isFavorite = isFavorite
         self.rawExposureOffset = rawExposureOffset
         self.mirrored = mirrored
+        self.grainEnabled = grainEnabled
+        self.halationEnabled = halationEnabled
     }
 
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored
+        case grainEnabled, halationEnabled
     }
 
     /// Index files from earlier releases lack newer keys; they keep their captures.
@@ -74,6 +82,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         isFavorite = (try? c.decode(Bool.self, forKey: .isFavorite)) ?? false
         rawExposureOffset = (try? c.decode(Double.self, forKey: .rawExposureOffset)) ?? 0
         mirrored = (try? c.decode(Bool.self, forKey: .mirrored)) ?? false
+        grainEnabled = (try? c.decode(Bool.self, forKey: .grainEnabled)) ?? true
+        halationEnabled = (try? c.decode(Bool.self, forKey: .halationEnabled)) ?? true
     }
 }
 

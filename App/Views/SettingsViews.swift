@@ -15,10 +15,15 @@ struct SettingsView: View {
                             PresetEditorView(presetID: preset.id)
                         } label: {
                             HStack(spacing: 12) {
-                                RoundedRectangle(cornerRadius: 3).fill(Theme.swatch(model.swatches[preset.id], fallback: preset.accentIndex)).frame(width: 44, height: 10)
-                                Text(preset.name)
-                                Spacer()
-                                Text(model.hasAnyLUT(preset.id) ? "LUT" : "No LUT").foregroundStyle(Theme.secondaryText)
+                                PresetArtView(preset: preset)
+                                    .frame(width: 52, height: 34)
+                                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(preset.name)
+                                    PresetTags(preset: preset, limit: 3)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Theme.secondaryText)
+                                }
                             }
                         }
                     }

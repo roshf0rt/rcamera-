@@ -17,8 +17,8 @@ final class AppModel {
     private(set) var presets: [Preset]
     private(set) var captures: [CaptureRecord]
     private(set) var processingCount = 0
-    /// Each preset's LUT applied to a few reference colors, for the colored strip on its card.
-    private(set) var swatches: [String: [RGBColor]] = [:]
+    /// Card picture and words for each preset, built from its LUT (see `LUTCardArt`, `LUTProfile`).
+    private(set) var presetArt: [String: PresetArt] = [:]
     var alert: String?
 
     @ObservationIgnored private let presetLibrary: PresetLibrary
@@ -53,7 +53,7 @@ final class AppModel {
         engine.onVideo = { [weak self] url in self?.ingest(videoAt: url) }
         engine.onModeChanged = { [weak self] mode in self?.updateSettings { $0.lastCaptureMode = mode } }
         pushLooks()
-        refreshSwatches()
+        refreshArt()
     }
 
     // MARK: Settings
@@ -134,24 +134,43 @@ final class AppModel {
     private func invalidateLooks(for presetID: String) {
         lookCache = lookCache.filter { !$0.key.hasPrefix("\(presetID)|") }
         if presetID == settings.selectedPresetID { pushLooks() }
-        refreshSwatches(for: [presetID])
+        refreshArt(for: [presetID])
     }
 
-    /// Parses the photo LUT (or the video one) of each preset off the main thread and keeps only its swatch.
-    private func refreshSwatches(for ids: [String]? = nil) {
+    /// Parses the photo LUT (or the video one) of each preset off the main thread and keeps only its card art.
+    private func refreshArt(for ids: [String]? = nil) {
         let targets = (ids ?? presets.map(\.id)).map { id in
             (id, presetLibrary.lutURL(for: id, slot: .photo) ?? presetLibrary.lutURL(for: id, slot: .video))
         }
         Task {
             for (id, url) in targets {
-                let swatch: [RGBColor]? = await Task.detached(priority: .utility) {
-                    guard let url, let data = try? Data(contentsOf: url),
-                          let lut = try? LUT3D.parse(data: data, fileExtension: url.pathExtension.lowercased())
-                    else { return nil }
-                    return lut.swatch()
-                }.value
-                swatches[id] = swatch
+                presetArt[id] = await Task.detached(priority: .utility) { PresetArt.make(lut: Self.parseLUT(url)) }.value
             }
+        }
+    }
+
+    nonisolated static func parseLUT(_ url: URL?) -> LUT3D? {
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
+        return try? LUT3D.parse(data: data, fileExtension: url.pathExtension.lowercased())
+    }
+
+    /// The preset's photo look without the camera-screen toggles, loaded off the main thread.
+    /// The Redevelop screen uses it so switching presets never parses a LUT on the main thread.
+    func baseLook(for preset: Preset) async -> FilmLook {
+        let key = "\(preset.id)|\(LUTSlot.photo.rawValue)"
+        if let cached = lookCache[key] { return cached }
+        let url = presetLibrary.lutURL(for: preset.id, slot: .photo) ?? presetLibrary.lutURL(for: preset.id, slot: .video)
+        let lut = await Task.detached(priority: .userInitiated) { Self.parseLUT(url) }.value
+        if let cached = lookCache[key] { return cached }
+        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation)
+        lookCache[key] = look
+        return look
+    }
+
+    /// Loads every preset's photo look in the background, so the first switch to each is instant too.
+    func prepareLooks() async {
+        for preset in presets {
+            _ = await baseLook(for: preset)
         }
     }
 
@@ -220,6 +239,8 @@ final class AppModel {
         let look = look(for: preset, slot: .photo)
         let saveLocation = settings.savesLocation
         let keepRAW = settings.capturesRAW
+        let grainOn = settings.grainEnabled
+        let halationOn = settings.halationEnabled
 
         Task {
             let place = saveLocation ? await location.currentPlaceName() : nil
@@ -247,7 +268,9 @@ final class AppModel {
                 hasRAW: hasRAW,
                 placeName: place,
                 rawExposureOffset: developed.rawExposureOffset,
-                mirrored: photo.mirror
+                mirrored: photo.mirror,
+                grainEnabled: grainOn,
+                halationEnabled: halationOn
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
@@ -329,11 +352,11 @@ final class AppModel {
     }
 
     /// Re-renders a stored photo with a different preset and push/pull, replacing the processed image.
-    func redevelop(_ record: CaptureRecord, presetID: String, pushPull: Double) async -> Bool {
+    func redevelop(_ record: CaptureRecord, presetID: String, pushPull: Double, grain: Bool, halation: Bool) async -> Bool {
         guard let preset = preset(id: presetID),
               let source = await redevelopSource(for: record)
         else { return false }
-        let look = look(for: preset, slot: .photo)
+        let look = await baseLook(for: preset).with(grain: grain, halation: halation)
         let aspect = record.aspect
         let mirror = record.mirrored
 
@@ -348,6 +371,8 @@ final class AppModel {
             var updated = record
             updated.presetID = presetID
             updated.evPushPull = pushPull
+            updated.grainEnabled = grain
+            updated.halationEnabled = halation
             try captureStore.update(updated)
             captures = captureStore.records
             try? await PhotoLibrarySaver.savePhoto(heicURL: captureStore.url(.processed, for: record.id), rawURL: nil)
@@ -358,7 +383,4 @@ final class AppModel {
         }
     }
 
-    func rawData(for record: CaptureRecord) -> Data? {
-        try? Data(contentsOf: captureStore.url(.rawDNG, for: record.id))
-    }
 }
