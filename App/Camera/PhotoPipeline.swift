@@ -56,10 +56,10 @@ enum PhotoPipeline {
               let rawLuma = meanLuma(rawImage),
               let processedLuma = meanLuma(processed)
         else { return 0 }
-        // The camera's own image is brighter mostly because its local tone mapping lifts the shadows.
-        // Matching that with global exposure would push the highlights far past white, so RAW is
-        // brightened by at most 1 EV; darkening is not limited.
-        return min(max(log2(processedLuma / rawLuma), -3), 1)
+        // The camera's own image is brighter mostly because its local tone mapping lifts the shadows, and
+        // most in dim rooms, where there are few highlights to push past white. RAW is brightened by at most
+        // 2 EV, so a dim photo comes out as bright as the viewfinder showed it; darkening is not limited.
+        return min(max(log2(processedLuma / rawLuma), -3), 2)
     }
 
     static func finish(_ image: CIImage, look: FilmLook, aspect: AspectOption, mirror: Bool) -> CIImage {
