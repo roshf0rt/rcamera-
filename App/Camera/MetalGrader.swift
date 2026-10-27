@@ -155,7 +155,7 @@ final class MetalGrader: @unchecked Sendable {
             dispatch(encoder, state: maskState, width: masks.raw.width, height: masks.raw.height)
             encoder.endEncoding()
 
-            blur(for: masks.raw).encode(commandBuffer: commandBuffer, sourceTexture: masks.raw, destinationTexture: masks.blurred)
+            blur(for: masks.raw, cached: cachedMasks).encode(commandBuffer: commandBuffer, sourceTexture: masks.raw, destinationTexture: masks.blurred)
             glow = masks.blurred
         } else {
             params.halation = 0
@@ -243,8 +243,14 @@ final class MetalGrader: @unchecked Sendable {
     }
 
     /// The glow spreads about 1.5% of the short side, whatever the resolution.
-    private func blur(for mask: MTLTexture) -> MPSImageGaussianBlur {
+    /// MPS kernels are not thread-safe, so only the capture queue shares cached ones.
+    private func blur(for mask: MTLTexture, cached: Bool) -> MPSImageGaussianBlur {
         let sigma = max(1.5, Float(min(mask.width, mask.height)) * 0.015)
+        guard cached else {
+            let blur = MPSImageGaussianBlur(device: device, sigma: sigma)
+            blur.edgeMode = .clamp
+            return blur
+        }
         let key = Int((sigma * 4).rounded())
         lock.lock()
         defer { lock.unlock() }
