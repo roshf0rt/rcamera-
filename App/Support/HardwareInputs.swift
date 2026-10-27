@@ -1,5 +1,6 @@
 import AppIntents
 import AVFoundation
+import AVKit
 import MediaPlayer
 import SwiftUI
 import UIKit
