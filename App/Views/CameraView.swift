@@ -296,6 +296,14 @@ struct CameraView: View {
             DragGesture(minimumDistance: 24)
                 .onEnded { value in swipe(value, engine: engine) }
         )
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.5)
+                .onEnded { _ in
+                    // Holding the viewfinder locks exposure and focus, as on the stock camera.
+                    engine.toggleLock()
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                }
+        )
     }
 
     /// Lampa-style swipes on the viewfinder: up opens the filters, down closes them or opens settings,

@@ -39,6 +39,8 @@ struct GalleryView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var selection: UUID?
+    /// The capture waiting for the delete confirmation, set from the long-press menu.
+    @State private var pendingDelete: CaptureRecord?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
@@ -64,12 +66,33 @@ struct GalleryView: View {
                                         .clipped()
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button { model.toggleFavorite(record) } label: {
+                                        Label(record.isFavorite ? "Unfavorite" : "Favorite", systemImage: record.isFavorite ? "heart.slash" : "heart")
+                                    }
+                                    ShareLink(item: model.url(record.kind == .video ? .video : .processed, for: record)) {
+                                        Label("Share", systemImage: "square.and.arrow.up")
+                                    }
+                                    Button(role: .destructive) { pendingDelete = record } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
             .background(Color.black)
+            .confirmationDialog(
+                "Delete this capture?",
+                isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let record = pendingDelete { model.delete(record) }
+                    pendingDelete = nil
+                }
+            }
             .navigationTitle("Library")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -107,6 +130,8 @@ struct CaptureDetailView: View {
     @State private var confirmDelete = false
     @State private var image: UIImage?
     @State private var player: AVPlayer?
+    /// A zoomed photo pans instead of swiping, so swipes wait until it is back at fit.
+    @State private var zoomed = false
 
     private var record: CaptureRecord? { model.captures.first { $0.id == recordID } }
 
@@ -166,7 +191,9 @@ struct CaptureDetailView: View {
             }
         }
         .contentShape(Rectangle())
-        .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { swipe($0, record) })
+        .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { value in
+            if !zoomed { swipe(value, record) }
+        })
         .fullScreenCover(isPresented: $showRedevelop) { RedevelopView(recordID: record.id) }
         .confirmationDialog("Delete this capture?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -207,7 +234,8 @@ struct CaptureDetailView: View {
                 ProgressView()
             }
         } else if let image {
-            Image(uiImage: image).resizable().scaledToFit()
+            ZoomableImage(image: image, isZoomed: $zoomed)
+                .onLongPressGesture(minimumDuration: 0.6) { confirmDelete = true }
         } else {
             ProgressView()
         }
@@ -252,5 +280,67 @@ struct CaptureDetailView: View {
         if Calendar.current.isDateInToday(date) { return "Today, \(time)" }
         if Calendar.current.isDateInYesterday(date) { return "Yesterday, \(time)" }
         return date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+/// A photo that pinches to zoom (up to 5×) and pans while zoomed. A double tap zooms to 2.5× or back to fit.
+struct ZoomableImage: View {
+    let image: UIImage
+    @Binding var isZoomed: Bool
+
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    var body: some View {
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .scaleEffect(scale)
+            .offset(offset)
+            .gesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        scale = min(max(lastScale * value.magnification, 1), 5)
+                    }
+                    .onEnded { _ in
+                        lastScale = scale
+                        if scale <= 1 { reset() }
+                        isZoomed = scale > 1
+                    }
+            )
+            .simultaneousGesture(
+                DragGesture()
+                    .onChanged { value in
+                        guard scale > 1 else { return }
+                        offset = CGSize(
+                            width: lastOffset.width + value.translation.width,
+                            height: lastOffset.height + value.translation.height
+                        )
+                    }
+                    .onEnded { _ in lastOffset = offset }
+            )
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        if scale > 1 {
+                            reset()
+                        } else {
+                            scale = 2.5
+                            lastScale = 2.5
+                            isZoomed = true
+                        }
+                    }
+                }
+            )
+    }
+
+    private func reset() {
+        scale = 1
+        lastScale = 1
+        offset = .zero
+        lastOffset = .zero
+        isZoomed = false
     }
 }
