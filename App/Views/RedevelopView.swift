@@ -1,7 +1,7 @@
 import CameraCore
 import SwiftUI
 
-/// Redevelop a photo: another preset, push/pull, grain and halation on or off.
+/// Redevelop a photo: another preset, push/pull, grain and halation at any level.
 ///
 /// Kept fast by doing the slow part once: the RAW (or the camera's original) is decoded into a reduced
 /// "base" only when push/pull changes. Switching presets or effects just re-grades that base on the GPU,
@@ -13,8 +13,8 @@ struct RedevelopView: View {
 
     @State private var presetID = ""
     @State private var pushPull = 0.0
-    @State private var grainOn = true
-    @State private var halationOn = true
+    @State private var grainLevel = GrainLevel.medium
+    @State private var halationLevel = EffectLevel.medium
     @State private var source: PhotoPipeline.Source?
     @State private var base: CVPixelBuffer?
     @State private var baseEV: Double?
@@ -30,12 +30,12 @@ struct RedevelopView: View {
         guard let record else { return false }
         return presetID != record.presetID
             || abs(pushPull - record.evPushPull) > 0.01
-            || grainOn != record.grainEnabled
-            || halationOn != record.halationEnabled
+            || grainLevel != record.grainLevel
+            || halationLevel != record.halationLevel
     }
 
     private var renderKey: String {
-        "\(presetID)|\(pushPull)|\(grainOn)|\(halationOn)|\(source != nil)"
+        "\(presetID)|\(pushPull)|\(grainLevel)|\(halationLevel)|\(source != nil)"
     }
 
     var body: some View {
@@ -106,8 +106,8 @@ struct RedevelopView: View {
 
     private var effects: some View {
         HStack(spacing: 10) {
-            EffectToggle(title: "GRAIN", isOn: grainOn) { grainOn.toggle() }
-            EffectToggle(title: "HALATION", isOn: halationOn) { halationOn.toggle() }
+            LevelToggle(title: "GRAIN", level: grainLevel) { grainLevel = grainLevel.next }
+            LevelToggle(title: "HALATION", level: halationLevel) { halationLevel = halationLevel.next }
             Spacer()
         }
     }
@@ -161,8 +161,8 @@ struct RedevelopView: View {
         guard !loaded, let record else { return }
         presetID = record.presetID
         pushPull = record.evPushPull
-        grainOn = record.grainEnabled
-        halationOn = record.halationEnabled
+        grainLevel = record.grainLevel
+        halationLevel = record.halationLevel
         loaded = true
         let url = model.url(.processed, for: record)
         Task {
@@ -188,7 +188,7 @@ struct RedevelopView: View {
         }
         guard let base else { return }
 
-        let look = await model.baseLook(for: preset).with(grain: grainOn, halation: halationOn)
+        let look = await model.leveledLook(for: preset, grain: grainLevel, halation: halationLevel)
         if Task.isCancelled { return }
         let image = await Task.detached(priority: .userInitiated) { PhotoPipeline.gradePreview(base, look: look) }.value
         if !Task.isCancelled, let image { preview = image }
@@ -214,7 +214,7 @@ struct RedevelopView: View {
     private func save() async {
         guard let record else { return }
         isSaving = true
-        let ok = await model.redevelop(record, presetID: presetID, pushPull: pushPull, grain: grainOn, halation: halationOn)
+        let ok = await model.redevelop(record, presetID: presetID, pushPull: pushPull, grain: grainLevel, halation: halationLevel)
         isSaving = false
         if ok { dismiss() }
     }

@@ -29,9 +29,11 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var rawExposureOffset: Double
     /// Front-camera photo saved mirrored; redevelop mirrors it again.
     public var mirrored: Bool
-    /// Whether the saved image has film grain and halation. Redevelop can switch them.
-    public var grainEnabled: Bool
-    public var halationEnabled: Bool
+    /// How much film grain and halation the saved image has. Redevelop can change them.
+    public var grainLevel: GrainLevel
+    public var halationLevel: EffectLevel
+    public var grainEnabled: Bool { grainLevel != .off }
+    public var halationEnabled: Bool { halationLevel != .off }
     /// Border the saved photo was made with. Redevelop keeps it.
     public var frame: FrameStyle
     /// How the phone was held; the saved photo is turned to match, and Redevelop turns it again.
@@ -50,8 +52,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         rawExposureOffset: Double = 0,
         mirrored: Bool = false,
         frame: FrameStyle = .off,
-        grainEnabled: Bool = true,
-        halationEnabled: Bool = true,
+        grainLevel: GrainLevel = .medium,
+        halationLevel: EffectLevel = .medium,
         orientation: DeviceOrientation = .portrait
     ) {
         self.id = id
@@ -66,14 +68,33 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.rawExposureOffset = rawExposureOffset
         self.mirrored = mirrored
         self.frame = frame
-        self.grainEnabled = grainEnabled
-        self.halationEnabled = halationEnabled
+        self.grainLevel = grainLevel
+        self.halationLevel = halationLevel
         self.orientation = orientation
     }
 
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
-        case grainEnabled, halationEnabled, orientation
+        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(date, forKey: .date)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(presetID, forKey: .presetID)
+        try c.encode(evPushPull, forKey: .evPushPull)
+        try c.encode(aspect, forKey: .aspect)
+        try c.encode(hasRAW, forKey: .hasRAW)
+        try c.encodeIfPresent(placeName, forKey: .placeName)
+        try c.encode(isFavorite, forKey: .isFavorite)
+        try c.encode(rawExposureOffset, forKey: .rawExposureOffset)
+        try c.encode(mirrored, forKey: .mirrored)
+        try c.encode(frame, forKey: .frame)
+        try c.encode(grainLevel, forKey: .grainLevel)
+        try c.encode(halationLevel, forKey: .halationLevel)
+        try c.encode(orientation, forKey: .orientation)
     }
 
     /// Index files from earlier releases lack newer keys; they keep their captures.
@@ -91,8 +112,11 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         rawExposureOffset = (try? c.decode(Double.self, forKey: .rawExposureOffset)) ?? 0
         mirrored = (try? c.decode(Bool.self, forKey: .mirrored)) ?? false
         frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? .off
-        grainEnabled = (try? c.decode(Bool.self, forKey: .grainEnabled)) ?? true
-        halationEnabled = (try? c.decode(Bool.self, forKey: .halationEnabled)) ?? true
+        // Earlier index files only know on or off.
+        grainLevel = (try? c.decode(GrainLevel.self, forKey: .grainLevel))
+            ?? ((try? c.decode(Bool.self, forKey: .grainEnabled)) ?? true ? .medium : .off)
+        halationLevel = (try? c.decode(EffectLevel.self, forKey: .halationLevel))
+            ?? ((try? c.decode(Bool.self, forKey: .halationEnabled)) ?? true ? .medium : .off)
         orientation = (try? c.decode(DeviceOrientation.self, forKey: .orientation)) ?? .portrait
     }
 }

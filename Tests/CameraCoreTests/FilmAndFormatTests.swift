@@ -133,6 +133,20 @@ final class CaptureRecordDecodingTests: XCTestCase {
         XCTAssertFalse(record.mirrored)
         XCTAssertTrue(record.grainEnabled)
         XCTAssertTrue(record.halationEnabled)
+        XCTAssertEqual(record.grainLevel, .medium)
+    }
+
+    func testOldOnOffRecordsBecomeLevelsAndLevelsRoundTrip() throws {
+        let json = #"{"id":"8D2C1E3A-7A64-4C4E-9E7E-3C1B2A0F5D11","date":0,"kind":"photo","presetID":"preset-1","grainEnabled":false,"halationEnabled":true}"#
+        var record = try JSONDecoder().decode(CaptureRecord.self, from: Data(json.utf8))
+        XCTAssertEqual(record.grainLevel, .off)
+        XCTAssertEqual(record.halationLevel, .medium)
+        record.grainLevel = .high
+        record.halationLevel = .low
+        let copy = try JSONDecoder().decode(CaptureRecord.self, from: JSONEncoder().encode(record))
+        XCTAssertEqual(copy, record)
+        XCTAssertEqual(copy.grainLevel, .high)
+        XCTAssertEqual(copy.halationLevel, .low)
     }
 }
 

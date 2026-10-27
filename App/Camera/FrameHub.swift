@@ -54,6 +54,10 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     }
     private var logLook: FilmLook?
     private var portraitLook: PortraitLook?
+    /// At more than 60 fps the viewfinder is drawn at this many frames per second, so the grader has the
+    /// time for the recording. Zero draws every frame.
+    private var previewRate = 0.0
+    private var lastPreviewTime = CMTime.invalid
     /// The newest disparity map, with the subject's disparity from its middle.
     private var depth: (map: CVPixelBuffer, focus: Float)?
     private var depthRotated = false
@@ -88,6 +92,13 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         self.logLook = logLook
         self.aspect = aspect
         self.mirror = mirror
+        lock.unlock()
+    }
+
+    /// Limits how often the viewfinder is redrawn; zero draws every frame.
+    func setPreviewRate(_ framesPerSecond: Double) {
+        lock.lock()
+        previewRate = framesPerSecond
         lock.unlock()
     }
 
@@ -232,7 +243,17 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         let separateRecordStream = recordOutput != nil
         let isRecordStream = separateRecordStream && output === recordOutput
         let wantsRecording = recorder != nil || pending != nil
+        // The viewfinder may skip frames, unless it is also what gets recorded.
+        var skipsFrame = false
+        if previewRate > 0, !isRecordStream, separateRecordStream || !wantsRecording {
+            if lastPreviewTime.isValid, CMTimeGetSeconds(CMTimeSubtract(time, lastPreviewTime)) < 0.9 / previewRate {
+                skipsFrame = true
+            } else {
+                lastPreviewTime = time
+            }
+        }
         lock.unlock()
+        if skipsFrame { return }
 
         if isRecordStream {
             guard wantsRecording,

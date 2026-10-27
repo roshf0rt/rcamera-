@@ -27,7 +27,9 @@ final class VideoRecorder {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
 
-        let bitrate = max(6_000_000, Int(Double(width * height * fps) * 0.12))
+        // High frame rates get fewer bits per pixel, so the encoder keeps up.
+        let bitsPerPixel = fps > 60 ? 0.06 : 0.12
+        let bitrate = max(6_000_000, Int(Double(width * height * fps) * bitsPerPixel))
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc,
             AVVideoWidthKey: width,

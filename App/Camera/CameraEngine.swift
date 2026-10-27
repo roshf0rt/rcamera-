@@ -403,6 +403,8 @@ final class CameraEngine {
             mirror: mirrorsOutput
         )
         controller.hub.setPortrait(portraitLook)
+        // 4K at 120 fps cannot be graded twice per frame, so the viewfinder runs at 30 while recording is whole.
+        controller.hub.setPreviewRate(mode == .video && settings.videoFPS > FormatChooser.highFrameRate ? 30 : 0)
     }
 
     /// How the chosen lens and f-number draw the live portrait background; nil outside portrait photos.

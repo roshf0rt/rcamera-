@@ -352,6 +352,16 @@ final class AppModel {
         }
     }
 
+    /// The preset's look with grain and halation at the given levels, as on the camera screen.
+    func leveledLook(for preset: Preset, grain: GrainLevel, halation: EffectLevel) async -> FilmLook {
+        let base = await baseLook(for: preset)
+        return base.with(
+            grain: min(1, base.grain * grain.multiplier),
+            halation: base.halation * halation.multiplier,
+            adjustments: base.adjustments
+        )
+    }
+
     /// The preset's look with the camera-screen grain and halation toggles applied.
     func cameraLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
         let base = await baseLook(for: preset, slot: slot)
@@ -419,8 +429,8 @@ final class AppModel {
         let preset = selectedPreset
         let saveLocation = settings.savesLocation
         let keepRAW = settings.capturesRAW
-        let grainOn = settings.grainEnabled
-        let halationOn = settings.halationEnabled
+        let grainLevel = settings.grainLevel
+        let halationLevel = settings.halationLevel
         let frame = settings.frame
         let portraitFNumber = settings.portraitFNumber
         let lens = settings.lensStyle
@@ -462,8 +472,8 @@ final class AppModel {
                 rawExposureOffset: developed.rawExposureOffset,
                 mirrored: photo.mirror,
                 frame: frame,
-                grainEnabled: grainOn,
-                halationEnabled: halationOn,
+                grainLevel: grainLevel,
+                halationLevel: halationLevel,
                 orientation: photo.orientation
             )
             do {
@@ -546,11 +556,11 @@ final class AppModel {
     }
 
     /// Re-renders a stored photo with a different preset and push/pull, replacing the processed image.
-    func redevelop(_ record: CaptureRecord, presetID: String, pushPull: Double, grain: Bool, halation: Bool) async -> Bool {
+    func redevelop(_ record: CaptureRecord, presetID: String, pushPull: Double, grain: GrainLevel, halation: EffectLevel) async -> Bool {
         guard let preset = preset(id: presetID),
               let source = await redevelopSource(for: record)
         else { return false }
-        let look = await baseLook(for: preset).with(grain: grain, halation: halation)
+        let look = await leveledLook(for: preset, grain: grain, halation: halation)
         let aspect = record.aspect
         let mirror = record.mirrored
         let orientation = record.orientation
@@ -576,8 +586,8 @@ final class AppModel {
             var updated = record
             updated.presetID = presetID
             updated.evPushPull = pushPull
-            updated.grainEnabled = grain
-            updated.halationEnabled = halation
+            updated.grainLevel = grain
+            updated.halationLevel = halation
             try captureStore.update(updated)
             captures = captureStore.records
             try? await PhotoLibrarySaver.savePhoto(heicURL: captureStore.url(.processed, for: record.id), rawURL: nil)

@@ -257,6 +257,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             return applyOnQueue(config)
         }
 
+        // Queued frames of a 4K 120 fps recording would fill memory; past 60 fps late frames are dropped
+        // (the recorder repeats the previous one).
+        if hasRecordOutput { recordOutput.alwaysDiscardsLateVideoFrames = config.format.fps > FormatChooser.highFrameRate }
         configureDevice(config, device: device)
         configureConnections(config)
         updateDepthOutput(enabled: config.portrait && config.mode == .photo && position == .back, device: device)
