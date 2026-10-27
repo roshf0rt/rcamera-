@@ -1,0 +1,43 @@
+swift_source,functions_referencing,sample_function_va
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/SessionReplay/SentrySessionReplay.swift,13,0x100624320 0x100624660 0x10062492c 0x100624a90 0x100624cb4 0x100624f40 0x1006251b8 0x100625728 0x1006263c8 0x100627354 0x100627968 0x100627df4
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/SessionReplay/SentryOnDemandReplay.swift,11,0x10060ff6c 0x100610894 0x100611af8 0x100611da0 0x100612058 0x100612bd0 0x100612f64 0x100613e50 0x1006151f0 0x1006157e4 0x100617848
+CamX/ios/Pods/Sentry/Sources/Swift/Persistence/SentryScopeContextPersistentStore.swift,7,0x100621fa4 0x1006221b8 0x10062261c 0x1006228f8 0x100622b4c 0x1006235a8 0x1006238c8
+CamX/ios/Pods/Mixpanel-swift/Sources/MixpanelInstance.swift,6,0x100105a20 0x100106ad4 0x100109a1c 0x10010ab68 0x10010e704 0x100115a48
+CamX/ios/Pods/Mixpanel-swift/Sources/MPDB.swift,6,0x10011fab4 0x10011ffa8 0x100120ba8 0x100120e70 0x100122598 0x100123ce0
+CamX/ios/Pods/Sentry/Sources/Swift/Protocol/Codable/DecodeArbitraryData.swift,6,0x1005f6958 0x1005faf28 0x1005fdd9c 0x100608e24 0x1006098c0 0x100635920
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/WatchdogTerminations/Processors/SentryWatchdogTerminationContextProcessor.swift,4,0x100649bb8 0x100649d78 0x100649f18 0x10064a120
+CamX/ios/Pods/Mixpanel-swift/Sources/MixpanelPersistence.swift,3,0x100117e7c 0x10011a080 0x10011b9c8
+CamX/ios/Pods/Mixpanel-swift/Sources/Track.swift,3,0x1001299b4 0x10012b048 0x10012bd10
+CamX/ios/Pods/Sentry/Sources/Swift/Core/Tools/ViewCapture/SentryGraphicsImageRenderer.swift,3,0x1006046c0 0x100605030 0x10060569c
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/UserFeedback/SentryUserFeedbackFormViewModel.swift,3,0x10063b274 0x10063e298 0x100640578
+CamX/ios/Pods/Mixpanel-swift/Sources/FlushRequest.swift,2,0x1000fc540 0x1000fd364
+CamX/ios/Pods/Mixpanel-swift/Sources/Mixpanel.swift,2,0x100102e3c 0x1001033ec
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/SessionReplay/SentryTouchTracker.swift,2,0x1006263c8 0x10062dab4
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/UserFeedback/SentryUserFeedbackFormController.swift,2,0x10063a5b4 0x10063a908
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/UserFeedback/SentryUserFeedbackWidgetButtonView.swift,2,0x1006453a4 0x100645f40
+CamX/MoodCILightenFilter.swift,1,0x10000531c
+CamX/MoodCIFadeMuteFilter.swift,1,0x100009e5c
+CamX/MoodCIAberrationFilter.swift,1,0x10000cde0
+CamX/MoodCIBlurFilter.swift,1,0x10000ea88
+CamX/MoodCIChromeDensityFilter.swift,1,0x10001052c
+CamX/MoodCIColorControlsFilter.swift,1,0x100012ca0
+CamX/MoodCIDebandFilter.swift,1,0x100013c94
+CamX/MoodCIDiffuseBloomFilter.swift,1,0x1000158bc
+CamX/MoodCIDiffuseFilter.swift,1,0x10001714c
+CamX/MoodCIDiffuseHalationFilter.swift,1,0x10001b054
+CamX/GainMapToIsoMapFilter.swift,1,0x10001c768
+CamX/MoodCIDynamicRangeFilter.swift,1,0x10001d450
+CamX/MoodCIFocusGainMapFilter.swift,1,0x10001f2fc
+CamX/MoodCIGrainFilter.swift,1,0x100021e4c
+CamX/MoodCIHdrGainMapFromImage.swift,1,0x100022d18
+CamX/MoodCIJPEGV3Filter.swift,1,0x1000232fc
+CamX/AssetCrypto.swift,1,0x1000254e4
+CamX/ios/Pods/Mixpanel-swift/Sources/Data+Compression.swift,1,0x1000f1ea0
+CamX/ios/Pods/Mixpanel-swift/Sources/Flush.swift,1,0x1000f9e44
+CamX/ios/Pods/Mixpanel-swift/Sources/Network.swift,1,0x1000faee0
+CamX/ios/Pods/Mixpanel-swift/Sources/JSONHandler.swift,1,0x100100500
+CamX/ios/Pods/Sentry/Sources/Swift/Protocol/Codable/NSNumberDecodableWrapper.swift,1,0x1005f83a0
+CamX/ios/Pods/Sentry/Sources/Swift/Protocol/Codable/SentryCodable.swift,1,0x1005ff74c
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/SessionReplay/SentryPixelBuffer.swift,1,0x100618134
+CamX/ios/Pods/Sentry/Sources/Swift/Integrations/UserFeedback/SentryUserFeedbackIntegrationDriver.swift,1,0x100641ae4
+CamX/ios/Pods/Sentry/Sources/Swift/Core/Integrations/Performance/SwizzleClassNameExclude.swift,1,0x10064a768
