@@ -59,9 +59,11 @@ final class AppModel {
         var updated = settings
         change(&updated)
         guard updated != settings else { return }
+        let togglesChanged = updated.grainEnabled != settings.grainEnabled || updated.halationEnabled != settings.halationEnabled
         settings = updated
         try? settingsStore.save(updated)
         engine.update(settings: updated)
+        if togglesChanged { pushLooks() }
     }
 
     func binding<Value>(_ keyPath: WritableKeyPath<AppSettings, Value>) -> Binding<Value> {
@@ -131,13 +133,18 @@ final class AppModel {
         if presetID == settings.selectedPresetID { pushLooks() }
     }
 
+    /// The preset's look with the camera-screen grain and halation toggles applied.
     func look(for preset: Preset, slot: LUTSlot = .photo) -> FilmLook {
         let key = "\(preset.id)|\(slot.rawValue)"
-        if let cached = lookCache[key] { return cached }
-        let lut = try? presetLibrary.loadLUT(for: preset.id, slot: slot)
-        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation)
-        lookCache[key] = look
-        return look
+        let base: FilmLook
+        if let cached = lookCache[key] {
+            base = cached
+        } else {
+            let lut = try? presetLibrary.loadLUT(for: preset.id, slot: slot)
+            base = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation)
+            lookCache[key] = base
+        }
+        return base.with(grain: settings.grainEnabled, halation: settings.halationEnabled)
     }
 
     private func pushLooks() {

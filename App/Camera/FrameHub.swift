@@ -2,8 +2,12 @@ import AVFoundation
 import CameraCore
 import CoreImage
 
-/// Receives raw camera frames on the capture queue, crops them to the chosen aspect, applies the
-/// preset look, then shows the result and (when recording) writes it to disk.
+/// Receives camera frames on the capture queue, crops them to the chosen aspect, grades them on the GPU,
+/// then shows the result and (when recording) writes it to disk.
+///
+/// With two video outputs (iOS 16+ on most devices) the viewfinder stream is unstabilized, so it has no
+/// delay, and a second stream carries stabilized frames for the recording only. Lampa does the same
+/// ("stream stabilization" and "recorder stabilization"). With one output, that output does both.
 final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     struct Geometry {
         var source: CGSize
@@ -14,6 +18,8 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         var url: URL
         var fps: Int
         var audioSettings: [String: Any]?
+        /// Frames captured before the button press are dropped. Stabilization delays frames, so some arrive late.
+        var requestTime: CMTime
         var onStart: () -> Void
         var onFail: (Error) -> Void
     }
@@ -21,25 +27,24 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     let displayLayer = AVSampleBufferDisplayLayer()
 
     private let queue: DispatchQueue
-    /// No color management at all: frame values go through the LUT exactly as the camera delivered them,
-    /// and the output keeps them. Apple Log frames stay log until the LUT decodes them.
-    private let ciContext = CIContext(options: [
-        .workingColorSpace: NSNull(),
-        .outputColorSpace: NSNull(),
-        .cacheIntermediates: false,
-    ])
+    private let grader = MetalGrader.shared
+    /// Used only if Metal is unavailable: crops without the look.
+    private let fallbackContext = CIContext(options: [.workingColorSpace: NSNull(), .outputColorSpace: NSNull(), .cacheIntermediates: false])
     private let lock = NSLock()
 
     private var look = FilmLook.identity
-    private var aspect: AspectOption?
+    private var logLook: FilmLook?
+    private var aspect: AspectOption = .ratio4x3
     private var mirror = false
+    private weak var recordOutput: AVCaptureOutput?
     private var geometry: Geometry?
     private var pending: PendingRecording?
     private var recorder: VideoRecorder?
+    private var startNotification: (() -> Void)?
+    private var deliveredFrames = 0
 
-    private var pool: CVPixelBufferPool?
-    private var poolWidth = 0
-    private var poolHeight = 0
+    private let previewPool = PixelBufferPool()
+    private let recordPool = PixelBufferPool()
 
     init(queue: DispatchQueue) {
         self.queue = queue
@@ -47,11 +52,20 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         displayLayer.videoGravity = .resizeAspectFill
     }
 
-    func configure(look: FilmLook, aspect: AspectOption?, mirror: Bool) {
+    /// `logLook` grades 10-bit Apple Log frames; everything else uses `look`.
+    func configure(look: FilmLook, logLook: FilmLook?, aspect: AspectOption, mirror: Bool) {
         lock.lock()
         self.look = look
+        self.logLook = logLook
         self.aspect = aspect
         self.mirror = mirror
+        lock.unlock()
+    }
+
+    /// The output whose frames are only recorded. Nil when the viewfinder stream is recorded too.
+    func setRecordOutput(_ output: AVCaptureOutput?) {
+        lock.lock()
+        recordOutput = output
         lock.unlock()
     }
 
@@ -61,11 +75,19 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         return geometry
     }
 
+    /// Viewfinder frames shown so far. Used to keep the switch blur up until fresh frames arrive.
+    var frameCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return deliveredFrames
+    }
+
     // MARK: Recording
 
     func startRecording(url: URL, fps: Int, audioSettings: [String: Any]?, onStart: @escaping () -> Void, onFail: @escaping (Error) -> Void) {
+        let now = CMClockGetTime(CMClockGetHostTimeClock())
         lock.lock()
-        pending = PendingRecording(url: url, fps: fps, audioSettings: audioSettings, onStart: onStart, onFail: onFail)
+        pending = PendingRecording(url: url, fps: fps, audioSettings: audioSettings, requestTime: now, onStart: onStart, onFail: onFail)
         lock.unlock()
     }
 
@@ -99,33 +121,58 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
         lock.lock()
-        let look = look, aspect = aspect, mirror = mirror
+        let isLog = Self.isTenBit(source)
+        let look = isLog ? (logLook ?? look) : look
+        let aspect = aspect, mirror = mirror
+        let separateRecordStream = recordOutput != nil
+        let isRecordStream = separateRecordStream && output === recordOutput
+        let wantsRecording = recorder != nil || pending != nil
         lock.unlock()
 
-        let sourceWidth = CVPixelBufferGetWidth(source)
-        let sourceHeight = CVPixelBufferGetHeight(source)
-        let crop = aspect?.cropRect(sourceWidth: sourceWidth, sourceHeight: sourceHeight)
-            ?? CropRect(x: 0, y: 0, width: sourceWidth & ~1, height: sourceHeight & ~1)
+        if isRecordStream {
+            guard wantsRecording,
+                  let rendered = render(source, pool: recordPool, look: look, aspect: aspect, mirror: mirror)
+            else { return }
+            record(rendered.buffer, at: time, width: rendered.crop.width, height: rendered.crop.height)
+            return
+        }
+
+        guard let rendered = render(source, pool: previewPool, look: look, aspect: aspect, mirror: mirror) else { return }
+        let buffer = rendered.buffer, crop = rendered.crop
+        lock.lock()
+        geometry = Geometry(source: CGSize(width: CVPixelBufferGetWidth(source), height: CVPixelBufferGetHeight(source)), crop: crop)
+        deliveredFrames += 1
+        lock.unlock()
+
+        display(buffer, at: time)
+        if !separateRecordStream, wantsRecording {
+            record(buffer, at: time, width: crop.width, height: crop.height)
+        }
+    }
+
+    private static func isTenBit(_ buffer: CVPixelBuffer) -> Bool {
+        let format = CVPixelBufferGetPixelFormatType(buffer)
+        return format == kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange || format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+    }
+
+    private func render(_ source: CVPixelBuffer, pool: PixelBufferPool, look: FilmLook, aspect: AspectOption, mirror: Bool) -> (buffer: CVPixelBuffer, crop: CropRect)? {
+        let crop = aspect.cropRect(sourceWidth: CVPixelBufferGetWidth(source), sourceHeight: CVPixelBufferGetHeight(source))
+        guard let output = pool.buffer(width: crop.width, height: crop.height) else { return nil }
+        if let grader, grader.grade(source: source, crop: crop, mirror: mirror, look: look, into: output) {
+            return (output, crop)
+        }
 
         // Core Image's origin is bottom-left.
+        let sourceHeight = CVPixelBufferGetHeight(source)
         let rect = CGRect(x: crop.x, y: sourceHeight - crop.y - crop.height, width: crop.width, height: crop.height)
         var image = CIImage(cvPixelBuffer: source, options: [.colorSpace: NSNull()])
             .cropped(to: rect)
             .transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
-        image = look.apply(to: image, raw: true)
         if mirror {
             image = image.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: -CGFloat(crop.width), y: 0))
         }
-
-        guard let output = makeBuffer(width: crop.width, height: crop.height) else { return }
-        ciContext.render(image, to: output)
-
-        lock.lock()
-        geometry = Geometry(source: CGSize(width: sourceWidth, height: sourceHeight), crop: crop)
-        lock.unlock()
-
-        display(output, at: time)
-        record(output, at: time, width: crop.width, height: crop.height)
+        fallbackContext.render(image, to: output)
+        return (output, crop)
     }
 
     private func record(_ buffer: CVPixelBuffer, at time: CMTime, width: Int, height: Int) {
@@ -135,6 +182,7 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         lock.unlock()
 
         if recorder == nil, let pending {
+            if CMTimeCompare(time, pending.requestTime) < 0 { return }
             do {
                 recorder = try VideoRecorder(url: pending.url, width: width, height: height, fps: pending.fps, audioSettings: pending.audioSettings)
             } catch {
@@ -147,35 +195,20 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
             lock.lock()
             self.recorder = recorder
             self.pending = nil
+            startNotification = pending.onStart
             lock.unlock()
         }
 
-        if let recorder, recorder.appendVideo(buffer, at: time), let pending {
-            pending.onStart()
+        if let recorder, recorder.appendVideo(buffer, at: time) {
+            lock.lock()
+            let notify = startNotification
+            startNotification = nil
+            lock.unlock()
+            notify?()
         }
     }
 
-    // MARK: Output helpers
-
-    private func makeBuffer(width: Int, height: Int) -> CVPixelBuffer? {
-        if pool == nil || poolWidth != width || poolHeight != height {
-            let attributes: [String: Any] = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: width,
-                kCVPixelBufferHeightKey as String: height,
-                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
-            ]
-            var newPool: CVPixelBufferPool?
-            CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &newPool)
-            pool = newPool
-            poolWidth = width
-            poolHeight = height
-        }
-        guard let pool else { return nil }
-        var buffer: CVPixelBuffer?
-        CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
-        return buffer
-    }
+    // MARK: Display
 
     private func display(_ buffer: CVPixelBuffer, at time: CMTime) {
         var format: CMVideoFormatDescription?
@@ -206,5 +239,33 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         let renderer = displayLayer.sampleBufferRenderer
         if renderer.status == .failed { renderer.flush() }
         renderer.enqueue(sampleBuffer)
+    }
+}
+
+/// BGRA buffers the GPU can write into, recreated when the size changes.
+final class PixelBufferPool {
+    private var pool: CVPixelBufferPool?
+    private var width = 0
+    private var height = 0
+
+    func buffer(width: Int, height: Int) -> CVPixelBuffer? {
+        if pool == nil || self.width != width || self.height != height {
+            let attributes: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+            ]
+            var newPool: CVPixelBufferPool?
+            CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &newPool)
+            pool = newPool
+            self.width = width
+            self.height = height
+        }
+        guard let pool else { return nil }
+        var buffer: CVPixelBuffer?
+        CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+        return buffer
     }
 }

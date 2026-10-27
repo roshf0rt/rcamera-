@@ -70,7 +70,10 @@ enum PhotoPipeline {
         var result = image
             .cropped(to: rect)
             .transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
-        result = look.apply(to: result, raw: false)
+        // The same GPU grade as the viewfinder, so the photo matches what was on screen.
+        if let graded = MetalGrader.shared?.grade(image: result, look: look, context: context) {
+            result = graded
+        }
         if mirror {
             result = result.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: -rect.width, y: 0))
         }

@@ -1,6 +1,9 @@
 import CameraCore
 import SwiftUI
 
+/// The camera screen. Everything is stacked top to bottom inside the safe area, so no control sits on
+/// another: top bar, viewfinder (sized to the aspect and whatever room is left), exposure wheel,
+/// shutter row, mode row. Zoom chips, the preset picker and the options panel live inside the viewfinder.
 struct CameraView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -9,7 +12,6 @@ struct CameraView: View {
     @State private var showPresets = false
     @State private var showSettings = false
     @State private var showGallery = false
-    @State private var showZoomSlider = false
     @State private var evActive = false
     @State private var focusMarker: FocusPoint?
     @State private var pinchStart: Double?
@@ -19,61 +21,25 @@ struct CameraView: View {
         var id = UUID()
     }
 
-    private let side: CGFloat = 6
-
     var body: some View {
         let engine = model.engine
-        GeometryReader { geo in
-            let width = geo.size.width - side * 2
-            let screenWidth = geo.size.width
-            let screenHeight = geo.size.height
-            let previewTop = geo.safeAreaInsets.top + 20
-            let isVideo = engine.mode == .video
-            let videoRatio = CGFloat(16.0 / 9.0)
-            let photoRatio = CGFloat(model.settings.aspect.portraitHeightOverWidth)
-            let desired: CGFloat = isVideo ? width * videoRatio : width * photoRatio
-            // Photo: keep clear of the zoom chips. Video: reach just below the shutter ring, which sits on the picture.
-            let lowestEdge: CGFloat = showPresets ? screenHeight - 312 : (isVideo ? screenHeight - 80 : screenHeight - 257)
-            let previewHeight = max(200, min(desired, lowestEdge - previewTop))
-
-            ZStack {
-                Color.black
-
-                topBar
-                    .frame(width: screenWidth)
-                    .position(x: screenWidth / 2, y: previewTop - 19)
-
-                viewfinder(engine: engine, size: CGSize(width: width, height: previewHeight))
-                    .position(x: screenWidth / 2, y: previewTop + previewHeight / 2)
-
-                if showPresets {
-                    PresetPicker()
-                        .frame(width: screenWidth, height: 100)
-                        .position(x: screenWidth / 2, y: screenHeight - 250)
-                        .transition(.opacity)
-                } else {
-                    zoomRow(engine: engine)
-                        .frame(width: screenWidth, height: 54)
-                        .position(x: screenWidth / 2, y: screenHeight - 284)
-                    EVWheel(
-                        value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
-                        isActive: $evActive,
-                        overlaid: isVideo
-                    )
-                    .frame(width: screenWidth, height: 46)
-                    .position(x: screenWidth / 2, y: screenHeight - 213)
-                }
-
-                shutterRow(engine: engine)
-                    .frame(width: screenWidth)
-                    .position(x: screenWidth / 2, y: screenHeight - 134)
-                modeRow(engine: engine)
-                    .frame(width: screenWidth)
-                    .position(x: screenWidth / 2, y: screenHeight - 52)
-            }
-            .frame(width: screenWidth, height: screenHeight)
+        VStack(spacing: 0) {
+            topBar(engine: engine)
+                .frame(height: 52)
+            viewfinderArea(engine: engine)
+            EVWheel(
+                value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
+                isActive: $evActive
+            )
+            .frame(height: 46)
+            .padding(.top, 12)
+            shutterRow(engine: engine)
+                .frame(height: 92)
+                .padding(.top, 8)
+            modeRow(engine: engine)
+                .frame(height: 44)
+                .padding(.bottom, 4)
         }
-        .ignoresSafeArea()
         .background(Color.black.ignoresSafeArea())
         .overlay { if engine.access == .denied { accessDenied } }
         .fullScreenCover(isPresented: $showGallery) { GalleryView() }
@@ -96,6 +62,7 @@ struct CameraView: View {
         .onChange(of: model.settings.isLevelEnabled) { _, enabled in
             enabled ? model.level.start() : model.level.stop()
         }
+        .onChange(of: engine.mode) { _, _ in showOptions = false }
     }
 
     private var alertBinding: Binding<Bool> {
@@ -118,29 +85,52 @@ struct CameraView: View {
 
     // MARK: Top bar
 
-    private var topBar: some View {
-        HStack {
+    private func topBar(engine: CameraEngine) -> some View {
+        HStack(spacing: 8) {
             Button { showSettings = true } label: {
                 Image(systemName: "hexagon.fill")
-                    .font(.system(size: 20))
+                    .font(.system(size: 18))
                     .foregroundStyle(Color(white: 0.7))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 42, height: 42)
                     .background(Circle().fill(Theme.chrome))
             }
-            Spacer()
-            Button { withAnimation(.easeOut(duration: 0.18)) { showOptions.toggle() } } label: {
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+            EffectToggle(title: "Grain", systemName: "circle.dotted", isOn: model.settings.grainEnabled) {
+                model.updateSettings { $0.grainEnabled.toggle() }
+            }
+            EffectToggle(title: "Halation", systemName: "sun.max", isOn: model.settings.halationEnabled) {
+                model.updateSettings { $0.halationEnabled.toggle() }
+            }
+            Spacer(minLength: 0)
+
+            Button { withAnimation(.easeOut(duration: 0.18)) { showOptions.toggle(); showPresets = false } } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(showOptions ? Theme.accent : .white)
-                    .frame(width: 64, height: 40)
+                    .frame(width: 56, height: 38)
                     .background(Capsule().fill(Theme.chrome))
             }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
-        .frame(height: 44)
     }
 
     // MARK: Viewfinder
+
+    private func viewfinderArea(engine: CameraEngine) -> some View {
+        GeometryReader { geo in
+            let ratio = engine.mode == .video ? 16.0 / 9.0 : model.settings.aspect.portraitHeightOverWidth
+            let width = min(geo.size.width - 12, geo.size.height / CGFloat(ratio))
+            let size = CGSize(width: max(width, 1), height: max(width * CGFloat(ratio), 1))
+            viewfinder(engine: engine, size: size)
+                .frame(width: size.width, height: size.height)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .animation(.easeInOut(duration: 0.22), value: size)
+        }
+        .padding(.top, 2)
+    }
 
     private func viewfinder(engine: CameraEngine, size: CGSize) -> some View {
         ZStack {
@@ -162,20 +152,23 @@ struct CameraView: View {
                     .foregroundStyle(.white)
                     .shadow(radius: 8)
             }
-            if engine.isSwitchingMode {
+            if engine.showsSwitchBlur {
                 Rectangle().fill(.ultraThinMaterial).transition(.opacity)
             }
+            bottomOverlay(engine: engine)
             if engine.isRecording { recordingBadge(engine: engine) }
             if showOptions { optionsPanel }
-            if showPresets { collapseButton }
         }
-        .animation(.easeInOut(duration: 0.15), value: engine.isSwitchingMode)
-        .frame(width: size.width, height: size.height)
+        .animation(.easeInOut(duration: 0.15), value: engine.showsSwitchBlur)
         .background(Color(white: 0.06))
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .contentShape(Rectangle())
         .simultaneousGesture(
             SpatialTapGesture().onEnded { value in
+                if showOptions || showPresets {
+                    withAnimation(.easeOut(duration: 0.18)) { showOptions = false; showPresets = false }
+                    return
+                }
                 focusMarker = FocusPoint(location: value.location)
                 engine.focus(atNormalized: CGPoint(x: value.location.x / size.width, y: value.location.y / size.height))
             }
@@ -191,6 +184,33 @@ struct CameraView: View {
         )
     }
 
+    /// Zoom chips sit on the bottom edge of the picture, like the system camera. The exposure readout and
+    /// the preset picker take their place while they are in use.
+    private func bottomOverlay(engine: CameraEngine) -> some View {
+        VStack {
+            Spacer()
+            Group {
+                if showPresets {
+                    PresetPicker()
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.35))
+                        .background(.ultraThinMaterial)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else if evActive {
+                    EVBubble(value: engine.evBias)
+                        .padding(.bottom, 12)
+                } else if engine.lens != .front, !engine.zoomStops.isEmpty {
+                    ZoomChips(stops: engine.zoomStops, active: engine.activeStop, mode: engine.mode) { stop in
+                        engine.selectZoom(stop)
+                    }
+                    .padding(.horizontal, 6)
+                    .background(Capsule().fill(Color.black.opacity(0.32)))
+                    .padding(.bottom, 10)
+                }
+            }
+        }
+    }
+
     private var optionsPanel: some View {
         VStack {
             OptionsPanel(
@@ -202,20 +222,6 @@ struct CameraView: View {
             Spacer()
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
-    }
-
-    private var collapseButton: some View {
-        VStack {
-            Spacer()
-            Button { withAnimation(.easeOut(duration: 0.2)) { showPresets = false } } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .background(Circle().fill(Color.black.opacity(0.45)))
-            }
-            .padding(.bottom, 10)
-        }
     }
 
     private func recordingBadge(engine: CameraEngine) -> some View {
@@ -241,34 +247,6 @@ struct CameraView: View {
 
     // MARK: Bottom controls
 
-    private func zoomRow(engine: CameraEngine) -> some View {
-        ZStack {
-            if evActive {
-                EVBubble(value: engine.evBias)
-            } else if showZoomSlider && engine.lens != .front {
-                Slider(
-                    value: Binding(get: { engine.zoomFactor }, set: { engine.setContinuousZoom($0) }),
-                    in: 1 ... 10
-                )
-                .tint(Theme.accent)
-                .padding(.horizontal, 80)
-            } else {
-                ZoomChips(stops: engine.zoomStops, active: engine.activeStop, mode: engine.mode) { stop in
-                    engine.selectZoom(stop)
-                }
-            }
-            HStack {
-                if engine.mode == .video && engine.lens != .front {
-                    CircleIconButton(systemName: "plus.magnifyingglass") { showZoomSlider.toggle() }
-                }
-                Spacer()
-                CircleIconButton(systemName: "arrow.triangle.2.circlepath") { engine.flipCamera() }
-            }
-            .padding(.horizontal, 18)
-        }
-        .frame(height: 54)
-    }
-
     private func shutterRow(engine: CameraEngine) -> some View {
         HStack {
             Button { showGallery = true } label: {
@@ -276,105 +254,96 @@ struct CameraView: View {
                     if let latest = model.captures.first {
                         CaptureThumbnail(record: latest)
                     } else {
-                        RoundedRectangle(cornerRadius: 16).fill(Theme.chrome)
+                        RoundedRectangle(cornerRadius: 14).fill(Theme.chrome)
                     }
                     if model.processingCount > 0 { ProgressView().tint(.white) }
                 }
-                .frame(width: 62, height: 62)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.7), lineWidth: 1))
+                .frame(width: 58, height: 58)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.7), lineWidth: 1))
             }
             .buttonStyle(.plain)
+            .frame(width: 72, alignment: .leading)
 
             Spacer()
-            shutterButton(engine: engine)
-            Spacer()
-            presetButton
-        }
-        .padding(.horizontal, 24)
-    }
-
-    private func shutterButton(engine: CameraEngine) -> some View {
-        Button { engine.shutterTapped() } label: {
-            ZStack {
-                Circle()
-                    .strokeBorder(LinearGradient(colors: [Color(white: 0.42), Color(white: 0.2)], startPoint: .top, endPoint: .bottom), lineWidth: 5)
-                    .frame(width: 88, height: 88)
-                if engine.mode == .video {
-                    RoundedRectangle(cornerRadius: engine.isRecording ? 8 : 36)
-                        .fill(Color(red: 0.9, green: 0.15, blue: 0.1))
-                        .frame(width: engine.isRecording ? 34 : 72, height: engine.isRecording ? 34 : 72)
-                        .animation(.easeOut(duration: 0.2), value: engine.isRecording)
-                } else {
-                    Circle().fill(Theme.cardLight).frame(width: 72, height: 72)
-                        .scaleEffect(engine.isCapturing ? 0.9 : 1)
-                        .animation(.easeOut(duration: 0.1), value: engine.isCapturing)
-                }
+            ShutterButton(mode: engine.mode, isRecording: engine.isRecording, isCapturing: engine.isCapturing) {
+                engine.shutterTapped()
             }
+            .disabled(engine.access != .granted || engine.isSwitchingMode)
+            Spacer()
+
+            presetButton
+                .frame(width: 72, alignment: .trailing)
         }
-        .buttonStyle(.plain)
-        .disabled(engine.access != .granted)
+        .padding(.horizontal, 22)
     }
 
     private var presetButton: some View {
         let preset = model.selectedPreset
         return Button { withAnimation(.easeOut(duration: 0.2)) { showPresets.toggle(); showOptions = false } } label: {
             ZStack {
-                if !showPresets {
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(Theme.gradient(preset.accentIndex))
-                        .frame(width: 62, height: 62)
-                        .offset(x: 5, y: 5)
-                        .opacity(0.8)
-                }
-                RoundedRectangle(cornerRadius: 20)
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Theme.gradient(preset.accentIndex))
+                    .frame(width: 58, height: 58)
+                    .offset(x: 4, y: 4)
+                    .opacity(showPresets ? 0 : 0.8)
+                RoundedRectangle(cornerRadius: 18)
                     .fill(Color(white: showPresets ? 0.1 : 0.14))
-                    .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color(white: 0.3), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color(white: showPresets ? 0.5 : 0.3), lineWidth: 1))
                     .overlay(
-                        Text(showPresets ? "PRESET" : preset.name.uppercased())
+                        Text(preset.name.uppercased())
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(showPresets ? Theme.secondaryText : .white)
+                            .foregroundStyle(.white)
                             .multilineTextAlignment(.center)
                             .minimumScaleFactor(0.6)
                             .padding(4)
                     )
-                    .frame(width: 62, height: 62)
+                    .frame(width: 58, height: 58)
             }
-            .frame(width: 70, height: 70)
+            .frame(width: 64, height: 64)
         }
         .buttonStyle(.plain)
     }
 
     private func modeRow(engine: CameraEngine) -> some View {
         ZStack {
-            HStack(spacing: 40) {
+            HStack(spacing: 36) {
                 modeButton("PHOTO", mode: .photo, engine: engine)
                 modeButton("VIDEO", mode: .video, engine: engine)
             }
             HStack {
+                Button { engine.flipCamera() } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(Theme.chrome))
+                }
+                .buttonStyle(.plain)
+                .disabled(engine.isRecording)
                 Spacer()
                 Button { engine.toggleLock() } label: {
-                    HStack(spacing: 6) {
-                        Text("AE/AF").font(.system(size: 14, weight: .semibold))
-                        Image(systemName: engine.isAELocked ? "lock.fill" : "lock.open.fill").font(.system(size: 13))
+                    HStack(spacing: 5) {
+                        Text("AE/AF").font(.system(size: 13, weight: .semibold))
+                        Image(systemName: engine.isAELocked ? "lock.fill" : "lock.open.fill").font(.system(size: 12))
                     }
                     .foregroundStyle(engine.isAELocked ? Theme.accent : Theme.secondaryText)
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
+                    .padding(.horizontal, 11)
+                    .frame(height: 34)
                     .background(Capsule().fill(Theme.chrome))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.trailing, 16)
+            .padding(.horizontal, 16)
         }
-        .frame(height: 44)
     }
 
     private func modeButton(_ title: String, mode: CaptureMode, engine: CameraEngine) -> some View {
         Button { engine.selectMode(mode) } label: {
             Text(title)
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(engine.mode == mode ? Theme.accent : Theme.secondaryText)
+                .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
         .disabled(engine.isRecording || engine.isSwitchingMode)
@@ -396,5 +365,64 @@ struct CameraView: View {
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.92))
+    }
+}
+
+/// A small on/off chip in the top bar, like Lampa's grain and halation switches.
+private struct EffectToggle: View {
+    let title: String
+    let systemName: String
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemName).font(.system(size: 12, weight: .semibold))
+                Text(title).font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(isOn ? Color.black : Theme.secondaryText)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(Capsule().fill(isOn ? Theme.accent : Theme.chrome))
+        }
+        .buttonStyle(.plain)
+        .sensoryFeedback(.selection, trigger: isOn)
+    }
+}
+
+/// Photo: a light disc in a ring. Video: a red disc that turns into a rounded square while recording.
+/// Both fit inside the ring, so nothing sticks out of it.
+private struct ShutterButton: View {
+    let mode: CaptureMode
+    let isRecording: Bool
+    let isCapturing: Bool
+    let action: () -> Void
+
+    private let ring: CGFloat = 80
+    private let ringWidth: CGFloat = 4
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .strokeBorder(Color(white: 0.85), lineWidth: ringWidth)
+                if mode == .video {
+                    RoundedRectangle(cornerRadius: isRecording ? 7 : 31)
+                        .fill(Color(red: 0.92, green: 0.18, blue: 0.14))
+                        .frame(width: isRecording ? 30 : 62, height: isRecording ? 30 : 62)
+                } else {
+                    Circle()
+                        .fill(Theme.cardLight)
+                        .frame(width: 64, height: 64)
+                        .scaleEffect(isCapturing ? 0.88 : 1)
+                }
+            }
+            .frame(width: ring, height: ring)
+            .contentShape(Circle())
+            .animation(.easeOut(duration: 0.2), value: isRecording)
+            .animation(.easeOut(duration: 0.1), value: isCapturing)
+        }
+        .buttonStyle(.plain)
     }
 }

@@ -39,12 +39,14 @@ final class CameraEngine {
     private(set) var isCapturing = false
     private(set) var rawAvailable = false
     private(set) var appleLogActive = false
+    /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
+    private(set) var showsSwitchBlur = false
     var message: String?
 
     var phase: CameraPhase { machine.phase }
     var mode: CaptureMode { machine.configuration.mode }
     var lens: LensID { machine.configuration.lens }
-    /// True while the session is switching between photo and video, which briefly freezes the viewfinder.
+    /// True while the session is switching between photo and video.
     var isSwitchingMode: Bool { phase == .reconfiguringMode }
     var isRecording: Bool { [.startingRecording, .videoRecording, .finishingRecording, .reconfiguringLensInRecording].contains(phase) }
 
@@ -122,6 +124,9 @@ final class CameraEngine {
         let previousZoom = digitalZoom
         digitalZoom = 1
         if send(.switchMode(new)) {
+            // Crop and look follow at once; when photo and video share a format this is the whole switch.
+            refreshStops()
+            updateHub()
             onModeChanged?(new)
         } else {
             digitalZoom = previousZoom
@@ -231,8 +236,25 @@ final class CameraEngine {
         send(.reconfigurationSessionDidStart)
         Task {
             if mode == .video { _ = await controller.requestMicrophoneAccess() }
-            await applyConfig()
+            // Only blur when the switch is slow enough to notice.
+            let blur = Task {
+                try? await Task.sleep(for: .milliseconds(90))
+                if !Task.isCancelled { showsSwitchBlur = true }
+            }
+            let info = await applyConfig()
+            if info.didReconfigure { await waitForFreshFrames() }
+            blur.cancel()
+            showsSwitchBlur = false
             send(.reconfigurationSessionDidFinish)
+        }
+    }
+
+    /// After a rebuild the first frames can still be dark or mid-exposure, so wait for a few.
+    private func waitForFreshFrames() async {
+        let start = controller.hub.frameCount
+        for _ in 0 ..< 60 {
+            if controller.hub.frameCount >= start + 3 { return }
+            try? await Task.sleep(for: .milliseconds(16))
         }
     }
 
@@ -246,7 +268,8 @@ final class CameraEngine {
         Task { await applyConfig() }
     }
 
-    private func applyConfig() async {
+    @discardableResult
+    private func applyConfig() async -> CaptureSessionController.DeviceInfo {
         appleLogRequested = wantsAppleLog
         let config = CaptureSessionController.Config(
             lens: machine.configuration.lens,
@@ -263,6 +286,7 @@ final class CameraEngine {
         appleLogActive = info.appleLogActive
         refreshStops()
         updateHub()
+        return info
     }
 
     private func refreshStops() {
@@ -281,6 +305,8 @@ final class CameraEngine {
 
     private var mirrorsOutput: Bool { lens == .front && settings.mirrorFrontCamera }
 
+    /// 10-bit Apple Log frames pick the Apple Log look by themselves. If the camera can only deliver
+    /// Apple Log as BGRA, every video frame is log while it is active.
     private func updateHub() {
         let look: FilmLook
         if mode == .photo {
@@ -292,7 +318,8 @@ final class CameraEngine {
         }
         controller.hub.configure(
             look: look,
-            aspect: mode == .photo ? settings.aspect : nil,
+            logLook: mode == .video ? looks.appleLog : nil,
+            aspect: mode == .photo ? settings.aspect : .ratio16x9,
             mirror: mirrorsOutput
         )
     }

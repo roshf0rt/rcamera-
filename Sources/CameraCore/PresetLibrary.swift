@@ -60,13 +60,16 @@ public enum LUTSlot: String, CaseIterable, Codable, Sendable {
 public enum PresetCatalog {
     public static let defaultCount = 10
     /// Bumped whenever default names or looks change, so older installs can adopt them.
-    public static let revision = 2
+    public static let revision = 3
 
     /// JaneSu first, then the Roshfort collection.
     static let names = ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet"]
-    /// Film grain amount each preset starts with.
-    static let grain = [0.35, 0.3, 0.25, 0.3, 0.4, 0.3, 0.3, 0.35, 0.3, 0.3]
-    static let halation = [0.15, 0.1, 0.0, 0.1, 0.2, 0.15, 0.2, 0.1, 0.25, 0.2]
+    /// Film grain amount each preset starts with (see `FilmMath.grainIntensity`).
+    static let grain = [0.5, 0.45, 0.35, 0.45, 0.55, 0.45, 0.45, 0.5, 0.45, 0.45]
+    /// Halation strength each preset starts with (see `FilmMath.halationStrength`).
+    static let halation = [0.6, 0.55, 0.5, 0.6, 0.6, 0.6, 0.65, 0.55, 0.65, 0.6]
+    /// Revision 3 changed how grain and halation are rendered, so earlier amounts are replaced.
+    static let filmRevision = 3
 
     /// Names earlier releases used as placeholders. They are replaced, user-chosen names are not.
     static func isOldPlaceholder(_ name: String, index: Int) -> Bool {
@@ -136,11 +139,12 @@ public final class PresetLibrary {
            !saved.isEmpty {
             if savedRevision < PresetCatalog.revision {
                 // Older installs adopt the new default names, and the default grain and halation
-                // where the user never touched them (both still zero).
+                // where the user never touched them (both still zero) or the renderer changed.
                 for index in saved.indices {
                     guard let fresh = defaults.first(where: { $0.id == saved[index].id }) else { continue }
                     if PresetCatalog.isOldPlaceholder(saved[index].name, index: index + 1) { saved[index].name = fresh.name }
-                    if saved[index].grain == 0, saved[index].halation == 0 {
+                    let untouched = saved[index].grain == 0 && saved[index].halation == 0
+                    if untouched || savedRevision < PresetCatalog.filmRevision {
                         saved[index].grain = fresh.grain
                         saved[index].halation = fresh.halation
                     }

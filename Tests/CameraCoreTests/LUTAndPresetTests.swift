@@ -252,7 +252,8 @@ final class PresetLibraryTests: XCTestCase {
         XCTAssertEqual(library.presets[2].name, "Clear")
         XCTAssertEqual(library.presets[3].name, "Мой пресет")
         XCTAssertGreaterThan(library.presets[0].grain, 0)
-        XCTAssertEqual(library.presets[5].grain, 0.8, "a grain value the user set stays")
+        XCTAssertGreaterThan(library.presets[0].halation, 0)
+        XCTAssertEqual(library.presets[5].grain, 0.45, "amounts from before the new renderer are replaced")
 
         // The migration runs once: a later edit back to zero grain is respected.
         var edited = library.presets[0]
@@ -269,10 +270,11 @@ final class PresetLibraryTests: XCTestCase {
         try FileManager.default.createDirectory(at: storage, withIntermediateDirectories: true)
         try #"[{"id":"preset-1","name":"X","grain":0.2,"accentIndex":0}]"#.write(
             to: storage.appendingPathComponent("presets.json"), atomically: true, encoding: .utf8)
-        try "2".write(to: storage.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
+        try "3".write(to: storage.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
         let library = try PresetLibrary(storageDirectory: storage)
         XCTAssertEqual(library.presets.first?.name, "X")
         XCTAssertEqual(library.presets.first?.halation, 0)
+        XCTAssertEqual(library.presets.first?.grain, 0.2, "amounts set under the current renderer stay")
     }
 
     func testPhotoFallsBackToVideoLUTAndBack() throws {
