@@ -115,7 +115,7 @@ struct ZoomChips: View {
                 .buttonStyle(.plain)
             }
         }
-        .animation(.easeOut(duration: 0.15), value: reading.stop)
+        .animation(.smooth(duration: 0.22), value: reading.stop)
         // A tick as the zoom passes a lens or a stop.
         .sensoryFeedback(.selection, trigger: reading.stop)
     }
@@ -128,11 +128,17 @@ struct ZoomChips: View {
                 VStack(spacing: -1) {
                     Text(live.map { "\(Int(($0 * 24).rounded()))" } ?? stop.label)
                         .font(.system(size: isActive ? 20 : 17, weight: .semibold))
-                    if isActive { Text("mm").font(.system(size: 11, weight: .medium)) }
+                        .contentTransition(.numericText())
+                    if isActive {
+                        Text("mm")
+                            .font(.system(size: 11, weight: .medium))
+                            .transition(.opacity)
+                    }
                 }
             } else {
                 Text(live.map { String(format: "%.1f×", $0) } ?? (isActive ? "\(stop.label)×" : stop.label))
                     .font(.system(size: isActive ? 18 : 17, weight: .semibold))
+                    .contentTransition(.numericText())
             }
         }
         .lineLimit(1)
@@ -142,6 +148,8 @@ struct ZoomChips: View {
         .frame(width: isActive ? 54 : 42, height: 54)
         .background(Circle().fill(Color.black.opacity(isActive ? 0.45 : 0)))
         .contentShape(Rectangle())
+        // The chip that takes the zoom grows and fades in; the one that lets go shrinks back.
+        .animation(.smooth(duration: 0.22), value: isActive)
     }
 }
 
