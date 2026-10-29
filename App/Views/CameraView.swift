@@ -803,7 +803,7 @@ struct ExposureHUD: View {
         guard autoMotion, !locked else { return Color(white: 0.6) }
         switch state?.status {
         case .cinematic: return Self.green
-        case .settling, .bent, .none: return Self.amber
+        case .settling, .bent, .noMeter, .none: return Self.amber
         case .handedOver: return Self.red
         }
     }
@@ -816,6 +816,7 @@ struct ExposureHUD: View {
         case .bent(let stops) where stops > 0: return String(format: "ND %.1f", max(stops, 0.1))
         case .bent: return "LOW LIGHT"
         case .handedOver(let tooBright): return tooBright ? "ND 1+" : "LOW LIGHT"
+        case .noMeter: return "NO METER"
         }
     }
 
@@ -848,6 +849,18 @@ struct ExposureHUD: View {
             .frame(height: 30)
             .background(Capsule().fill(Color.black.opacity(0.55)))
             .overlay(Capsule().strokeBorder(autoMotion ? color.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 1))
+            // What the loop sees, while AutoMotion is being tuned: the meter, the ISO range, which way it reads.
+            .overlay(alignment: .top) {
+                if autoMotion, let detail = state?.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .offset(y: -13)
+                        .transaction { $0.animation = nil }
+                }
+            }
             // Only the light fades; the numbers change in place, several times a second.
             .animation(.easeOut(duration: 0.25), value: color)
         }

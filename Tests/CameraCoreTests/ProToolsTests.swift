@@ -230,3 +230,37 @@ final class ProSettingsTests: XCTestCase {
         XCTAssertEqual(decoded, settings)
     }
 }
+
+final class MeterTests: XCTestCase {
+    func testABrighterPictureReadingHigherIsPositive() {
+        XCTAssertEqual(MotionExposure.Meter.sign(before: 0, after: 0.55, stops: 0.6), 1)
+        XCTAssertEqual(MotionExposure.Meter.sign(before: 0.1, after: -0.45, stops: -0.6), 1)
+    }
+
+    func testABrighterPictureReadingLowerIsNegative() {
+        XCTAssertEqual(MotionExposure.Meter.sign(before: 0, after: -0.5, stops: 0.6), -1)
+        XCTAssertEqual(MotionExposure.Meter.sign(before: 0, after: 0.5, stops: -0.6), -1)
+    }
+
+    func testAMeterThatDoesNotMoveIsCaught() {
+        XCTAssertEqual(MotionExposure.Meter.sign(before: 0.02, after: 0.08, stops: 0.6), 0)
+        XCTAssertEqual(MotionExposure.Meter.sign(before: 0, after: 0, stops: 0), 0)
+    }
+
+    func testTheTestGoesBrighterWhenThereIsRoomAndDarkerWhenThereIsNot() throws {
+        let limits = CineExposure.Limits(minISO: 25, maxISO: 3000, minDuration: 1.0 / 8000, maxDuration: 1.0 / 3)
+        let room = try XCTUnwrap(MotionExposure.Meter.probe(current: .init(iso: 400, duration: 1.0 / 48), limits: limits))
+        XCTAssertEqual(room.stops, MotionExposure.Meter.probeStops)
+        XCTAssertEqual(room.setting.iso, 400 * pow(2, MotionExposure.Meter.probeStops), accuracy: 1e-6)
+        XCTAssertEqual(room.setting.duration, 1.0 / 48, "the shutter stays")
+
+        let night = try XCTUnwrap(MotionExposure.Meter.probe(current: .init(iso: 2800, duration: 1.0 / 24), limits: limits))
+        XCTAssertEqual(night.stops, -MotionExposure.Meter.probeStops)
+        XCTAssertLessThan(night.setting.iso, 2800)
+    }
+
+    func testNoTestWhereTheISORangeHasNoRoom() {
+        let limits = CineExposure.Limits(minISO: 100, maxISO: 120, minDuration: 1.0 / 8000, maxDuration: 1.0 / 3)
+        XCTAssertNil(MotionExposure.Meter.probe(current: .init(iso: 110, duration: 1.0 / 48), limits: limits))
+    }
+}

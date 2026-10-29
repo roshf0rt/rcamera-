@@ -31,6 +31,37 @@ public enum MotionExposure {
         case bent(stops: Double)
         /// Out of reach of 180°; the camera's own auto exposure runs.
         case handedOver(tooBright: Bool)
+        /// The camera's meter did not answer a test change in exposure; its own auto exposure runs.
+        case noMeter
+    }
+
+    /// Which way the camera's meter reads, found out on the device itself: the loop makes the picture a little
+    /// brighter (or darker), waits for the meter, and sees which way `exposureTargetOffset` moved. The sign of
+    /// the offset is then no guess, and a meter that does not move is caught instead of steered by.
+    public enum Meter {
+        /// Stops of exposure the test changes the picture by.
+        public static let probeStops = 0.6
+        /// Loop steps to wait after the change before reading the meter.
+        public static let settleSteps = 4
+
+        /// +1 when a brighter picture reads as a higher offset, -1 when it reads lower, 0 when the meter hardly moved.
+        public static func sign(before: Double, after: Double, stops: Double) -> Double {
+            guard stops != 0 else { return 0 }
+            let moved = (after - before) / stops
+            if moved > 0.3 { return 1 }
+            if moved < -0.3 { return -1 }
+            return 0
+        }
+
+        /// The test change from `current`: brighter when the ISO range has room above, otherwise darker, with
+        /// the shutter untouched. Nil when the range has no room either way.
+        public static func probe(current: CineExposure.Setting, limits: CineExposure.Limits) -> (setting: CineExposure.Setting, stops: Double)? {
+            let up = current.iso * pow(2, probeStops)
+            if up <= limits.maxISO { return (.init(iso: up, duration: current.duration), probeStops) }
+            let down = current.iso * pow(2, -probeStops)
+            if down >= limits.minISO { return (.init(iso: down, duration: current.duration), -probeStops) }
+            return nil
+        }
     }
 
     public struct Decision: Equatable, Sendable {

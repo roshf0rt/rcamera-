@@ -329,6 +329,13 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var motionMode: MotionExposure.Mode = .native
     /// Steps in a row the light has stood past a switching threshold (`MotionExposure.patience`).
     private var motionStrikes = 0
+    /// Which way the camera's meter reads (`MotionExposure.Meter`): +1 or -1 once found out, 0 when it did
+    /// not answer, nil before the test. Kept for the session: it is a property of the device.
+    private var meterSign: Double?
+    /// The test change in flight: the offset before it, its size in stops, and the steps waited since.
+    private var meterProbe: (before: Double, stops: Double, steps: Int)?
+    /// A meter that did not answer is tried again after this time.
+    private var meterRetryAt = Date.distantPast
     private var videoFPS = 24
     private var userLocked = false
     /// Exposure and white balance held where they were when the recording started.
@@ -345,6 +352,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var iso: Int
         /// Nil while AutoMotion is off.
         var status: MotionExposure.Status?
+        /// What the loop sees, for the line over the bar: the meter, the ISO range, the way the meter reads.
+        var detail: String = ""
     }
 
     /// Called on the main queue with the readout, or nil when it stops (outside video).
@@ -354,6 +363,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private let mainsHz: Int? = nil
     private var lastCineState: CineState?
     private var lastReport = Date.distantPast
+    private var meterDetail = ""
 
     /// Reads exposure out in video mode, and with `autoMotion` runs AutoMotion (`MotionExposure`) at `fps`.
     /// The loop steps every third frame (at most 30 times a second): a new exposure takes a couple of
@@ -368,6 +378,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             if self.motionEnabled, !wasOn || fpsChanged {
                 self.motionMode = .native
                 self.motionStrikes = 0
+                self.meterProbe = nil
             }
             let interval = self.motionEnabled ? max(33, 3000 / max(fps, 1)) : 120
             if video, self.meterTimer == nil || self.meterInterval != interval {
@@ -411,7 +422,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             shutter: CineExposure.shutterText(current.duration),
             angle: CineExposure.shutterAngle(duration: current.duration, fps: videoFPS),
             iso: Int(current.iso.rounded()),
-            status: status
+            status: status,
+            detail: motionEnabled ? meterDetail : ""
         )
         // A new light is reported at once, numbers at most 8 times a second.
         let statusChanged = state.status != lastCineState?.status
@@ -433,11 +445,29 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         )
         // The camera's meter: in custom exposure it still reports how far the picture is from its target,
         // with the EV wheel's bias added, as Kino's AutoMotion reads it.
-        let offset = min(max(Double(device.exposureTargetOffset), -4), 4)
+        let raw = min(max(Double(device.exposureTargetOffset), -4), 4)
+        let offset = raw.isFinite ? raw : 0
+        guard (try? device.lockForConfiguration()) != nil else { return lastCineState?.status ?? .settling }
+        defer { device.unlockForConfiguration() }
+
+        // Which way the meter reads is found out first, by changing the exposure a little and watching it.
+        guard let sign = meterSign else {
+            return testMeter(device: device, current: current, offset: offset, limits: limits)
+        }
+        if sign == 0 {
+            // The meter did not answer: the camera's own exposure runs, and the test is tried again later.
+            if device.exposureMode != .continuousAutoExposure, device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            if Date() > meterRetryAt { meterSign = nil }
+            meterDetail = String(format: "no meter %+.2f", raw)
+            return .noMeter
+        }
+        meterDetail = String(format: "meter %+.2f · ISO %d–%d · %@", offset * sign, Int(limits.minISO), Int(limits.maxISO), sign > 0 ? "+" : "−")
         let decision = MotionExposure.step(
             mode: motionMode,
             current: current,
-            offset: offset.isFinite ? offset : 0,
+            offset: offset * sign,
             fps: videoFPS,
             limits: limits,
             mainsHz: mainsHz,
@@ -445,8 +475,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         )
         motionMode = decision.mode
         motionStrikes = decision.strikes
-        guard (try? device.lockForConfiguration()) != nil else { return decision.status }
-        defer { device.unlockForConfiguration() }
         if let next = decision.setting {
             let changed = abs(next.iso - current.iso) / current.iso > 0.01 || abs(next.duration - current.duration) / current.duration > 0.01
             if changed || device.exposureMode != .custom {
@@ -460,6 +488,39 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             device.exposureMode = .continuousAutoExposure
         }
         return decision.status
+    }
+
+    /// The test of the meter (`MotionExposure.Meter`): one change of exposure, a few steps of waiting, one reading.
+    /// Runs with the device locked for configuration by the caller.
+    private func testMeter(device: AVCaptureDevice, current: CineExposure.Setting, offset: Double, limits: CineExposure.Limits) -> MotionExposure.Status {
+        guard var probe = meterProbe else {
+            guard let change = MotionExposure.Meter.probe(current: current, limits: limits) else {
+                meterSign = 0
+                meterRetryAt = Date().addingTimeInterval(10)
+                return .noMeter
+            }
+            meterProbe = (before: offset, stops: change.stops, steps: 0)
+            meterDetail = "testing the meter"
+            device.setExposureModeCustom(
+                duration: CMTime(seconds: change.setting.duration, preferredTimescale: 1_000_000),
+                iso: Float(change.setting.iso),
+                completionHandler: nil
+            )
+            return .settling
+        }
+        probe.steps += 1
+        meterProbe = probe
+        meterDetail = String(format: "testing the meter %+.2f → %+.2f", probe.before, offset)
+        guard probe.steps >= MotionExposure.Meter.settleSteps else { return .settling }
+        let sign = MotionExposure.Meter.sign(before: probe.before, after: offset, stops: probe.stops)
+        meterProbe = nil
+        meterSign = sign
+        if sign == 0 { meterRetryAt = Date().addingTimeInterval(10) }
+        // Back to the camera's own exposure: the loop takes it from there once the light has stood within reach.
+        motionMode = .native
+        motionStrikes = 0
+        if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+        return .settling
     }
 
     /// While recording, holds exposure and white balance where they were when it started. Both false
