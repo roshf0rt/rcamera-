@@ -1065,7 +1065,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             let bayer = rawTypes.first { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
             let rawType = rawFormat == .bayer ? bayer ?? proRAW : proRAW ?? bayer
             var skipped: String?
-            if wantsRAW, !portrait, flash == .off, let rawType {
+            if wantsRAW, !portrait, let rawType {
                 settings = AVCapturePhotoSettings(rawPixelFormatType: rawType, processedFormat: [AVVideoCodecKey: codec])
                 settings.photoQualityPrioritization = .speed
             } else {
@@ -1073,7 +1073,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 if wantsRAW {
                     let size = self.photoOutput.maxPhotoDimensions
                     skipped = portrait ? "Portrait photos have no RAW."
-                        : flash != .off ? "RAW is off while the flash is on or auto."
                         : "this camera offers no RAW at \(size.width)×\(size.height) (\(rawTypes.count) RAW types, ProRAW \(self.photoOutput.isAppleProRAWEnabled ? "on" : "off"))."
                 }
             }
