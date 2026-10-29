@@ -416,6 +416,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 status = motionStep(device: device, current: current)
             } else {
                 status = lastCineState?.status
+                meterDetail = userLocked ? "held: AE lock" : recordingExposureLock ? "held: recording" : "no custom exposure"
             }
         }
         let state = CineState(
@@ -423,7 +424,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             angle: CineExposure.shutterAngle(duration: current.duration, fps: videoFPS),
             iso: Int(current.iso.rounded()),
             status: status,
-            detail: motionEnabled ? meterDetail : ""
+            detail: motionEnabled ? meterDetail : "loop is off"
         )
         // A new light is reported at once, numbers at most 8 times a second.
         let statusChanged = state.status != lastCineState?.status
@@ -447,7 +448,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         // with the EV wheel's bias added, as Kino's AutoMotion reads it.
         let raw = min(max(Double(device.exposureTargetOffset), -4), 4)
         let offset = raw.isFinite ? raw : 0
-        guard (try? device.lockForConfiguration()) != nil else { return lastCineState?.status ?? .settling }
+        guard (try? device.lockForConfiguration()) != nil else {
+            meterDetail = "device busy"
+            return lastCineState?.status ?? .settling
+        }
         defer { device.unlockForConfiguration() }
 
         // Which way the meter reads is found out first, by changing the exposure a little and watching it.

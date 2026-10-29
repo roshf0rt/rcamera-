@@ -854,10 +854,13 @@ struct ExposureHUD: View {
                 if autoMotion, let detail = state?.detail, !detail.isEmpty {
                     Text(detail)
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.7))
+                        .foregroundStyle(.white)
                         .lineLimit(1)
                         .fixedSize()
-                        .offset(y: -13)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.black.opacity(0.6)))
+                        .offset(y: -17)
                         .transaction { $0.animation = nil }
                 }
             }
