@@ -154,7 +154,10 @@ struct VideoRedevelopView: View {
         guard let look = await model.videoDevelopLook(presetID: presetID, grain: grainLevel, halation: halationLevel) else { return }
         let url = model.url(.video, for: record)
         guard let item = try? await LogGradePreview.playerItem(url: url, look: look), !Task.isCancelled else { return }
-        let time = player.currentTime()
+        // Before the first item the player's time is invalid, and seeking to it raises an Objective-C exception
+        // that Swift cannot catch, so the sheet starts from zero instead.
+        let current = player.currentTime()
+        let time = current.isValid && player.currentItem != nil ? current : .zero
         let wasPlaying = player.timeControlStatus == .playing || player.currentItem == nil
         player.replaceCurrentItem(with: item)
         player.seek(to: time) { _ in
