@@ -49,6 +49,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         /// Depth for portrait photos. Nil when the photo was taken without depth.
         var depth: AVDepthData?
         var error: Error?
+        /// Why no RAW came with the photo although it was asked for; nil when it did, or was not asked for.
+        var rawNote: String?
     }
 
     let session = AVCaptureSession()
@@ -990,11 +992,18 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             let proRAW = rawTypes.first { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }
             let bayer = rawTypes.first { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
             let rawType = rawFormat == .bayer ? bayer ?? proRAW : proRAW ?? bayer
+            var skipped: String?
             if wantsRAW, !portrait, flash == .off, let rawType {
                 settings = AVCapturePhotoSettings(rawPixelFormatType: rawType, processedFormat: [AVVideoCodecKey: codec])
                 settings.photoQualityPrioritization = .speed
             } else {
                 settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: codec])
+                if wantsRAW {
+                    let size = self.photoOutput.maxPhotoDimensions
+                    skipped = portrait ? "Portrait photos have no RAW."
+                        : flash != .off ? "RAW is off while the flash is on or auto."
+                        : "this camera offers no RAW at \(size.width)×\(size.height) (\(rawTypes.count) RAW types, ProRAW \(self.photoOutput.isAppleProRAWEnabled ? "on" : "off"))."
+                }
             }
 
             let flashMode: AVCaptureDevice.FlashMode = switch flash {
@@ -1010,8 +1019,13 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             settings.isDepthDataDeliveryEnabled = portrait && self.photoOutput.isDepthDataDeliveryEnabled
 
             let id = settings.uniqueID
+            let rawSkipped = skipped
             let delegate = PhotoCaptureDelegate { outcome in
                 self.sessionQueue.async { self.photoDelegates[id] = nil }
+                var outcome = outcome
+                if wantsRAW, outcome.raw == nil, outcome.processed != nil {
+                    outcome.rawNote = rawSkipped ?? "the camera returned no RAW file."
+                }
                 completion(outcome)
             }
             self.photoDelegates[id] = delegate

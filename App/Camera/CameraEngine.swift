@@ -493,6 +493,7 @@ final class CameraEngine {
                     depth: outcome.depth,
                     orientation: heldAs
                 ))
+                if let note = outcome.rawNote { self.message = "RAW not saved: \(note)" }
             }
         }
     }
