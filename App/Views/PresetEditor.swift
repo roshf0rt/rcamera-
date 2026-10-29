@@ -155,9 +155,13 @@ struct PresetEditorView: View {
                     adjustments.dynamicRange = Self.rangeValues[index]
                     save()
                 }
+                grid {
+                    continuousTile("LUT strength", value: $adjustments.filmStrength, range: 0 ... 1) { String(format: "%.0f%%", $0 * 100) }
+                    continuousTile("Saturation", value: $adjustments.saturation, range: 0 ... 2) { String(format: "%.2f×", $0) }
+                }
                 cardSection
                     .padding(.top, 6)
-                Text("Built-in presets keep their LUT and colour grade. To change anything else, make your own preset from this one.")
+                Text("Built-in presets keep their LUT and colour grade. LUT strength and saturation are yours to set. To change anything else, make your own preset from this one.")
                     .font(.footnote)
                     .foregroundStyle(Theme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
