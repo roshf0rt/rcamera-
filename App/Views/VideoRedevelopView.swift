@@ -1,9 +1,10 @@
+import AVFoundation
 import CameraCore
 import SwiftUI
 
-/// Redevelop a recorded Log video, laid out as Kino's grading sheet: the picture takes the sheet, the looks
-/// run along the bottom, and Render writes the clip only once something has changed. The picture is a frame
-/// from the middle of the clip, graded as the chosen look, grain and halation would make it.
+/// Redevelop a recorded Log video, laid out as Kino's grading sheet: the clip plays with the chosen look along
+/// the top of the sheet, the looks run along the bottom, and Render writes the clip only once something has
+/// changed. Tap the picture to pause.
 struct VideoRedevelopView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -12,8 +13,9 @@ struct VideoRedevelopView: View {
     @State private var presetID = ""
     @State private var grainLevel = GrainLevel.medium
     @State private var halationLevel = EffectLevel.medium
-    @State private var preview: UIImage?
-    @State private var grader: MetalGrader?
+    @State private var player = AVPlayer()
+    @State private var clipSize = CGSize(width: 16, height: 9)
+    @State private var clipAngle: CGFloat = 0
     @State private var isRendering = false
 
     private var record: CaptureRecord? { model.captures.first { $0.id == recordID } }
@@ -41,7 +43,11 @@ struct VideoRedevelopView: View {
             .foregroundStyle(.white)
             .padding(.top, 6)
 
-            previewArea
+            GradedClipPlayer(player: player, size: clipSize, angle: clipAngle)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Color(white: 0.08)))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .contentShape(Rectangle())
+                .onTapGesture { togglePlayback() }
                 .frame(maxHeight: .infinity)
 
             HStack(spacing: 8) {
@@ -110,34 +116,50 @@ struct VideoRedevelopView: View {
             presetID = record.presetID
             grainLevel = record.grainLevel
             halationLevel = record.halationLevel
-            grader = MetalGrader.makeForBackground()
+            player.play()
         }
-        .task(id: renderKey) { await updatePreview() }
-    }
-
-    private var previewArea: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14).fill(Color(white: 0.08))
-            if let preview {
-                Image(uiImage: preview)
-                    .resizable()
-                    .scaledToFit()
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            } else {
-                ProgressView()
-            }
+        .onDisappear {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
+        .task { await loadClipShape() }
+        .task(id: renderKey) { await updatePlayback() }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { _ in
+            player.seek(to: .zero) { _ in player.play() }
         }
     }
 
-    /// Grades one frame again after each change; a quick run of changes only grades the last one.
-    private func updatePreview() async {
-        guard let record, !presetID.isEmpty, let grader else { return }
-        try? await Task.sleep(for: .milliseconds(150))
+    private func togglePlayback() {
+        if player.timeControlStatus == .playing { player.pause() } else { player.play() }
+    }
+
+    /// The stored frames are landscape; the track says how the phone turned them.
+    private func loadClipShape() async {
+        guard let record else { return }
+        let asset = AVURLAsset(url: model.url(.video, for: record))
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let size = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform)
+        else { return }
+        clipSize = size
+        clipAngle = atan2(transform.b, transform.a)
+    }
+
+    /// Grades the clip again after each change, and keeps it playing where it was. A quick run of changes
+    /// only builds the last one.
+    private func updatePlayback() async {
+        guard let record, !presetID.isEmpty else { return }
+        try? await Task.sleep(for: .milliseconds(200))
         if Task.isCancelled { return }
         guard let look = await model.videoDevelopLook(presetID: presetID, grain: grainLevel, halation: halationLevel) else { return }
-        let source = model.url(.video, for: record)
-        let image = await VideoRedeveloper.previewImage(source: source, look: look, grader: grader)
-        if !Task.isCancelled, let image { preview = image }
+        let url = model.url(.video, for: record)
+        guard let item = try? await LogGradePreview.playerItem(url: url, look: look), !Task.isCancelled else { return }
+        let time = player.currentTime()
+        let wasPlaying = player.timeControlStatus == .playing || player.currentItem == nil
+        player.replaceCurrentItem(with: item)
+        player.seek(to: time) { _ in
+            if wasPlaying { player.play() }
+        }
     }
 
     private func render() {
@@ -147,6 +169,70 @@ struct VideoRedevelopView: View {
             let ok = await model.redevelopVideo(record, presetID: presetID, grain: grainLevel, halation: halationLevel)
             isRendering = false
             if ok { dismiss() }
+        }
+    }
+}
+
+/// The clip on the player layer, turned as the phone turned it and fitted to the space it is given.
+struct GradedClipPlayer: UIViewRepresentable {
+    let player: AVPlayer
+    let size: CGSize
+    let angle: CGFloat
+
+    func makeUIView(context: Context) -> ClipContainer {
+        let container = ClipContainer()
+        container.playerView.player = player
+        return container
+    }
+
+    func updateUIView(_ container: ClipContainer, context: Context) {
+        container.playerView.player = player
+        container.size = size
+        container.angle = angle
+    }
+}
+
+final class ClipContainer: UIView {
+    let playerView = PlayerView()
+    var size = CGSize(width: 16, height: 9) {
+        didSet { setNeedsLayout() }
+    }
+    var angle: CGFloat = 0 {
+        didSet { setNeedsLayout() }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        addSubview(playerView)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("ClipContainer is built in code")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // A quarter turn swaps the sides, so the frames are fitted as they will be shown.
+        let quarterTurned = abs(sin(angle)) > 0.5
+        let shown = quarterTurned ? CGSize(width: size.height, height: size.width) : size
+        guard shown.width > 0, shown.height > 0, bounds.width > 0, bounds.height > 0 else { return }
+        let scale = min(bounds.width / shown.width, bounds.height / shown.height)
+        playerView.transform = .identity
+        playerView.bounds = CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale)
+        playerView.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        playerView.transform = CGAffineTransform(rotationAngle: angle)
+    }
+}
+
+final class PlayerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+    var player: AVPlayer? {
+        get { (layer as? AVPlayerLayer)?.player }
+        set {
+            (layer as? AVPlayerLayer)?.player = newValue
+            (layer as? AVPlayerLayer)?.videoGravity = .resizeAspect
         }
     }
 }
