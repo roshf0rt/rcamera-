@@ -52,6 +52,12 @@ final class AppModel {
         engine.onPhoto = { [weak self] result in self?.ingest(photo: result) }
         engine.onVideo = { [weak self] url in self?.ingest(videoAt: url) }
         engine.onModeChanged = { [weak self] mode in self?.updateSettings { $0.lastCaptureMode = mode } }
+        engine.onFormatFallback = { [weak self] format in
+            self?.updateSettings {
+                $0.videoFPS = format.fps
+                $0.videoResolution = format.width >= 3840 ? .uhd4K : .hd1080
+            }
+        }
         volumeShutter.onPress = { [weak self] in self?.engine.shutterTapped() }
         NotificationCenter.default.addObserver(forName: .takePhotoRequested, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.engine.shutterTapped() }

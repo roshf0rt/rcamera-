@@ -1,5 +1,6 @@
 import AVFoundation
 import CameraCore
+import CoreGraphics
 import CoreImage
 import QuartzCore
 
@@ -54,6 +55,11 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     }
     private var logLook: FilmLook?
     private var portraitLook: PortraitLook?
+    /// Viewfinder aids. Never drawn into a recording.
+    private var assist = AssistPass()
+    private var assistFrame = 0
+    private var lastWaveformTime = CMTime.invalid
+    private var onWaveform: ((CGImage) -> Void)?
     /// At more than 60 fps the viewfinder is drawn at this many frames per second, so the grader has the
     /// time for the recording. Zero draws every frame.
     private var previewRate = 0.0
@@ -99,6 +105,24 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     func setPreviewRate(_ framesPerSecond: Double) {
         lock.lock()
         previewRate = framesPerSecond
+        lock.unlock()
+    }
+
+    /// Called on the capture queue with a new waveform picture, about ten times a second while the
+    /// waveform is on.
+    func setWaveformHandler(_ handler: ((CGImage) -> Void)?) {
+        lock.lock()
+        onWaveform = handler
+        lock.unlock()
+    }
+
+    /// Zebra, false colour, focus peaking and the waveform for the viewfinder.
+    func setAssist(zebra: Bool, falseColor: Bool, peaking: Bool, waveform: Bool) {
+        lock.lock()
+        assist.zebra = zebra
+        assist.falseColor = falseColor
+        assist.peaking = peaking
+        assist.waveform = waveform
         lock.unlock()
     }
 
@@ -252,6 +276,20 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
                 lastPreviewTime = time
             }
         }
+        // The aids go on the viewfinder only; with a single stream they wait until recording stops.
+        var frameAssist: AssistPass?
+        if !isRecordStream, !assist.isEmpty, separateRecordStream || !wantsRecording {
+            assistFrame += 1
+            var pass = assist
+            pass.phase = assistFrame
+            if pass.waveform {
+                let due = !lastWaveformTime.isValid || CMTimeGetSeconds(CMTimeSubtract(time, lastWaveformTime)) >= 0.1
+                pass.waveform = due
+                if due { lastWaveformTime = time }
+            }
+            frameAssist = pass
+        }
+        let waveformHandler = onWaveform
         lock.unlock()
         if skipsFrame { return }
 
@@ -263,7 +301,10 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
             return
         }
 
-        guard let rendered = render(source, pool: previewPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror, portrait: portrait) else { return }
+        guard let rendered = render(source, pool: previewPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror, portrait: portrait, assist: frameAssist) else { return }
+        if frameAssist?.waveform == true, let waveform = grader?.takeWaveform(), let image = Self.image(of: waveform) {
+            waveformHandler?(image)
+        }
         let buffer = rendered.buffer, crop = rendered.crop
         lock.lock()
         geometry = Geometry(source: CGSize(width: CVPixelBufferGetWidth(source), height: CVPixelBufferGetHeight(source)), crop: crop)
@@ -274,6 +315,25 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         if !separateRecordStream, wantsRecording {
             record(buffer, at: time, width: crop.width, height: crop.height)
         }
+    }
+
+    /// The waveform as a picture, `columns` wide and `levels` high.
+    private static func image(of waveform: Waveform) -> CGImage? {
+        let pixels = waveform.render()
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(
+            width: waveform.columns,
+            height: waveform.levels,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: waveform.columns * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: true,
+            intent: .defaultIntent
+        )
     }
 
     private static func isTenBit(_ buffer: CVPixelBuffer) -> Bool {
@@ -289,11 +349,12 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         previousMix: Float,
         aspect: AspectOption,
         mirror: Bool,
-        portrait: PortraitPass? = nil
+        portrait: PortraitPass? = nil,
+        assist: AssistPass? = nil
     ) -> (buffer: CVPixelBuffer, crop: CropRect)? {
         let crop = aspect.cropRect(sourceWidth: CVPixelBufferGetWidth(source), sourceHeight: CVPixelBufferGetHeight(source))
         guard let output = pool.buffer(width: crop.width, height: crop.height) else { return nil }
-        if let grader, grader.grade(source: source, crop: crop, mirror: mirror, look: look, into: output, previous: previous, previousMix: previousMix, portrait: portrait) {
+        if let grader, grader.grade(source: source, crop: crop, mirror: mirror, look: look, into: output, previous: previous, previousMix: previousMix, portrait: portrait, assist: assist) {
             return (output, crop)
         }
 

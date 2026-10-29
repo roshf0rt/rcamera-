@@ -39,6 +39,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var frameRates: [Int: [Int]] = [:]
         /// The camera in use, for `AVCaptureDevice(uniqueID:)`.
         var deviceID: String?
+        /// The video format that runs instead of the one asked for, which was over the camera's hardware budget.
+        var budgetFallback: VideoFormat?
     }
 
     struct PhotoOutcome: @unchecked Sendable {
@@ -245,6 +247,16 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
             setPixelFormat(tenBit: formatPlan.appleLog)
+
+            // A configuration over the camera's hardware budget stalls or stops the session; as Kino does,
+            // step down to the next lighter format and say which one runs.
+            if config.mode == .video, session.hardwareCost > 1, let lighter = FormatChooser.lighter(than: config.format) {
+                var next = config
+                next.format = lighter
+                var info = applyOnQueue(next)
+                info.budgetFallback = info.budgetFallback ?? lighter
+                return info
+            }
         }
 
         // A new photo size does not need a new format, so it is applied on every configuration.
@@ -261,6 +273,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         // (the recorder repeats the previous one).
         if hasRecordOutput { recordOutput.alwaysDiscardsLateVideoFrames = config.format.fps > FormatChooser.highFrameRate }
         configureDevice(config, device: device)
+        applyWhiteBalance(on: device)
         configureConnections(config)
         updateDepthOutput(enabled: config.portrait && config.mode == .photo && position == .back, device: device)
 
@@ -304,21 +317,29 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    // MARK: Exposure readout and cine exposure
+    // MARK: Exposure readout and AutoMotion
 
     private var meterTimer: DispatchSourceTimer?
-    private var cineEnabled = false
-    private var cineFPS = 24
+    private var meterInterval = 0
+    private var motionEnabled = false
+    /// Who runs exposure while AutoMotion is on: the loop, or the camera when the light is out of reach.
+    private var motionMode: MotionExposure.Mode = .native
+    private var videoFPS = 24
     private var userLocked = false
+    /// Exposure and white balance held where they were when the recording started.
+    private var recordingExposureLock = false
+    private var recordingWhiteBalanceLock = false
+    /// White balance held at a colour temperature and tint; nil lets the camera pick it.
+    private var manualWhiteBalance: (kelvin: Int, tint: Int)?
 
     /// What the video viewfinder shows: shutter, shutter angle and ISO as the camera runs them, and with
-    /// cine exposure on, how they stand against the cinematic rule.
+    /// AutoMotion on, how they stand against the 180° rule.
     struct CineState: Equatable, Sendable {
         var shutter: String
         var angle: Int
         var iso: Int
-        /// Nil while the camera's own auto exposure runs.
-        var status: CineExposure.Status?
+        /// Nil while AutoMotion is off.
+        var status: MotionExposure.Status?
     }
 
     /// Called on the main queue with the readout, or nil when it stops (outside video).
@@ -326,18 +347,24 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     /// Mains frequency where the phone is, for flicker-free shutter times.
     private let mainsHz = CineExposure.mainsFrequency(regionCode: Locale.current.region?.identifier)
     private var lastCineState: CineState?
+    private var lastReport = Date.distantPast
 
-    /// Reads exposure out in video mode, and with `cine` runs cinematic auto exposure (`CineExposure`) at `fps`.
-    func setExposureMonitor(video: Bool, cine: Bool, fps: Int) {
+    /// Reads exposure out in video mode, and with `autoMotion` runs AutoMotion (`MotionExposure`) at `fps`.
+    /// The loop steps about 30 times a second, so the exposure ramps smoothly; the readout alone 8 times.
+    func setExposureMonitor(video: Bool, autoMotion: Bool, fps: Int) {
         sessionQueue.async {
-            self.cineFPS = fps
-            let wasCine = self.cineEnabled
-            self.cineEnabled = video && cine
-            if video, self.meterTimer == nil {
+            self.videoFPS = fps
+            let wasOn = self.motionEnabled
+            self.motionEnabled = video && autoMotion
+            if self.motionEnabled, !wasOn { self.motionMode = .native }
+            let interval = self.motionEnabled ? 33 : 120
+            if video, self.meterTimer == nil || self.meterInterval != interval {
+                self.meterTimer?.cancel()
                 let timer = DispatchSource.makeTimerSource(queue: self.sessionQueue)
-                timer.schedule(deadline: .now(), repeating: .milliseconds(120))
+                timer.schedule(deadline: .now(), repeating: .milliseconds(interval))
                 timer.setEventHandler { [weak self] in self?.meterTick() }
                 self.meterTimer = timer
+                self.meterInterval = interval
                 timer.resume()
             } else if !video, let timer = self.meterTimer {
                 timer.cancel()
@@ -346,8 +373,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 let report = self.onCineState
                 DispatchQueue.main.async { report?(nil) }
             }
-            // Leaving cine hands exposure back to the camera.
-            if wasCine, !self.cineEnabled, !self.userLocked, let device = self.videoInput?.device,
+            // Leaving AutoMotion hands exposure back to the camera.
+            if wasOn, !self.motionEnabled, !self.userLocked, !self.recordingExposureLock, let device = self.videoInput?.device,
                device.isExposureModeSupported(.continuousAutoExposure) {
                 try? device.lockForConfiguration()
                 device.exposureMode = .continuousAutoExposure
@@ -360,25 +387,31 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         guard let device = videoInput?.device else { return }
         let current = CineExposure.Setting(iso: Double(device.iso), duration: device.exposureDuration.seconds)
         guard current.duration > 0, current.iso > 0 else { return }
-        var status: CineExposure.Status?
-        if cineEnabled, !userLocked, device.isExposureModeSupported(.custom) {
-            status = cineStep(device: device, current: current)
+        var status: MotionExposure.Status?
+        if motionEnabled {
+            if !userLocked, !recordingExposureLock, device.isExposureModeSupported(.custom) {
+                status = motionStep(device: device, current: current)
+            } else {
+                status = lastCineState?.status
+            }
         }
         let state = CineState(
             shutter: CineExposure.shutterText(current.duration),
-            angle: CineExposure.shutterAngle(duration: current.duration, fps: cineFPS),
+            angle: CineExposure.shutterAngle(duration: current.duration, fps: videoFPS),
             iso: Int(current.iso.rounded()),
             status: status
         )
-        if state != lastCineState {
-            lastCineState = state
-            let report = onCineState
-            DispatchQueue.main.async { report?(state) }
-        }
+        // A new light is reported at once, numbers at most 8 times a second.
+        let statusChanged = state.status != lastCineState?.status
+        guard state != lastCineState, statusChanged || Date().timeIntervalSince(lastReport) > 0.12 else { return }
+        lastCineState = state
+        lastReport = Date()
+        let report = onCineState
+        DispatchQueue.main.async { report?(state) }
     }
 
-    /// One step of the cine loop: sets the next shutter and ISO and returns how they stand.
-    private func cineStep(device: AVCaptureDevice, current: CineExposure.Setting) -> CineExposure.Status? {
+    /// One step of AutoMotion: sets the next shutter and ISO, or hands exposure to the camera.
+    private func motionStep(device: AVCaptureDevice, current: CineExposure.Setting) -> MotionExposure.Status {
         let format = device.activeFormat
         let limits = CineExposure.Limits(
             minISO: Double(format.minISO),
@@ -386,23 +419,85 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             minDuration: format.minExposureDuration.seconds,
             maxDuration: format.maxExposureDuration.seconds
         )
-        let step = CineExposure.step(current: current, offset: Double(device.exposureTargetOffset), fps: cineFPS, limits: limits, mainsHz: mainsHz)
-        let next = step.setting
-        let changed = abs(next.iso - current.iso) / current.iso > 0.01 || abs(next.duration - current.duration) / current.duration > 0.01
-        if changed || device.exposureMode != .custom {
-            do {
-                try device.lockForConfiguration()
+        let decision = MotionExposure.step(
+            mode: motionMode,
+            current: current,
+            offset: Double(device.exposureTargetOffset),
+            fps: videoFPS,
+            limits: limits,
+            mainsHz: mainsHz
+        )
+        motionMode = decision.mode
+        guard (try? device.lockForConfiguration()) != nil else { return decision.status }
+        defer { device.unlockForConfiguration() }
+        if let next = decision.setting {
+            let changed = abs(next.iso - current.iso) / current.iso > 0.01 || abs(next.duration - current.duration) / current.duration > 0.01
+            if changed || device.exposureMode != .custom {
                 device.setExposureModeCustom(
                     duration: CMTime(seconds: next.duration, preferredTimescale: 1_000_000),
-                    iso: Float(next.iso),
+                    iso: Float(min(max(next.iso, limits.minISO), limits.maxISO)),
                     completionHandler: nil
                 )
-                device.unlockForConfiguration()
-            } catch {
-                return nil
+            }
+        } else if device.exposureMode != .continuousAutoExposure, device.isExposureModeSupported(.continuousAutoExposure) {
+            device.exposureMode = .continuousAutoExposure
+        }
+        return decision.status
+    }
+
+    /// While recording, holds exposure and white balance where they were when it started. Both false
+    /// releases them: AutoMotion picks up again, or the camera's own auto exposure and white balance.
+    func setRecordingLocks(exposure: Bool, whiteBalance: Bool) {
+        sessionQueue.async {
+            let hadExposure = self.recordingExposureLock
+            let hadWhiteBalance = self.recordingWhiteBalanceLock
+            self.recordingExposureLock = exposure
+            self.recordingWhiteBalanceLock = whiteBalance
+            guard let device = self.videoInput?.device, (try? device.lockForConfiguration()) != nil else { return }
+            defer { device.unlockForConfiguration() }
+            // AutoMotion on its own shutter and ISO is held just by stopping the loop.
+            let loopRuns = self.motionEnabled && self.motionMode == .motion
+            if exposure, !hadExposure, !loopRuns, device.isExposureModeSupported(.locked) {
+                device.exposureMode = .locked
+            } else if !exposure, hadExposure, !self.userLocked, !loopRuns, device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            if self.manualWhiteBalance == nil {
+                if whiteBalance, !hadWhiteBalance, device.isWhiteBalanceModeSupported(.locked) {
+                    device.whiteBalanceMode = .locked
+                } else if !whiteBalance, hadWhiteBalance, device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                    device.whiteBalanceMode = .continuousAutoWhiteBalance
+                }
             }
         }
-        return step.status
+    }
+
+    /// Holds white balance at `kelvin` with `tint`, or with nil gives it back to the camera.
+    func setWhiteBalance(kelvin: Int?, tint: Int) {
+        sessionQueue.async {
+            let wanted = kelvin.map { (kelvin: $0, tint: tint) }
+            guard wanted?.kelvin != self.manualWhiteBalance?.kelvin || wanted?.tint != self.manualWhiteBalance?.tint else { return }
+            self.manualWhiteBalance = wanted
+            if let device = self.videoInput?.device { self.applyWhiteBalance(on: device) }
+        }
+    }
+
+    /// Call on the session queue with the device unlocked.
+    private func applyWhiteBalance(on device: AVCaptureDevice) {
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        defer { device.unlockForConfiguration() }
+        if let manual = manualWhiteBalance, device.isLockingWhiteBalanceWithCustomDeviceGainsSupported {
+            let values = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(temperature: Float(manual.kelvin), tint: Float(manual.tint))
+            var gains = device.deviceWhiteBalanceGains(for: values)
+            let top = device.maxWhiteBalanceGain
+            gains.redGain = min(max(gains.redGain, 1), top)
+            gains.greenGain = min(max(gains.greenGain, 1), top)
+            gains.blueGain = min(max(gains.blueGain, 1), top)
+            device.setWhiteBalanceModeLocked(with: gains, completionHandler: nil)
+        } else if !recordingWhiteBalanceLock, device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance),
+                  device.whiteBalanceMode != .continuousAutoWhiteBalance {
+            device.whiteBalanceMode = .continuousAutoWhiteBalance
+        }
     }
 
     // MARK: Camera Control
@@ -747,8 +842,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         sessionQueue.async {
             self.userLocked = locked
             guard let device = self.videoInput?.device else { return }
-            // Unlocking hands exposure back to the cine loop when it runs.
-            if !locked, self.cineEnabled {
+            // Unlocking hands exposure back to AutoMotion when it runs.
+            if !locked, self.motionEnabled {
                 try? device.lockForConfiguration()
                 if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
                 device.unlockForConfiguration()
@@ -772,8 +867,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 device.focusPointOfInterest = point
                 device.focusMode = lockAfter ? .autoFocus : .continuousAutoFocus
             }
-            // The cine loop owns exposure while it runs; a tap only moves the focus.
-            if !self.cineEnabled, device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.autoExpose) {
+            // AutoMotion owns exposure while it runs; a tap only moves the focus.
+            if !self.motionEnabled, device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.autoExpose) {
                 device.exposurePointOfInterest = point
                 device.exposureMode = lockAfter ? .autoExpose : .continuousAutoExposure
             }

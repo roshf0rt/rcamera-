@@ -60,6 +60,14 @@ private struct GradeParams {
     var rimWidth: Float = 0
     var fringing: Float = 0
     var bokehRadius: Float = 0
+    var assist: Int32 = 0
+    var stripePhase: Int32 = 0
+    var zebraLevel: Float = 0.95
+    var peakThreshold: Float = 0.1
+    var waveColumns: Int32 = 1
+    var waveLevels: Int32 = 2
+    var waveStepX: Int32 = 1
+    var waveStepY: Int32 = 1
 
     /// How `lens` draws the background, with a blur radius of `radius` pixels in the small bokeh texture.
     mutating func setLens(_ lens: LensStyle, radius: Float) {
@@ -88,6 +96,19 @@ struct PortraitPass {
     var lens: LensStyle
 }
 
+/// The viewfinder's aids for one frame (`ExposureAssist`). Only the viewfinder stream asks for them.
+struct AssistPass: Equatable {
+    var zebra = false
+    var falseColor = false
+    var peaking = false
+    /// Count an RGB waveform of the graded picture; `MetalGrader.takeWaveform` returns it.
+    var waveform = false
+    /// Frame counter, so the zebra stripes crawl.
+    var phase = 0
+
+    var isEmpty: Bool { !zebra && !falseColor && !peaking && !waveform }
+}
+
 /// Applies a `FilmLook` on the GPU in one pass, like Lampa's Ironstone: camera pixel, LUT, halation, grain.
 ///
 /// Live frames, recorded video and saved photos all go through `grade`, so they look the same.
@@ -110,6 +131,12 @@ final class MetalGrader: @unchecked Sendable {
     private let emptyMask: MTLTexture
 
     private let lock = NSLock()
+    /// Waveform counts, written by the grade kernel; one at a time, for the viewfinder.
+    private var waveBuffer: MTLBuffer?
+    private let emptyWave: MTLBuffer
+    private var latestWaveform: Waveform?
+    static let waveColumns = 128
+    static let waveLevels = 64
     private var maskCache: [Int: (raw: MTLTexture, blurred: MTLTexture)] = [:]
     private var blurCache: [Int: MPSImageGaussianBlur] = [:]
 
@@ -145,7 +172,8 @@ final class MetalGrader: @unchecked Sendable {
 
         let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
         colorDescriptor.usage = .shaderRead
-        guard let emptyLUT = Self.makeEmptyLUT(device: device),
+        guard let emptyWave = device.makeBuffer(length: 16, options: .storageModeShared),
+              let emptyLUT = Self.makeEmptyLUT(device: device),
               let emptyMask = Self.makeTexture2D(device: device, values: [0], size: 1),
               let emptyColor = device.makeTexture(descriptor: colorDescriptor)
         else { return nil }
@@ -162,6 +190,7 @@ final class MetalGrader: @unchecked Sendable {
         self.grainTextures = grains
         self.emptyLUT = emptyLUT
         self.emptyMask = emptyMask
+        self.emptyWave = emptyWave
     }
 
     // MARK: Grading
@@ -180,7 +209,8 @@ final class MetalGrader: @unchecked Sendable {
         cachedMasks: Bool = true,
         previous: FilmLook? = nil,
         previousMix: Float = 0,
-        portrait: PortraitPass? = nil
+        portrait: PortraitPass? = nil,
+        assist: AssistPass? = nil
     ) -> Bool {
         var params = GradeParams()
         var holders: [CVMetalTexture] = []
@@ -321,6 +351,28 @@ final class MetalGrader: @unchecked Sendable {
             bokehTexture = targets.smooth
         }
 
+        var wave = emptyWave
+        var waveSamples = 0
+        if let assist, !assist.isEmpty {
+            params.assist = (assist.zebra ? 1 : 0) | (assist.falseColor ? 2 : 0) | (assist.peaking ? 4 : 0)
+            params.stripePhase = Int32(assist.phase % 16)
+            params.zebraLevel = Float(ExposureAssist.zebraLevel)
+            // Apple Log is flat, so its edges are fainter.
+            params.peakThreshold = params.inputKind == 1 ? 0.06 : 0.1
+            if assist.waveform, let buffer = waveformBuffer() {
+                params.assist |= 8
+                params.waveColumns = Int32(Self.waveColumns)
+                params.waveLevels = Int32(Self.waveLevels)
+                params.waveStepX = Int32(max(1, crop.width / (Self.waveColumns * 3)))
+                params.waveStepY = Int32(max(1, crop.height / 96))
+                memset(buffer.contents(), 0, buffer.length)
+                wave = buffer
+                let sampledX = (crop.width + Int(params.waveStepX) - 1) / Int(params.waveStepX)
+                let sampledY = (crop.height + Int(params.waveStepY) - 1) / Int(params.waveStepY)
+                waveSamples = max(1, sampledX * sampledY / Self.waveColumns)
+            }
+        }
+
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return false }
         encoder.setComputePipelineState(gradeState)
         encoder.setTexture(luma, index: 0)
@@ -333,13 +385,41 @@ final class MetalGrader: @unchecked Sendable {
         encoder.setTexture(depthTexture, index: 7)
         encoder.setTexture(bokehTexture, index: 8)
         encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
+        encoder.setBuffer(wave, offset: 0, index: 1)
         dispatch(encoder, state: gradeState, width: crop.width, height: crop.height)
         encoder.endEncoding()
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         withExtendedLifetime(holders) {}
-        return commandBuffer.status == .completed
+        let completed = commandBuffer.status == .completed
+        if completed, waveSamples > 0 {
+            let count = Self.waveColumns * Self.waveLevels * 3
+            let flat = Array(UnsafeBufferPointer(start: wave.contents().assumingMemoryBound(to: UInt32.self), count: count))
+            let measured = Waveform(columns: Self.waveColumns, levels: Self.waveLevels, flat: flat, samplesPerColumn: waveSamples)
+            lock.lock()
+            latestWaveform = measured
+            lock.unlock()
+        }
+        return completed
+    }
+
+    /// The waveform counted by the last viewfinder frame that asked for one, once.
+    func takeWaveform() -> Waveform? {
+        lock.lock()
+        defer { lock.unlock() }
+        let waveform = latestWaveform
+        latestWaveform = nil
+        return waveform
+    }
+
+    private func waveformBuffer() -> MTLBuffer? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let waveBuffer { return waveBuffer }
+        let length = Self.waveColumns * Self.waveLevels * 3 * MemoryLayout<UInt32>.stride
+        waveBuffer = device.makeBuffer(length: length, options: .storageModeShared)
+        return waveBuffer
     }
 
     /// Largest still graded in half float. Above it (48 MP) two half-float buffers would cost over 700 MB,

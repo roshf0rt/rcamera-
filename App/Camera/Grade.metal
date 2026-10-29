@@ -66,6 +66,15 @@ struct GradeParams {
     float rimWidth;
     float fringing;       // red and blue rims of the bokeh drift apart
     float bokehRadius;    // blur radius in pixels of the small bokeh texture
+    // Viewfinder aids, never set for recordings or photos. Mirrored in CameraCore/ExposureAssist.swift.
+    int assist;           // 1 zebra, 2 false colour, 4 focus peaking, 8 waveform counts
+    int stripePhase;      // moves the zebra stripes from frame to frame
+    float zebraLevel;
+    float peakThreshold;  // focus peaking: Laplacian of the camera's luma above this lights up
+    int waveColumns;
+    int waveLevels;
+    int waveStepX;        // every waveStepX-th pixel of every waveStepY-th row is counted
+    int waveStepY;
 };
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
@@ -365,6 +374,30 @@ kernel void halationMask(texture2d<float, access::read> luma [[texture(0)]],
     mask.write(float4(m, m, m, 1.0), gid);
 }
 
+/// `ExposureAssist.falseColor`: exposure bands in colour, everything else in grey.
+static float3 falseColor(float y) {
+    if (y < 0.025) return float3(0.55, 0.1, 0.85);
+    if (y < 0.10) return float3(0.1, 0.35, 1.0);
+    if (y >= 0.42 && y < 0.50) return float3(0.2, 0.85, 0.3);
+    if (y >= 0.60 && y < 0.68) return float3(1.0, 0.55, 0.7);
+    if (y >= 0.985) return float3(1.0, 0.15, 0.1);
+    if (y >= 0.93) return float3(1.0, 0.9, 0.1);
+    return float3(y * 0.85);
+}
+
+/// How sharp the camera's picture is at `gid`: the Laplacian of its luma, larger on in-focus edges.
+static float focusEdge(texture2d<float, access::read> luma,
+                       texture2d<float, access::read> chroma,
+                       uint2 gid,
+                       constant GradeParams &p) {
+    float centre = dot(readSource(luma, chroma, sourcePoint(gid, p), p), kLuma);
+    float around = dot(readSource(luma, chroma, sourcePoint(offsetPoint(gid, int2(1, 0), p), p), p), kLuma)
+                 + dot(readSource(luma, chroma, sourcePoint(offsetPoint(gid, int2(-1, 0), p), p), p), kLuma)
+                 + dot(readSource(luma, chroma, sourcePoint(offsetPoint(gid, int2(0, 1), p), p), p), kLuma)
+                 + dot(readSource(luma, chroma, sourcePoint(offsetPoint(gid, int2(0, -1), p), p), p), kLuma);
+    return abs(4.0 * centre - around);
+}
+
 kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
                   texture2d<float, access::read> chroma [[texture(1)]],
                   texture3d<float> lut [[texture(2)]],
@@ -375,6 +408,7 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
                   texture2d<float> depth [[texture(7)]],
                   texture2d<float> bokeh [[texture(8)]],
                   constant GradeParams &p [[buffer(0)]],
+                  device atomic_uint *wave [[buffer(1)]],
                   uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= uint(p.width) || gid.y >= uint(p.height)) {
         return;
@@ -421,6 +455,30 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
         float y = dot(color, kLuma);
         float weight = y > 0.5 ? 1.12 - y : y + 0.18;
         color = saturate(color + p.grain * weight * noise);
+    }
+
+    if (p.assist != 0) {
+        // The waveform counts the picture as it will look, before any aid is drawn over it.
+        if ((p.assist & 8) != 0 && gid.x % uint(p.waveStepX) == 0 && gid.y % uint(p.waveStepY) == 0) {
+            uint column = min(gid.x * uint(p.waveColumns) / uint(p.width), uint(p.waveColumns - 1));
+            for (int channel = 0; channel < 3; channel++) {
+                uint level = min(uint(saturate(color[channel]) * float(p.waveLevels)), uint(p.waveLevels - 1));
+                uint index = (uint(channel) * uint(p.waveColumns) + column) * uint(p.waveLevels) + level;
+                atomic_fetch_add_explicit(&wave[index], 1u, memory_order_relaxed);
+            }
+        }
+        float y = dot(color, kLuma);
+        if ((p.assist & 2) != 0) {
+            color = falseColor(y);
+        }
+        if ((p.assist & 1) != 0 && y >= p.zebraLevel && ((int(gid.x) + int(gid.y) + p.stripePhase) / 8) % 2 == 0) {
+            color = mix(color, float3(0.0), 0.75);
+        }
+        if ((p.assist & 4) != 0) {
+            float edge = focusEdge(luma, chroma, gid, p);
+            float k = smoothstep(p.peakThreshold, p.peakThreshold * 2.0, edge);
+            color = mix(color, float3(1.0, 0.18, 0.12), k);
+        }
     }
 
     destination.write(float4(color, 1.0), gid);

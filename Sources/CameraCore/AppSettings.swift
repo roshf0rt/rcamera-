@@ -191,8 +191,22 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var videoFPS = 30
     public var videoStabilization: VideoStabilization = .standard
     public var appleLogVideo = true
-    /// Video only: shutter held at the 180° rule, ISO does the exposure (see `CineExposure`).
-    public var cineExposure = false
+    /// Video only: exposure held on the 180° shutter with ISO doing the work, handing over to the camera's
+    /// own auto exposure when the light is out of reach (see `MotionExposure`). On by default.
+    public var autoMotion = true
+
+    // Pro tools, under PRO in the options shade. Drawn on the viewfinder only.
+    public var zebra = false
+    public var focusPeaking = false
+    public var falseColor = false
+    public var waveform = false
+    /// Video: exposure and white balance stay as they were when recording started.
+    public var lockExposureWhileRecording = false
+    public var lockWhiteBalanceWhileRecording = false
+    /// White balance held at this colour temperature; nil lets the camera pick it.
+    public var whiteBalanceKelvin: Int?
+    /// Green (negative) to magenta (positive), with a fixed colour temperature.
+    public var whiteBalanceTint = 0
     /// Bumped when defaults change; older files adopt the new defaults once.
     public var revision = AppSettings.currentRevision
 
@@ -209,7 +223,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, rawFormat, savesLocation, digitalZoomStop
         case grainLevel, halationLevel, frame, volumeShutter, dynamicRange, portrait, portraitFNumber, lensStyle, photoResolution
-        case videoResolution, videoFPS, videoStabilization, appleLogVideo, cineExposure, revision
+        case videoResolution, videoFPS, videoStabilization, appleLogVideo, autoMotion, revision
+        case zebra, focusPeaking, falseColor, waveform, lockExposureWhileRecording, lockWhiteBalanceWhileRecording
+        case whiteBalanceKelvin, whiteBalanceTint
     }
 
     /// Keys older settings files used.
@@ -254,7 +270,16 @@ public struct AppSettings: Codable, Equatable, Sendable {
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo
-        cineExposure = (try? c.decode(Bool.self, forKey: .cineExposure)) ?? cineExposure
+        // The earlier cine exposure switch is not carried over: AutoMotion replaces it and starts on.
+        autoMotion = (try? c.decode(Bool.self, forKey: .autoMotion)) ?? autoMotion
+        zebra = (try? c.decode(Bool.self, forKey: .zebra)) ?? zebra
+        focusPeaking = (try? c.decode(Bool.self, forKey: .focusPeaking)) ?? focusPeaking
+        falseColor = (try? c.decode(Bool.self, forKey: .falseColor)) ?? falseColor
+        waveform = (try? c.decode(Bool.self, forKey: .waveform)) ?? waveform
+        lockExposureWhileRecording = (try? c.decode(Bool.self, forKey: .lockExposureWhileRecording)) ?? lockExposureWhileRecording
+        lockWhiteBalanceWhileRecording = (try? c.decode(Bool.self, forKey: .lockWhiteBalanceWhileRecording)) ?? lockWhiteBalanceWhileRecording
+        whiteBalanceKelvin = (try? c.decode(Int?.self, forKey: .whiteBalanceKelvin)) ?? nil
+        whiteBalanceTint = (try? c.decode(Int.self, forKey: .whiteBalanceTint)) ?? whiteBalanceTint
         revision = (try? c.decode(Int.self, forKey: .revision)) ?? 0
         if let stabilization = try? c.decode(VideoStabilization.self, forKey: .videoStabilization) {
             videoStabilization = stabilization

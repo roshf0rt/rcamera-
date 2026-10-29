@@ -270,24 +270,30 @@ struct EVBubble: View {
     }
 }
 
-/// The panel under the "..." button, a grid of four fixed-width cells per row so labels never wrap.
-/// Photo: Flash, Timer, Aspect, Frame, Range, Portrait. Video: FPS, Resolution, Stabilization, Cine.
+/// The panel under the "..." button, a grid of fixed-width cells so labels never wrap, and below it the
+/// PRO row that opens the tools for those who want them (`ProPanel`).
+/// Photo: Flash, Timer, Aspect, Frame, Range, Portrait. Video: FPS, Resolution, Stabilization.
 struct OptionsPanel: View {
     let mode: CaptureMode
     let settings: AppSettings
     let update: ((inout AppSettings) -> Void) -> Void
     let openDynamicRange: () -> Void
+    let openPro: () -> Void
     /// Frame rates the camera runs, by video width; 120 appears only where the camera has it.
     var frameRates: [Int: [Int]] = [:]
 
-    /// Six photo options sit three by two, four video options in one row, so no cell is left empty.
+    /// Six photo options sit three by two, three video options in one row, so no cell is left empty.
     private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 4), count: mode == .photo ? 3 : 4)
+        Array(repeating: GridItem(.flexible(), spacing: 4), count: 3)
     }
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 14) {
-            if mode == .photo { photoOptions } else { videoOptions }
+        VStack(spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 14) {
+                if mode == .photo { photoOptions } else { videoOptions }
+            }
+            ProRow(mode: mode, settings: settings, action: openPro)
+                .padding(.horizontal, 6)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 14)
@@ -358,9 +364,6 @@ struct OptionsPanel: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(settings.videoStabilization == .off ? 0.1 : 0.28)))
-        }
-        option(title: "Cine", active: settings.cineExposure, action: { update { $0.cineExposure.toggle() } }) {
-            Text("180°").font(.system(size: 17, weight: .semibold))
         }
     }
 

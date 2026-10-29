@@ -48,8 +48,10 @@ final class CameraEngine {
     private(set) var rawAvailable = false
     /// Frame rates the camera runs, by video width.
     private(set) var frameRates: [Int: [Int]] = [:]
-    /// Shutter, ISO and, with cine exposure on, its status, in video mode.
+    /// Shutter, ISO and, with AutoMotion on, its status, in video mode.
     private(set) var cineState: CaptureSessionController.CineState?
+    /// The RGB waveform of the viewfinder while it is on.
+    private(set) var waveform: CGImage?
     private(set) var appleLogActive = false
     /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
     private(set) var showsSwitchBlur = false
@@ -66,6 +68,8 @@ final class CameraEngine {
     @ObservationIgnored var onPhoto: ((PhotoResult) -> Void)?
     @ObservationIgnored var onVideo: ((URL) -> Void)?
     @ObservationIgnored var onModeChanged: ((CaptureMode) -> Void)?
+    /// The video format had to step down to fit the camera's hardware budget.
+    @ObservationIgnored var onFormatFallback: ((VideoFormat) -> Void)?
 
     @ObservationIgnored private var settings: AppSettings
     @ObservationIgnored private var looks = Looks()
@@ -130,17 +134,27 @@ final class CameraEngine {
             }
         }
         updateHub()
-        syncCineExposure()
+        syncExposure()
     }
 
-    /// Video mode reads shutter and ISO out; cine exposure runs there when the setting is on.
-    private func syncCineExposure() {
+    /// Video mode reads shutter and ISO out, and AutoMotion runs there when it is on. White balance and the
+    /// viewfinder aids apply in both modes.
+    private func syncExposure() {
         if controller.onCineState == nil {
             controller.onCineState = { [weak self] state in
                 Task { @MainActor in self?.cineState = state }
             }
+            controller.hub.setWaveformHandler { [weak self] image in
+                Task { @MainActor in
+                    guard let self, self.settings.waveform else { return }
+                    self.waveform = image
+                }
+            }
         }
-        controller.setExposureMonitor(video: mode == .video, cine: settings.cineExposure, fps: settings.videoFPS)
+        controller.setExposureMonitor(video: mode == .video, autoMotion: settings.autoMotion, fps: settings.videoFPS)
+        controller.setWhiteBalance(kelvin: settings.whiteBalanceKelvin, tint: settings.whiteBalanceTint)
+        controller.hub.setAssist(zebra: settings.zebra, falseColor: settings.falseColor, peaking: settings.focusPeaking, waveform: settings.waveform)
+        if !settings.waveform { waveform = nil }
     }
 
     // MARK: User actions
@@ -323,10 +337,19 @@ final class CameraEngine {
         appleLogActive = info.appleLogActive
         if !info.frameRates.isEmpty { frameRates = info.frameRates }
         settleRotation(deviceID: info.deviceID)
-        syncCineExposure()
+        syncExposure()
+        if let fallback = info.budgetFallback {
+            message = "\(Self.describe(config.format)) is more than the camera can run here, so \(Self.describe(fallback)) is used."
+            onFormatFallback?(fallback)
+        }
         refreshStops()
         updateHub()
         return info
+    }
+
+    /// "4K 120 fps".
+    private static func describe(_ format: VideoFormat) -> String {
+        "\(format.width >= 3840 ? "4K" : "\(format.height)p") \(format.fps) fps"
     }
 
     /// Back cameras turn a quarter turn to stand upright. Front cameras are measured with a rotation
@@ -465,11 +488,13 @@ final class CameraEngine {
     // MARK: Video
 
     private func beginRecording() {
+        controller.setRecordingLocks(exposure: settings.lockExposureWhileRecording, whiteBalance: settings.lockWhiteBalanceWhileRecording)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rec-\(UUID().uuidString).mov")
         controller.startRecording(url: url, fps: machine.configuration.format.fps, quarterTurns: deviceOrientation.quarterTurns) { [weak self] in
             Task { @MainActor in self?.recordingDidStart() }
         } onFail: { [weak self] error in
             Task { @MainActor in
+                self?.controller.setRecordingLocks(exposure: false, whiteBalance: false)
                 self?.message = error.localizedDescription
                 self?.send(.videoRecordingDidFinish)
             }
@@ -490,6 +515,7 @@ final class CameraEngine {
     }
 
     private func endRecording() {
+        controller.setRecordingLocks(exposure: false, whiteBalance: false)
         controller.stopRecording { [weak self] url, error in
             Task { @MainActor in
                 guard let self else { return }

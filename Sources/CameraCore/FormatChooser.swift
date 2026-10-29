@@ -80,6 +80,16 @@ public enum FormatChooser {
     /// Above this many frames per second the back camera runs alone, without the multi-camera device.
     public static let highFrameRate = 60
 
+    /// The next lighter video format when the camera says a configuration is over its hardware budget
+    /// (`AVCaptureSession.hardwareCost` above 1), as Kino falls back: the frame rate steps down to 60, then
+    /// 30, and only then 4K drops to 1080p. Nil when there is nothing lighter to try.
+    public static func lighter(than format: VideoFormat) -> VideoFormat? {
+        if format.fps > 60 { return VideoFormat(width: format.width, height: format.height, fps: 60) }
+        if format.fps > 30 { return VideoFormat(width: format.width, height: format.height, fps: 30) }
+        if format.width > 1920 { return VideoFormat(width: 1920, height: 1080, fps: format.fps) }
+        return nil
+    }
+
     /// Frame rates offered for a video width: the standard ones some 16:9 format (or, for 1080p, the
     /// photo format) can run. 120 and 240 show up only on cameras that have them (4K120 on recent Pro
     /// iPhones, 1080p240 on most).

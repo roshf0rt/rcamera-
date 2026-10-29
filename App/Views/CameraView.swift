@@ -13,6 +13,8 @@ struct CameraView: View {
 
     @State private var showOptions = false
     @State private var showDynamicRange = false
+    /// The pro tools, opened from the PRO row of the options shade.
+    @State private var showPro = false
     /// The aperture or lens dial over the picture in portrait mode.
     @State private var dial: Dial?
     /// The dial is being turned (pill held or dial dragged), so it must not close by itself.
@@ -87,11 +89,11 @@ struct CameraView: View {
                 if engine.mode == .video, !engine.isSwitchingMode, !showPresets {
                     ExposureHUD(
                         state: engine.cineState,
-                        cineOn: model.settings.cineExposure,
+                        autoMotion: model.settings.autoMotion,
                         locked: engine.isAELocked,
                         fps: model.settings.videoFPS
                     ) {
-                        model.updateSettings { $0.cineExposure.toggle() }
+                        model.updateSettings { $0.autoMotion.toggle() }
                     }
                     .frame(width: geo.size.width, height: 34)
                     .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 40)
@@ -144,11 +146,26 @@ struct CameraView: View {
                         openDynamicRange: {
                             withAnimation(Self.panelSpring) { showOptions = false; showDynamicRange = true }
                         },
+                        openPro: {
+                            withAnimation(Self.panelSpring) { showOptions = false; showPro = true }
+                        },
                         frameRates: engine.frameRates
                     )
                     .frame(width: geo.size.width)
                     .offset(y: topBarHeight + 6)
                     // The shade comes into focus out of a blur, grown from the top bar.
+                    .transition(.blurReveal)
+                }
+
+                if showPro {
+                    ProPanel(
+                        mode: engine.mode,
+                        settings: model.settings,
+                        update: { change in model.updateSettings(change) },
+                        back: { withAnimation(Self.panelSpring) { showPro = false; showOptions = true } }
+                    )
+                    .frame(width: geo.size.width)
+                    .offset(y: topBarHeight + 6)
                     .transition(.blurReveal)
                 }
 
@@ -291,11 +308,18 @@ struct CameraView: View {
             }
             Spacer(minLength: 0)
 
-            Button { withAnimation(Self.panelSpring) { showOptions.toggle(); showPresets = false; showDynamicRange = false } } label: {
+            Button {
+                withAnimation(Self.panelSpring) {
+                    showOptions = !(showOptions || showPro)
+                    showPro = false
+                    showPresets = false
+                    showDynamicRange = false
+                }
+            } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .bold))
                     .followsDevice()
-                    .foregroundStyle(showOptions ? Theme.accent : .white)
+                    .foregroundStyle(showOptions || showPro ? Theme.accent : .white)
                     .frame(width: 56, height: 36)
                     .background(Capsule().fill(Theme.chrome))
             }
@@ -378,6 +402,7 @@ struct CameraView: View {
             showPresets = false
             showOptions = false
             showDynamicRange = false
+            showPro = false
         }
         dialTouch += 1
     }
@@ -443,6 +468,12 @@ struct CameraView: View {
                     }
                 }
             if model.settings.isGridEnabled { GridOverlay() }
+            if model.settings.waveform {
+                WaveformPanel(engine: engine)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .transition(.opacity)
+            }
             if model.settings.isLevelEnabled { LevelOverlay(roll: model.level.roll) }
             if let marker = focusMarker {
                 FocusMarker()
@@ -495,8 +526,8 @@ struct CameraView: View {
         .contentShape(Rectangle())
         .simultaneousGesture(
             SpatialTapGesture().onEnded { value in
-                if showOptions || showPresets || showDynamicRange {
-                    withAnimation(Self.panelSpring) { showOptions = false; showPresets = false; showDynamicRange = false }
+                if showOptions || showPresets || showDynamicRange || showPro {
+                    withAnimation(Self.panelSpring) { showOptions = false; showPresets = false; showDynamicRange = false; showPro = false }
                     return
                 }
                 focusMarker = FocusPoint(location: value.location)
@@ -533,8 +564,8 @@ struct CameraView: View {
         if abs(dy) > abs(dx) * 1.4, abs(dy) > 60 {
             if dy < 0 {
                 // Up: closes the shade if it is down, otherwise brings up the presets.
-                if showOptions || showDynamicRange {
-                    withAnimation(Self.panelSpring) { showOptions = false; showDynamicRange = false }
+                if showOptions || showDynamicRange || showPro {
+                    withAnimation(Self.panelSpring) { showOptions = false; showDynamicRange = false; showPro = false }
                 } else if !showPresets {
                     withAnimation(Self.panelSpring) { showPresets = true }
                 }
@@ -542,7 +573,7 @@ struct CameraView: View {
                 withAnimation(Self.panelSpring) { showPresets = false }
             } else {
                 // Down: pulls the shade with the camera options from the top.
-                withAnimation(Self.panelSpring) { showOptions = true; showDynamicRange = false }
+                withAnimation(Self.panelSpring) { showOptions = true; showDynamicRange = false; showPro = false }
             }
         } else if abs(dx) > abs(dy) * 1.4, abs(dx) > 70, !engine.isRecording, !engine.isSwitchingMode {
             engine.selectMode(engine.mode == .photo ? .video : .photo)
@@ -652,7 +683,7 @@ struct CameraView: View {
     private var presetButton: some View {
         let preset = model.selectedPreset
         let style = PresetCardStyle.of(preset)
-        return Button { withAnimation(Self.panelSpring) { showPresets.toggle(); showOptions = false } } label: {
+        return Button { withAnimation(Self.panelSpring) { showPresets.toggle(); showOptions = false; showPro = false } } label: {
             ZStack(alignment: .bottomLeading) {
                 PresetSwatch(preset: preset, corner: 14)
                     .followsDevice()
@@ -753,13 +784,13 @@ struct EffectToggle: View {
     }
 }
 
-/// Shutter, shutter angle and ISO over the video picture, as the camera runs them. With cine exposure on,
-/// a light says how they stand against the rule: green on the cinematic shutter with the picture exposed
-/// right, amber while it settles, red when the light forced the shutter off it (with the ND filter that
-/// would fix it, or LOW LIGHT). A tap switches cine exposure on and off.
+/// Shutter, shutter angle and ISO over the video picture, as the camera runs them. With AutoMotion on, a
+/// light says how they stand against the 180° rule: green on 180° with the picture exposed right, amber
+/// while it ramps or when the shutter had to bend (with the ND filter that would fix it, or LOW LIGHT),
+/// red when the light is out of reach and the iPhone's own exposure runs. A tap switches AutoMotion.
 struct ExposureHUD: View {
     let state: CaptureSessionController.CineState?
-    let cineOn: Bool
+    let autoMotion: Bool
     let locked: Bool
     let fps: Int
     let toggle: () -> Void
@@ -769,22 +800,23 @@ struct ExposureHUD: View {
     private static let red = Color(red: 1, green: 0.27, blue: 0.23)
 
     private var color: Color {
-        guard cineOn, !locked else { return Color(white: 0.6) }
+        guard autoMotion, !locked else { return Color(white: 0.6) }
         switch state?.status {
         case .cinematic: return Self.green
-        case .settling, .none: return Self.amber
-        case .tooBright, .tooDark: return Self.red
+        case .settling, .bent, .none: return Self.amber
+        case .handedOver: return Self.red
         }
     }
 
     private var label: String {
         if locked { return "AE LOCK" }
-        guard cineOn else { return "AUTO" }
+        guard autoMotion else { return "AUTO" }
         switch state?.status {
-        case .cinematic: return "CINE"
-        case .settling, .none: return "CINE…"
-        case .tooBright(let stops): return String(format: "ND %.1f", max(stops, 0.1))
-        case .tooDark: return "LOW LIGHT"
+        case .cinematic: return "180°"
+        case .settling, .none: return "180°…"
+        case .bent(let stops) where stops > 0: return String(format: "ND %.1f", max(stops, 0.1))
+        case .bent: return "LOW LIGHT"
+        case .handedOver(let tooBright): return tooBright ? "ND 1+" : "LOW LIGHT"
         }
     }
 
@@ -795,7 +827,7 @@ struct ExposureHUD: View {
                     Circle()
                         .fill(color)
                         .frame(width: 8, height: 8)
-                        .shadow(color: cineOn ? color.opacity(0.9) : .clear, radius: 4)
+                        .shadow(color: autoMotion ? color.opacity(0.9) : .clear, radius: 4)
                     Text(label)
                         .font(.system(size: 11, weight: .bold))
                         .tracking(0.5)
@@ -813,13 +845,13 @@ struct ExposureHUD: View {
             .padding(.horizontal, 12)
             .frame(height: 30)
             .background(Capsule().fill(Color.black.opacity(0.55)))
-            .overlay(Capsule().strokeBorder(cineOn ? color.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 1))
+            .overlay(Capsule().strokeBorder(autoMotion ? color.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 1))
             .animation(.easeOut(duration: 0.25), value: state)
-            .animation(.easeOut(duration: 0.25), value: cineOn)
+            .animation(.easeOut(duration: 0.25), value: autoMotion)
         }
         .buttonStyle(PressableStyle())
-        .sensoryFeedback(.selection, trigger: cineOn)
-        .accessibilityLabel("Exposure \(state?.shutter ?? ""), ISO \(state?.iso ?? 0). Cine exposure \(cineOn ? "on" : "off")")
+        .sensoryFeedback(.selection, trigger: autoMotion)
+        .accessibilityLabel("Exposure \(state?.shutter ?? ""), ISO \(state?.iso ?? 0). AutoMotion \(autoMotion ? "on" : "off")")
     }
 
     private var divider: some View {

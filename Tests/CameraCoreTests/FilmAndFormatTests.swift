@@ -257,7 +257,6 @@ final class AppleLogTests: XCTestCase {
 }
 
 final class CineExposureTests: XCTestCase {
-    private let limits = CineExposure.Limits(minISO: 50, maxISO: 3200, minDuration: 1.0 / 20000, maxDuration: 1.0 / 3)
 
     func testShutterFollowsTheHundredEightyDegreeRule() {
         XCTAssertEqual(CineExposure.shutter(fps: 24), 1.0 / 48, accuracy: 1e-12)
@@ -265,38 +264,8 @@ final class CineExposureTests: XCTestCase {
         XCTAssertEqual(CineExposure.shutter(fps: 120), 1.0 / 240, accuracy: 1e-12)
     }
 
-    func testISOCarriesTheExposureAtTheCineShutter() {
-        // Auto exposure had picked 1/120 at ISO 400; at 24 fps the shutter moves to 1/48 and ISO drops to keep the light.
-        let start = CineExposure.Setting(iso: 400, duration: 1.0 / 120)
-        let next = CineExposure.next(current: start, offset: 0, fps: 24, limits: limits)
-        XCTAssertEqual(next.duration, 1.0 / 48, accuracy: 1e-12)
-        XCTAssertEqual(next.iso * next.duration, start.iso * start.duration, accuracy: 1e-9)
-    }
-
-    func testTooBrightLowersISOAndOnlyThenShortensTheShutter() {
-        let start = CineExposure.Setting(iso: 100, duration: 1.0 / 48)
-        let darker = CineExposure.next(current: start, offset: 1, fps: 24, limits: limits)
-        XCTAssertEqual(darker.duration, 1.0 / 48, accuracy: 1e-12)
-        XCTAssertLessThan(darker.iso, 100)
-
-        let sunny = CineExposure.Setting(iso: 50, duration: 1.0 / 48)
-        let faster = CineExposure.next(current: sunny, offset: 3, fps: 24, limits: limits)
-        XCTAssertEqual(faster.iso, 50)
-        XCTAssertLessThan(faster.duration, 1.0 / 48, "no ND filter: the shutter has to give way")
-    }
-
-    func testTooDarkRaisesISOAndNeverExposesLongerThanAFrame() {
-        let night = CineExposure.Setting(iso: 3200, duration: 1.0 / 48)
-        let slower = CineExposure.next(current: night, offset: -4, fps: 24, limits: limits)
-        XCTAssertEqual(slower.iso, 3200)
-        XCTAssertGreaterThan(slower.duration, 1.0 / 48)
-        XCTAssertLessThanOrEqual(slower.duration, 1.0 / 24 + 1e-12)
-    }
-
-    func testSmallOffsetsAreLeftAlone() {
-        let start = CineExposure.Setting(iso: 200, duration: 1.0 / 48)
-        XCTAssertEqual(CineExposure.next(current: start, offset: 0.03, fps: 24, limits: limits), start)
-        XCTAssertEqual(CineExposure.readout(start), "1/48 · ISO 200")
+    func testReadout() {
+        XCTAssertEqual(CineExposure.readout(CineExposure.Setting(iso: 200, duration: 1.0 / 48)), "1/48 · ISO 200")
     }
 
     func testShutterAngleAndText() {
@@ -340,8 +309,6 @@ final class DeviceOrientationTests: XCTestCase {
 }
 
 final class CineStatusTests: XCTestCase {
-    private let limits = CineExposure.Limits(minISO: 50, maxISO: 6400, minDuration: 1.0 / 20000, maxDuration: 1.0 / 3)
-
     func testReferenceShutterAvoidsMainsFlicker() {
         XCTAssertEqual(CineExposure.referenceShutter(fps: 24, mainsHz: 50), 1.0 / 50, accuracy: 1e-12)
         XCTAssertEqual(CineExposure.referenceShutter(fps: 24, mainsHz: 60), 1.0 / 60, accuracy: 1e-12)
@@ -351,37 +318,5 @@ final class CineStatusTests: XCTestCase {
         XCTAssertEqual(CineExposure.referenceShutter(fps: 120, mainsHz: 50), 1.0 / 240, accuracy: 1e-12)
         XCTAssertEqual(CineExposure.mainsFrequency(regionCode: "RU"), 50)
         XCTAssertEqual(CineExposure.mainsFrequency(regionCode: "us"), 60)
-    }
-
-    func testOnTargetAtTheReferenceIsGreen() {
-        let start = CineExposure.Setting(iso: 400, duration: 1.0 / 50)
-        let step = CineExposure.step(current: start, offset: 0.02, fps: 24, limits: limits, mainsHz: 50)
-        XCTAssertEqual(step.status, .cinematic)
-        XCTAssertEqual(step.setting, start)
-    }
-
-    func testFarFromTargetIsSettlingButKeepsTheShutter() {
-        let start = CineExposure.Setting(iso: 400, duration: 1.0 / 50)
-        let step = CineExposure.step(current: start, offset: -1, fps: 24, limits: limits, mainsHz: 50)
-        XCTAssertEqual(step.status, .settling)
-        XCTAssertEqual(step.setting.duration, 1.0 / 50, accuracy: 1e-12)
-        XCTAssertGreaterThan(step.setting.iso, 400)
-    }
-
-    func testBrightLightAsksForAnNDFilter() {
-        let sunny = CineExposure.Setting(iso: 50, duration: 1.0 / 50)
-        let step = CineExposure.step(current: sunny, offset: 3, fps: 24, limits: limits, mainsHz: 50)
-        guard case .tooBright(let stops) = step.status else { return XCTFail("expected tooBright, got \(step.status)") }
-        XCTAssertGreaterThan(stops, 1)
-        XCTAssertLessThan(step.setting.duration, 1.0 / 50)
-    }
-
-    func testDarkOpensTheShutterBeforeNoisyISO() {
-        // Needs two stops more than ISO 1600 at 1/50 gives.
-        let dim = CineExposure.Setting(iso: 1600, duration: 1.0 / 50)
-        let step = CineExposure.step(current: dim, offset: -1.5, fps: 24, limits: limits, mainsHz: 50)
-        XCTAssertEqual(step.status, .tooDark)
-        XCTAssertGreaterThan(step.setting.duration, 1.0 / 50, "the shutter opens towards 270° first")
-        XCTAssertLessThanOrEqual(step.setting.duration, 1.5 / 50 + 1e-12)
     }
 }

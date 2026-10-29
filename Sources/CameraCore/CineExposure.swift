@@ -1,9 +1,7 @@
 import Foundation
 
-/// Cinematic auto exposure, as the Kino app does it: the shutter stays at the 180° rule (half the frame
-/// time, so 1/48 s at 24 fps) for natural motion blur, and ISO carries the exposure. Only when ISO runs
-/// out does the shutter give way: faster in bright light (there is no ND filter), slower in the dark,
-/// but never longer than one frame.
+/// The cinematic shutter rule and its readouts: 180° (half the frame time, so 1/48 s at 24 fps) for natural
+/// motion blur, moved to a flicker-free time under mains lighting. `MotionExposure` runs the exposure on it.
 public enum CineExposure {
     public struct Limits: Equatable, Sendable {
         public var minISO: Double
@@ -30,27 +28,6 @@ public enum CineExposure {
             self.duration = duration
         }
     }
-
-    /// How the picture stands against the cinematic rule, for the indicator on the viewfinder.
-    public enum Status: Equatable, Sendable {
-        /// Shutter on its reference and the picture exposed right: green.
-        case cinematic
-        /// Shutter on its reference, exposure still moving towards the target: amber.
-        case settling
-        /// Too much light even at the lowest ISO: the shutter had to get faster. `ndStops` is the ND
-        /// filter that would bring it back to the reference: red.
-        case tooBright(ndStops: Double)
-        /// Too little light: the shutter had to get slower than its reference: red.
-        case tooDark
-    }
-
-    public struct Step: Equatable, Sendable {
-        public var setting: Setting
-        public var status: Status
-    }
-
-    /// ISO up to which the picture stays clean; above it the loop prefers a slower shutter first.
-    public static let cleanISO = 1600.0
 
     /// The 180° shutter for a frame rate.
     public static func shutter(fps: Int) -> Double {
@@ -85,57 +62,6 @@ public enum CineExposure {
             "PR", "BS", "BZ", "HT", "JM", "TT", "KR", "TW", "PH", "SA", "LR",
         ]
         return regionCode.map { sixty.contains($0.uppercased()) } == true ? 60 : 50
-    }
-
-    /// One step of the loop. `offset` is how far the metered exposure is above the target, in EV
-    /// (positive: too bright). Big errors are corrected fast, small ones gently, tiny ones not at all,
-    /// so the picture neither lags nor pumps.
-    ///
-    /// Order of give: ISO within its clean range at the reference shutter; then, in the dark, the
-    /// shutter opens to 270°, ISO climbs to its maximum, and only then the shutter opens to a full
-    /// frame; in bright light the shutter has to get faster, since a phone has no ND filter.
-    public static func step(current: Setting, offset: Double, fps: Int, limits: Limits, mainsHz: Int? = nil) -> Step {
-        let magnitude = abs(offset)
-        let damping = magnitude > 1.5 ? 0.75 : magnitude > 0.5 ? 0.5 : 0.3
-        let correction = magnitude < 0.08 ? 0 : -offset * damping
-        let exposure = current.iso * current.duration * pow(2, correction)
-        let longest = min(limits.maxDuration, 1 / Double(max(fps, 1)))
-        let reference = min(max(referenceShutter(fps: fps, mainsHz: mainsHz), limits.minDuration), longest)
-        let clean = min(limits.maxISO, max(limits.minISO, cleanISO))
-
-        let settled: Status = magnitude < 0.35 ? .cinematic : .settling
-
-        // Already on the reference and on target: hold still.
-        if correction == 0, abs(current.duration - reference) / reference < 0.01,
-           current.iso >= limits.minISO, current.iso <= clean {
-            return Step(setting: current, status: .cinematic)
-        }
-
-        var iso = exposure / reference
-        if iso >= limits.minISO, iso <= clean {
-            let setting = Setting(iso: iso, duration: reference)
-            return Step(setting: setting, status: settled)
-        }
-        if iso < limits.minISO {
-            let duration = max(exposure / limits.minISO, limits.minDuration)
-            return Step(setting: Setting(iso: limits.minISO, duration: duration), status: .tooBright(ndStops: log2(reference / duration)))
-        }
-        // Too dark at clean ISO: open the shutter to 270° first.
-        var duration = min(exposure / clean, reference * 1.5, longest)
-        iso = exposure / duration
-        if iso > clean {
-            iso = min(iso, limits.maxISO)
-            if exposure / iso > duration {
-                duration = min(exposure / iso, longest)
-            }
-        }
-        iso = min(max(exposure / duration, limits.minISO), limits.maxISO)
-        return Step(setting: Setting(iso: iso, duration: duration), status: .tooDark)
-    }
-
-    /// One step, returning only the setting.
-    public static func next(current: Setting, offset: Double, fps: Int, limits: Limits, mainsHz: Int? = nil) -> Setting {
-        step(current: current, offset: offset, fps: fps, limits: limits, mainsHz: mainsHz).setting
     }
 
     /// "1/48 · ISO 320", for the viewfinder.
