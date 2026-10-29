@@ -281,8 +281,8 @@ struct CaptureViewer: View {
     @State private var closingDrag: Bool?
     @State private var zoomed = false
     @State private var showRedevelop = false
-    /// A Log video is redeveloped in a sheet with a preview, not over the whole screen.
-    @State private var showVideoRedevelop = false
+    /// Set while a Log video is redeveloped: the viewer's own player then plays the look, and the panel takes the bottom bar's place.
+    @State private var grade: VideoGrade?
     @State private var confirmDelete = false
 
     private var record: CaptureRecord? { model.captures.first { $0.id == (current ?? startID) } }
@@ -299,6 +299,7 @@ struct CaptureViewer: View {
                         CapturePage(
                             record: item,
                             isCurrent: item.id == (current ?? startID),
+                            grade: item.kind == .video && item.id == (current ?? startID) ? grade : nil,
                             zoomed: $zoomed,
                             askDelete: { confirmDelete = true }
                         )
@@ -311,7 +312,7 @@ struct CaptureViewer: View {
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $current)
             .scrollIndicators(.hidden)
-            .scrollDisabled(zoomed || dragY > 0)
+            .scrollDisabled(zoomed || dragY > 0 || grade != nil)
             .ignoresSafeArea()
             .offset(y: dragY)
             .scaleEffect(1 - 0.25 * progress)
@@ -323,19 +324,13 @@ struct CaptureViewer: View {
             }
         }
         .onAppear { current = startID }
+        .onChange(of: current) { grade = nil }
         .onChange(of: model.captures.map(\.id)) { _, ids in
             if ids.isEmpty { close() }
         }
         .sensoryFeedback(.selection, trigger: current)
         .fullScreenCover(isPresented: $showRedevelop) {
             if let record { RedevelopView(recordID: record.id) }
-        }
-        .sheet(isPresented: $showVideoRedevelop) {
-            if let record {
-                VideoRedevelopView(recordID: record.id)
-                    .presentationDetents([.large, .medium])
-                    .presentationDragIndicator(.visible)
-            }
         }
         .confirmationDialog("Delete this capture?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deleteCurrent() }
@@ -393,7 +388,15 @@ struct CaptureViewer: View {
             .padding(.horizontal, 14)
             .padding(.top, 4)
             Spacer(minLength: 0)
-            bottomBar(record)
+            if record.kind == .video, grade != nil {
+                VideoGradePanel(
+                    record: record,
+                    grade: Binding(get: { grade ?? VideoGrade(record) }, set: { grade = $0 }),
+                    close: { grade = nil }
+                )
+            } else {
+                bottomBar(record)
+            }
         }
     }
 
@@ -436,7 +439,7 @@ struct CaptureViewer: View {
             Spacer()
             if model.canRedevelop(record) {
                 Button {
-                    if record.kind == .video { showVideoRedevelop = true } else { showRedevelop = true }
+                    if record.kind == .video { grade = VideoGrade(record) } else { showRedevelop = true }
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "square.stack.3d.up.fill")
@@ -479,6 +482,8 @@ private struct CapturePage: View {
     @Environment(AppModel.self) private var model
     let record: CaptureRecord
     let isCurrent: Bool
+    /// The look the clip plays with while it is redeveloped; nil plays it as it is.
+    let grade: VideoGrade?
     @Binding var zoomed: Bool
     let askDelete: () -> Void
 
@@ -486,11 +491,20 @@ private struct CapturePage: View {
     @State private var player: AVPlayer?
     @State private var localZoom = false
 
+    private var gradeKey: String {
+        grade.map { "\($0.presetID)|\($0.grain)|\($0.halation)" } ?? "plain"
+    }
+
     var body: some View {
         ZStack {
             if record.kind == .video {
                 if let player {
-                    VideoPlayer(player: player).aspectRatio(9.0 / 16.0, contentMode: .fit)
+                    // The clip is fitted to its own shape, so a landscape one is wide and its controls offer full screen.
+                    // Room is left for the header, and for the bottom bar or the redevelop panel.
+                    VideoPlayer(player: player)
+                        .padding(.top, 52)
+                        .padding(.bottom, grade == nil ? 72 : VideoGradePanel.height)
+                        .animation(.smooth(duration: 0.25), value: grade == nil)
                 } else {
                     ProgressView().tint(.white)
                 }
@@ -506,9 +520,9 @@ private struct CapturePage: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: "\(record.id)-\(record.presetID)-\(record.evPushPull)") {
+        .task(id: "\(record.id)-\(record.presetID)-\(record.evPushPull)-\(gradeKey)") {
             if record.kind == .video {
-                player = AVPlayer(url: model.videoURL(for: record))
+                await loadVideo()
             } else {
                 let url = model.url(.processed, for: record)
                 let loaded = await Task.detached { UIImage(contentsOfFile: url.path) }.value
@@ -521,6 +535,33 @@ private struct CapturePage: View {
         .onChange(of: localZoom) { _, value in
             if isCurrent { zoomed = value }
         }
+    }
+
+    /// Puts the clip on the player: as recorded, or, while redeveloping, graded frame by frame from the Log original.
+    /// A change of look swaps the item and carries on from the same moment.
+    private func loadVideo() async {
+        var graded: AVPlayerItem?
+        if let grade, record.logVideo {
+            // A quick run of changes only builds the last one.
+            try? await Task.sleep(for: .milliseconds(200))
+            if Task.isCancelled { return }
+            if let look = await model.videoDevelopLook(presetID: grade.presetID, grain: grade.grain, halation: grade.halation) {
+                graded = try? await LogGradePreview.playerItem(url: model.url(.video, for: record), look: look)
+            }
+        }
+        if Task.isCancelled { return }
+        let item = graded ?? AVPlayerItem(url: model.videoURL(for: record))
+        let player = self.player ?? AVPlayer()
+        // Before the first item the player's time is invalid, and seeking to it raises an Objective-C exception
+        // that Swift cannot catch.
+        let now = player.currentTime()
+        let resume = player.currentItem != nil && now.isValid && now.seconds.isFinite ? now : .zero
+        let wasPlaying = player.timeControlStatus != .paused
+        let startsGrade = graded != nil && player.currentItem?.videoComposition == nil
+        player.replaceCurrentItem(with: item)
+        if resume.seconds > 0 { await player.seek(to: resume) }
+        if wasPlaying || startsGrade { player.play() }
+        self.player = player
     }
 }
 

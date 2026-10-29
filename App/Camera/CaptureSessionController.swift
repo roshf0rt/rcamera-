@@ -41,6 +41,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var deviceID: String?
         /// The video format that runs instead of the one asked for, which was over the camera's hardware budget.
         var budgetFallback: VideoFormat?
+        /// What the session's `hardwareCost` read when the format asked for was over budget (1 is the limit).
+        var budgetCost: Double?
     }
 
     struct PhotoOutcome: @unchecked Sendable {
@@ -223,6 +225,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let position: AVCaptureDevice.Position = config.lens == .front ? .front : .back
         // The multi-camera virtual device offers no formats above 60 fps; the main camera alone does.
         let highFrameRate = config.mode == .video && config.format.fps > FormatChooser.highFrameRate && position == .back
+        // 4K at 120 fps takes nearly all of the camera's budget, so the photo output asks for as little as it can.
+        let leanPhotoOutput = config.mode == .video && config.format.fps > FormatChooser.highFrameRate
         // Bayer RAW photos come from one camera at a time: the lens asked for, on its own.
         let singleCamera = config.mode == .photo && config.wantsRAW && config.rawFormat == .bayer && !config.portrait && position == .back
         let wanted = self.device(for: position, highFrameRate: highFrameRate, physicalLens: singleCamera ? config.lens : nil)
@@ -261,7 +265,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             currentFormatIndex = formatPlan.index
             currentAppleLog = formatPlan.appleLog
             setDepthFormat(on: device)
-            configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW)
+            configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW, lean: leanPhotoOutput)
             if #available(iOS 18.0, *) { installControls(device: device) }
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
@@ -269,17 +273,19 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
             // A configuration over the camera's hardware budget stalls or stops the session; as Kino does,
             // step down to the next lighter format and say which one runs.
-            if config.mode == .video, session.hardwareCost > 1, let lighter = FormatChooser.lighter(than: config.format) {
+            let cost = Double(session.hardwareCost)
+            if config.mode == .video, cost > 1, let lighter = FormatChooser.lighter(than: config.format) {
                 var next = config
                 next.format = lighter
                 var info = applyOnQueue(next)
                 info.budgetFallback = info.budgetFallback ?? lighter
+                info.budgetCost = info.budgetCost ?? cost
                 return info
             }
         }
 
         // A new photo size does not need a new format, so it is applied on every configuration.
-        if !structural { configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW) }
+        if !structural { configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW, lean: leanPhotoOutput) }
 
         // RAW is what Redevelop works from. If the chosen format has none, fall back to the photo preset once.
         if structural, config.mode == .photo, config.wantsRAW, position == .back, formatPlan.index != nil,
@@ -845,7 +851,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     }
 
     /// 12 MP photos (or the closest the format offers), and ProRAW where the format supports it unless Bayer RAW is wanted.
-    private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution, rawFormat: RAWFormat, wantsRAW: Bool) {
+    /// `lean` keeps the photo output to its smallest size, without ProRAW or depth, for video formats that need the camera's whole budget.
+    private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution, rawFormat: RAWFormat, wantsRAW: Bool, lean: Bool = false) {
         let dimensions = device.activeFormat.supportedMaxPhotoDimensions
         // Bayer RAW is the sensor's plain 12 MP frame and only a single camera offers it: the combined back camera
         // (the one that switches lenses) has none, so there ProRAW is saved instead, at the size set. On a single
@@ -854,16 +861,18 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let limit = bayerOnly ? FormatChooser.preferredPhotoPixels : (resolution.pixelLimit ?? Int.max)
         let fitting = dimensions.filter { Int($0.width) * Int($0.height) <= limit }
         let pixels: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
-        if let best = fitting.max(by: { pixels($0) < pixels($1) }) ?? dimensions.min(by: { pixels($0) < pixels($1) }) {
+        let smallest = dimensions.min(by: { pixels($0) < pixels($1) })
+        if let best = lean ? smallest : (fitting.max(by: { pixels($0) < pixels($1) }) ?? smallest) {
             let current = photoOutput.maxPhotoDimensions
             if current.width != best.width || current.height != best.height { photoOutput.maxPhotoDimensions = best }
         }
-        let proRAW = photoOutput.isAppleProRAWSupported && (rawFormat == .proRAW || device.isVirtualDevice)
+        let proRAW = !lean && photoOutput.isAppleProRAWSupported && (rawFormat == .proRAW || device.isVirtualDevice)
         if proRAW != photoOutput.isAppleProRAWEnabled {
             photoOutput.isAppleProRAWEnabled = proRAW
         }
-        if photoOutput.isDepthDataDeliverySupported != photoOutput.isDepthDataDeliveryEnabled {
-            photoOutput.isDepthDataDeliveryEnabled = photoOutput.isDepthDataDeliverySupported
+        let depth = !lean && photoOutput.isDepthDataDeliverySupported
+        if depth != photoOutput.isDepthDataDeliveryEnabled {
+            photoOutput.isDepthDataDeliveryEnabled = depth
         }
     }
 

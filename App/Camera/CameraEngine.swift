@@ -370,7 +370,8 @@ final class CameraEngine {
         settleRotation(deviceID: info.deviceID)
         syncExposure()
         if let fallback = info.budgetFallback {
-            message = "\(Self.describe(config.format)) is more than the camera can run here, so \(Self.describe(fallback)) is used."
+            let load = info.budgetCost.map { " (load \(String(format: "%.2f", $0)), the limit is 1)" } ?? ""
+            message = "\(Self.describe(config.format)) is more than the camera can run here\(load), so \(Self.describe(fallback)) is used."
             onFormatFallback?(fallback)
         }
         refreshStops()
