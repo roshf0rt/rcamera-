@@ -445,8 +445,8 @@ final class AppModel {
             var look = await cameraLook(for: preset, slot: .photo)
             if photo.depth != nil { look = look.with { lens.apply(to: &$0) } }
             let place = saveLocation ? await location.currentPlaceName() : nil
-            let developed = await Task.detached(priority: .userInitiated) {
-                PhotoPipeline.develop(
+            let (developed, depthFile) = await Task.detached(priority: .userInitiated) { () -> (PhotoPipeline.Developed?, Data?) in
+                let developed = PhotoPipeline.develop(
                     raw: photo.raw,
                     processed: photo.processed,
                     look: look,
@@ -460,6 +460,7 @@ final class AppModel {
                     lens: lens,
                     orientation: photo.orientation
                 )
+                return (developed, photo.depth.flatMap { PhotoPipeline.depthMap($0)?.encoded() })
             }.value
             processingCount -= 1
             guard let developed else {
@@ -480,10 +481,13 @@ final class AppModel {
                 frame: frame,
                 grainLevel: grainLevel,
                 halationLevel: halationLevel,
-                orientation: photo.orientation
+                orientation: photo.orientation,
+                portraitFNumber: photo.depth == nil ? nil : portraitFNumber,
+                lensStyle: photo.depth == nil ? nil : lens
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
+                if let depthFile { try captureStore.write(depthFile, as: .depth, for: record.id) }
                 try captureStore.write(developed.thumbnail, as: .thumbnail, for: record.id)
                 if hasRAW, let raw = photo.raw { try captureStore.write(raw, as: .rawDNG, for: record.id) }
                 // The camera's image before the preset: lets the photo be redeveloped without RAW, or after it expires.
@@ -561,12 +565,34 @@ final class AppModel {
         }.value
     }
 
+    /// The depth map a portrait photo was blurred with; nil for other photos, or when it was not kept.
+    func depthMap(for record: CaptureRecord) async -> DepthMap? {
+        guard record.lensStyle != nil else { return nil }
+        let url = captureStore.url(.depth, for: record.id)
+        return await Task.detached(priority: .userInitiated) {
+            (try? Data(contentsOf: url)).flatMap { DepthMap(encoded: $0) }
+        }.value
+    }
+
     /// Re-renders a stored photo with a different preset and push/pull, replacing the processed image.
-    func redevelop(_ record: CaptureRecord, presetID: String, pushPull: Double, grain: GrainLevel, halation: EffectLevel) async -> Bool {
+    /// A portrait photo's background is drawn again with `portraitFNumber` and `lens`.
+    func redevelop(
+        _ record: CaptureRecord,
+        presetID: String,
+        pushPull: Double,
+        grain: GrainLevel,
+        halation: EffectLevel,
+        portraitFNumber: Double,
+        lens: LensStyle
+    ) async -> Bool {
         guard let preset = preset(id: presetID),
               let source = await redevelopSource(for: record)
         else { return false }
-        let look = await leveledLook(for: preset, grain: grain, halation: halation)
+        let portrait = await depthMap(for: record).map {
+            PhotoPipeline.PortraitDepth(map: $0, fNumber: portraitFNumber, lens: lens)
+        }
+        var look = await leveledLook(for: preset, grain: grain, halation: halation)
+        if portrait != nil { look = look.with { lens.apply(to: &$0) } }
         let aspect = record.aspect
         let mirror = record.mirrored
         let orientation = record.orientation
@@ -581,6 +607,7 @@ final class AppModel {
                 frame: record.frame,
                 label: preset.name,
                 accentIndex: preset.accentIndex,
+                portrait: portrait,
                 orientation: orientation
             )
         }.value
@@ -594,6 +621,10 @@ final class AppModel {
             updated.evPushPull = pushPull
             updated.grainLevel = grain
             updated.halationLevel = halation
+            if portrait != nil {
+                updated.portraitFNumber = portraitFNumber
+                updated.lensStyle = lens
+            }
             try captureStore.update(updated)
             captures = captureStore.records
             try? await PhotoLibrarySaver.savePhoto(heicURL: captureStore.url(.processed, for: record.id), rawURL: nil)

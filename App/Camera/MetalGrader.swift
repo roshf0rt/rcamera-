@@ -101,12 +101,16 @@ struct AssistPass: Equatable {
     var zebra = false
     var falseColor = false
     var peaking = false
-    /// Count an RGB waveform of the graded picture; `MetalGrader.takeWaveform` returns it.
+    /// Draw the waveform picture (`FrameHub` shows it).
     var waveform = false
+    /// Measure the picture's brightness for AutoMotion's meter.
+    var measure = false
+    /// Count the graded picture this frame, for the waveform or the meter; `takeWaveform` returns the counts.
+    var counts = false
     /// Frame counter, so the zebra stripes crawl.
     var phase = 0
 
-    var isEmpty: Bool { !zebra && !falseColor && !peaking && !waveform }
+    var isEmpty: Bool { !zebra && !falseColor && !peaking && !waveform && !measure }
 }
 
 /// Applies a `FilmLook` on the GPU in one pass, like Lampa's Ironstone: camera pixel, LUT, halation, grain.
@@ -359,7 +363,7 @@ final class MetalGrader: @unchecked Sendable {
             params.zebraLevel = Float(ExposureAssist.zebraLevel)
             // Apple Log is flat, so its edges are fainter.
             params.peakThreshold = params.inputKind == 1 ? 0.06 : 0.1
-            if assist.waveform, let buffer = waveformBuffer() {
+            if assist.counts, let buffer = waveformBuffer() {
                 params.assist |= 8
                 params.waveColumns = Int32(Self.waveColumns)
                 params.waveLevels = Int32(Self.waveLevels)

@@ -12,6 +12,8 @@ public enum CaptureFile: String, Sendable {
     case processed = "processed.heic"
     case thumbnail = "thumb.jpg"
     case video = "video.mov"
+    /// Portrait photos: the depth map the background was blurred with, so Redevelop can change the lens and aperture.
+    case depth = "depth.bin"
 }
 
 public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
@@ -38,6 +40,9 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var frame: FrameStyle
     /// How the phone was held; the saved photo is turned to match, and Redevelop turns it again.
     public var orientation: DeviceOrientation
+    /// Portrait photos: the f-number and lens the background was drawn with. Nil for other photos. Redevelop changes them.
+    public var portraitFNumber: Double?
+    public var lensStyle: LensStyle?
 
     public init(
         id: UUID = UUID(),
@@ -54,7 +59,9 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         frame: FrameStyle = .off,
         grainLevel: GrainLevel = .medium,
         halationLevel: EffectLevel = .medium,
-        orientation: DeviceOrientation = .portrait
+        orientation: DeviceOrientation = .portrait,
+        portraitFNumber: Double? = nil,
+        lensStyle: LensStyle? = nil
     ) {
         self.id = id
         self.date = date
@@ -71,11 +78,13 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.grainLevel = grainLevel
         self.halationLevel = halationLevel
         self.orientation = orientation
+        self.portraitFNumber = portraitFNumber
+        self.lensStyle = lensStyle
     }
 
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
-        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation
+        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, portraitFNumber, lensStyle
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -95,6 +104,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         try c.encode(grainLevel, forKey: .grainLevel)
         try c.encode(halationLevel, forKey: .halationLevel)
         try c.encode(orientation, forKey: .orientation)
+        try c.encodeIfPresent(portraitFNumber, forKey: .portraitFNumber)
+        try c.encodeIfPresent(lensStyle, forKey: .lensStyle)
     }
 
     /// Index files from earlier releases lack newer keys; they keep their captures.
@@ -118,6 +129,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         halationLevel = (try? c.decode(EffectLevel.self, forKey: .halationLevel))
             ?? ((try? c.decode(Bool.self, forKey: .halationEnabled)) ?? true ? .medium : .off)
         orientation = (try? c.decode(DeviceOrientation.self, forKey: .orientation)) ?? .portrait
+        portraitFNumber = try? c.decodeIfPresent(Double.self, forKey: .portraitFNumber)
+        lensStyle = try? c.decodeIfPresent(LensStyle.self, forKey: .lensStyle)
     }
 }
 

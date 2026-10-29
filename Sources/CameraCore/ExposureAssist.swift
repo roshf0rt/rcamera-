@@ -137,6 +137,24 @@ public struct Waveform: Equatable, Sendable {
         return min(1, (share * Double(levels) / 3).squareRoot())
     }
 
+    /// Mean brightness of the counted picture as a display level, 0...1, weighted as luma. Nil with nothing counted.
+    public var meanLevel: Double? {
+        let weights = [0.299, 0.587, 0.114]
+        var luma = 0.0
+        for channel in 0 ..< 3 {
+            var sum = 0.0
+            var total = 0.0
+            for (index, count) in counts[channel].enumerated() {
+                let level = index % levels
+                sum += Double(count) * (Double(level) + 0.5) / Double(levels)
+                total += Double(count)
+            }
+            guard total > 0 else { return nil }
+            luma += weights[channel] * sum / total
+        }
+        return luma
+    }
+
     /// RGBA pixels, premultiplied, `columns` wide and `levels` high, white at the top. Each channel draws
     /// in its own colour, so where they agree the trace is white.
     public func render() -> [UInt8] {

@@ -146,12 +146,12 @@ struct ProPanel: View {
                     }
                 }
                 .frame(height: 26)
+                .followsDevice()
                 Text(title)
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
-            .followsDevice()
             .foregroundStyle(on ? Theme.accent : .white)
             .frame(maxWidth: .infinity, minHeight: 50)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(on ? Color.white.opacity(0.12) : .clear))
@@ -181,15 +181,27 @@ struct ProPanel: View {
 }
 
 /// The RGB waveform in the corner of the viewfinder: across, the picture's columns; up, each channel's
-/// level, with lines at black, middle and white.
+/// level, with lines at black, middle and white. It turns with the phone and sits in a square, so a turned
+/// panel stays inside the frame it was laid out in.
 struct WaveformPanel: View {
     let engine: CameraEngine
     @Environment(\.iconRotation) private var angle
 
-    /// Turned a quarter: the box is laid out upright and then turned, as the icons are.
+    /// Turned a quarter: the panel is laid out upright and then turned, as the icons are.
     private var sideways: Bool { abs(angle.truncatingRemainder(dividingBy: 180)) == 90 }
 
     var body: some View {
+        ZStack {
+            panel
+                .frame(width: sideways ? 84 : 150, height: sideways ? 150 : 84)
+                .followsDevice()
+        }
+        .frame(width: 150, height: 150)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var panel: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.55))
             if let image = engine.waveform {
@@ -209,9 +221,5 @@ struct WaveformPanel: View {
                 .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
             }
         }
-        .frame(width: sideways ? 84 : 150, height: sideways ? 150 : 84)
-        .followsDevice()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }

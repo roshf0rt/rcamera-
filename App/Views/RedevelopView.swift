@@ -1,4 +1,5 @@
 import CameraCore
+import CoreVideo
 import SwiftUI
 
 /// Redevelop a photo: another preset, push/pull, grain and halation at any level.
@@ -15,6 +16,10 @@ struct RedevelopView: View {
     @State private var pushPull = 0.0
     @State private var grainLevel = GrainLevel.medium
     @State private var halationLevel = EffectLevel.medium
+    /// Portrait photos: the aperture and lens the background is drawn with, and the depth it is drawn from.
+    @State private var fNumber = PortraitAperture.standard
+    @State private var lens = LensStyle.solis
+    @State private var depth: DepthMap?
     @State private var source: PhotoPipeline.Source?
     @State private var base: CVPixelBuffer?
     @State private var baseEV: Double?
@@ -32,10 +37,11 @@ struct RedevelopView: View {
             || abs(pushPull - record.evPushPull) > 0.01
             || grainLevel != record.grainLevel
             || halationLevel != record.halationLevel
+            || (record.lensStyle != nil && (fNumber != record.portraitFNumber || lens != record.lensStyle))
     }
 
     private var renderKey: String {
-        "\(presetID)|\(pushPull)|\(grainLevel)|\(halationLevel)|\(source != nil)"
+        "\(presetID)|\(pushPull)|\(grainLevel)|\(halationLevel)|\(source != nil)|\(fNumber)|\(lens)|\(depth != nil)"
     }
 
     var body: some View {
@@ -43,6 +49,7 @@ struct RedevelopView: View {
             topBar
             previewArea
             effects.padding(.top, 12)
+            if record?.lensStyle != nil { portraitControls.padding(.top, 10) }
             presetRow.padding(.top, 10)
             evControl.padding(.top, 14)
             footer
@@ -112,6 +119,40 @@ struct RedevelopView: View {
         }
     }
 
+    /// The aperture and lens of a portrait photo's background. Changing them draws the background again.
+    private var portraitControls: some View {
+        let lenses = LensStyle.allCases.sorted { $0.order < $1.order }
+        return VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(PortraitAperture.stops, id: \.self) { stop in
+                        choice("ƒ" + ApertureTitle.format(stop), selected: stop == fNumber) { fNumber = stop }
+                    }
+                }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(lenses, id: \.self) { style in
+                        choice(style.label, selected: style == lens) { lens = style }
+                    }
+                }
+            }
+        }
+    }
+
+    private func choice(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .foregroundStyle(selected ? Theme.accent : .white.opacity(0.8))
+                .padding(.horizontal, 12)
+                .frame(height: 34)
+                .background(Capsule().fill(selected ? Color.white.opacity(0.14) : Color.white.opacity(0.06)))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var presetRow: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -163,11 +204,14 @@ struct RedevelopView: View {
         pushPull = record.evPushPull
         grainLevel = record.grainLevel
         halationLevel = record.halationLevel
+        fNumber = record.portraitFNumber ?? PortraitAperture.standard
+        lens = record.lensStyle ?? .solis
         loaded = true
         let url = model.url(.processed, for: record)
         Task {
             original = await Task.detached { UIImage(contentsOfFile: url.path) }.value
             source = await model.redevelopSource(for: record)
+            depth = await model.depthMap(for: record)
         }
     }
 
@@ -188,9 +232,18 @@ struct RedevelopView: View {
         }
         guard let base else { return }
 
-        let look = await model.leveledLook(for: preset, grain: grainLevel, halation: halationLevel)
+        var look = await model.leveledLook(for: preset, grain: grainLevel, halation: halationLevel)
+        let pass = depth.flatMap {
+            PhotoPipeline.portraitPass(
+                PhotoPipeline.PortraitDepth(map: $0, fNumber: fNumber, lens: lens),
+                aspect: record.aspect,
+                width: CVPixelBufferGetWidth(base),
+                height: CVPixelBufferGetHeight(base)
+            )
+        }
+        if pass != nil { look = look.with { lens.apply(to: &$0) } }
         if Task.isCancelled { return }
-        let image = await Task.detached(priority: .userInitiated) { PhotoPipeline.gradePreview(base, look: look) }.value
+        let image = await Task.detached(priority: .userInitiated) { PhotoPipeline.gradePreview(base, look: look, portrait: pass) }.value
         if !Task.isCancelled, let image { preview = image }
     }
 
@@ -214,7 +267,15 @@ struct RedevelopView: View {
     private func save() async {
         guard let record else { return }
         isSaving = true
-        let ok = await model.redevelop(record, presetID: presetID, pushPull: pushPull, grain: grainLevel, halation: halationLevel)
+        let ok = await model.redevelop(
+            record,
+            presetID: presetID,
+            pushPull: pushPull,
+            grain: grainLevel,
+            halation: halationLevel,
+            portraitFNumber: fNumber,
+            lens: lens
+        )
         isSaving = false
         if ok { dismiss() }
     }

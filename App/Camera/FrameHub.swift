@@ -58,7 +58,9 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     /// Viewfinder aids. Never drawn into a recording.
     private var assist = AssistPass()
     private var assistFrame = 0
-    private var lastWaveformTime = CMTime.invalid
+    private var lastCountTime = CMTime.invalid
+    /// The brightness of the last counted frame, for AutoMotion's meter, and when it was counted.
+    private var measuredLevel: (level: Double, time: CFTimeInterval)?
     private var onWaveform: ((CGImage) -> Void)?
     /// At more than 60 fps the viewfinder is drawn at this many frames per second, so the grader has the
     /// time for the recording. Zero draws every frame.
@@ -117,13 +119,22 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     }
 
     /// Zebra, false colour, focus peaking and the waveform for the viewfinder.
-    func setAssist(zebra: Bool, falseColor: Bool, peaking: Bool, waveform: Bool) {
+    func setAssist(zebra: Bool, falseColor: Bool, peaking: Bool, waveform: Bool, measure: Bool) {
         lock.lock()
         assist.zebra = zebra
         assist.falseColor = falseColor
         assist.peaking = peaking
         assist.waveform = waveform
+        assist.measure = measure
         lock.unlock()
+    }
+
+    /// The brightness AutoMotion measures, from the last counted frame, when that is recent enough.
+    func recentMeanLevel(maxAge: CFTimeInterval = 0.5) -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let measured = measuredLevel, CACurrentMediaTime() - measured.time < maxAge else { return nil }
+        return measured.level
     }
 
     /// Turns the live portrait background on (with the lens's look) or off.
@@ -282,11 +293,10 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
             assistFrame += 1
             var pass = assist
             pass.phase = assistFrame
-            if pass.waveform {
-                let due = !lastWaveformTime.isValid || CMTimeGetSeconds(CMTimeSubtract(time, lastWaveformTime)) >= 0.1
-                pass.waveform = due
-                if due { lastWaveformTime = time }
-            }
+            // The waveform and the meter count about ten times a second, not every frame.
+            let due = !lastCountTime.isValid || CMTimeGetSeconds(CMTimeSubtract(time, lastCountTime)) >= 0.1
+            pass.counts = (pass.waveform || pass.measure) && due
+            if pass.counts { lastCountTime = time }
             frameAssist = pass
         }
         let waveformHandler = onWaveform
@@ -302,8 +312,11 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         }
 
         guard let rendered = render(source, pool: previewPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror, portrait: portrait, assist: frameAssist) else { return }
-        if frameAssist?.waveform == true, let waveform = grader?.takeWaveform(), let image = Self.image(of: waveform) {
-            waveformHandler?(image)
+        if frameAssist?.counts == true, let counted = grader?.takeWaveform() {
+            lock.lock()
+            measuredLevel = counted.meanLevel.map { (level: $0, time: CACurrentMediaTime()) }
+            lock.unlock()
+            if frameAssist?.waveform == true, let image = Self.image(of: counted) { waveformHandler?(image) }
         }
         let buffer = rendered.buffer, crop = rendered.crop
         lock.lock()

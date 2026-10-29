@@ -1,0 +1,73 @@
+@testable import CameraCore
+import XCTest
+
+final class DepthMapTests: XCTestCase {
+    func testEncodingRoundTrips() throws {
+        let map = DepthMap(width: 3, height: 2, values: [0.5, 1, 2, 3, 4.25, -1])
+        let decoded = try XCTUnwrap(DepthMap(encoded: map.encoded()))
+        XCTAssertEqual(decoded, map)
+    }
+
+    func testGarbageIsRejected() {
+        XCTAssertNil(DepthMap(encoded: Data("nope".utf8)))
+        var truncated = DepthMap(width: 2, height: 2, values: [1, 2, 3, 4]).encoded()
+        truncated.removeLast()
+        XCTAssertNil(DepthMap(encoded: truncated))
+    }
+
+    func testPortraitTurnsTheMapClockwise() {
+        // Landscape 8 × 6: value = row × 8 + column. Turned clockwise it is a 6 × 8 portrait picture, and a 4:3
+        // crop of it is the whole picture, so each portrait pixel is one map pixel.
+        let map = DepthMap(width: 8, height: 6, values: (0 ..< 48).map { Float($0) })
+        let portrait = map.portrait(aspect: .ratio4x3, outWidth: 6, outHeight: 8)
+        XCTAssertEqual(portrait.count, 48)
+        XCTAssertEqual(portrait[0], 40, "top-left of the photo is bottom-left of the map")
+        XCTAssertEqual(portrait[5], 0, "top-right of the photo is top-left of the map")
+        XCTAssertEqual(portrait[7 * 6], 47, "bottom-left of the photo is bottom-right of the map")
+    }
+
+    func testMiddleDisparityReadsTheCentre() throws {
+        let map = DepthMap(width: 10, height: 10, values: Array(repeating: 2, count: 100))
+        XCTAssertEqual(try XCTUnwrap(map.middleDisparity), 2, accuracy: 1e-6)
+        XCTAssertNil(DepthMap(width: 1, height: 1, values: [Float.nan]).middleDisparity)
+    }
+}
+
+final class MeteringTests: XCTestCase {
+    func testMeanLevelWeightsTheChannelsAsLuma() throws {
+        // Two columns, four levels. Red sits at the top level, green and blue at the bottom.
+        var flat: [UInt32] = []
+        flat += [0, 0, 0, 4, 0, 0, 0, 4]
+        flat += [4, 0, 0, 0, 4, 0, 0, 0]
+        flat += [4, 0, 0, 0, 4, 0, 0, 0]
+        let waveform = Waveform(columns: 2, levels: 4, flat: flat, samplesPerColumn: 4)
+        let red = 3.5 / 4, green = 0.5 / 4, blue = 0.5 / 4
+        let expected = 0.299 * red + 0.587 * green + 0.114 * blue
+        XCTAssertEqual(try XCTUnwrap(waveform.meanLevel), expected, accuracy: 1e-9)
+        XCTAssertNil(Waveform(columns: 2, levels: 4, flat: Array(repeating: 0, count: 24), samplesPerColumn: 0).meanLevel)
+    }
+
+    func testStopsMeasureDoublingFromTheTarget() {
+        XCTAssertEqual(MotionExposure.stops(displayLevel: MotionExposure.targetLevel), 0, accuracy: 1e-9)
+        // One stop more light is a double linear level, which is a higher display level on the 2.2 gamma.
+        let oneStopUp = pow(2 * pow(MotionExposure.targetLevel, 2.2), 1 / 2.2)
+        XCTAssertEqual(MotionExposure.stops(displayLevel: oneStopUp), 1, accuracy: 1e-9)
+        XCTAssertLessThan(MotionExposure.stops(displayLevel: 0.2), 0)
+    }
+}
+
+final class PortraitRecordTests: XCTestCase {
+    func testPortraitSettingsSurviveARoundTrip() throws {
+        let record = CaptureRecord(kind: .photo, presetID: "preset-1", portraitFNumber: 2.8, lensStyle: .lumar)
+        let decoded = try JSONDecoder().decode(CaptureRecord.self, from: JSONEncoder().encode(record))
+        XCTAssertEqual(decoded.portraitFNumber, 2.8)
+        XCTAssertEqual(decoded.lensStyle, .lumar)
+    }
+
+    func testOlderRecordsAreNotPortrait() throws {
+        let record = CaptureRecord(kind: .photo, presetID: "preset-1")
+        let decoded = try JSONDecoder().decode(CaptureRecord.self, from: JSONEncoder().encode(record))
+        XCTAssertNil(decoded.lensStyle)
+        XCTAssertNil(decoded.portraitFNumber)
+    }
+}

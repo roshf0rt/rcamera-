@@ -153,7 +153,13 @@ final class CameraEngine {
         }
         controller.setExposureMonitor(video: mode == .video, autoMotion: settings.autoMotion, fps: settings.videoFPS)
         controller.setWhiteBalance(kelvin: settings.whiteBalanceKelvin, tint: settings.whiteBalanceTint)
-        controller.hub.setAssist(zebra: settings.zebra, falseColor: settings.falseColor, peaking: settings.focusPeaking, waveform: settings.waveform)
+        controller.hub.setAssist(
+            zebra: settings.zebra,
+            falseColor: settings.falseColor,
+            peaking: settings.focusPeaking,
+            waveform: settings.waveform,
+            measure: settings.autoMotion && mode == .video
+        )
         if !settings.waveform { waveform = nil }
     }
 

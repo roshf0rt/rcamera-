@@ -35,6 +35,14 @@ public enum MotionExposure {
         public var status: Status
     }
 
+    /// The brightness the loop meters towards: a mid grey in the picture as the camera shows it.
+    public static let targetLevel = 0.44
+
+    /// Stops the mean display level lies above (positive) or below (negative) `target`, on a gamma of 2.2.
+    public static func stops(displayLevel: Double, target: Double = targetLevel) -> Double {
+        log2(pow(max(displayLevel, 0.001), 2.2) / pow(max(target, 0.001), 2.2))
+    }
+
     /// Stops past the ISO range at which the loop hands over to the camera.
     public static let handOver = 1.0
     /// Stops past the ISO range below which it takes exposure back.

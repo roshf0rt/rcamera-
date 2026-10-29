@@ -397,13 +397,12 @@ struct OptionsPanel: View {
     private func option<Icon: View>(title: String, active: Bool, action: @escaping () -> Void, @ViewBuilder icon: () -> Icon) -> some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                icon().frame(height: 30)
+                icon().frame(height: 30).followsDevice()
                 Text(title)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
-            .followsDevice()
             .foregroundStyle(active ? Theme.accent : .white)
             .frame(maxWidth: .infinity, minHeight: 52)
             .contentShape(Rectangle())

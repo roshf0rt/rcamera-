@@ -347,7 +347,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     /// Called on the main queue with the readout, or nil when it stops (outside video).
     var onCineState: (@Sendable (CineState?) -> Void)?
     /// Mains frequency where the phone is, for flicker-free shutter times.
-    private let mainsHz = CineExposure.mainsFrequency(regionCode: Locale.current.region?.identifier)
+    /// No flicker-safe timing: AutoMotion holds the exact 180° rule, as the room is lit for it.
+    private let mainsHz: Int? = nil
+    /// The EV the wheel asks for, in stops; AutoMotion aims that much brighter or darker.
+    private var evOffset = 0.0
     private var lastCineState: CineState?
     private var lastReport = Date.distantPast
 
@@ -426,7 +429,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let decision = MotionExposure.step(
             mode: motionMode,
             current: current,
-            offset: Double(device.exposureTargetOffset),
+            offset: measuredOffset(device),
             fps: videoFPS,
             limits: limits,
             mainsHz: mainsHz
@@ -447,6 +450,13 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             device.exposureMode = .continuousAutoExposure
         }
         return decision.status
+    }
+
+    /// How far the picture stands above its target, in stops. The camera's own offset does not follow a manual
+    /// exposure, so AutoMotion meters the frames it shows instead; the camera's offset is the fallback.
+    private func measuredOffset(_ device: AVCaptureDevice) -> Double {
+        guard let level = hub.recentMeanLevel() else { return Double(device.exposureTargetOffset) }
+        return MotionExposure.stops(displayLevel: level) - evOffset
     }
 
     /// While recording, holds exposure and white balance where they were when it started. Both false
@@ -834,6 +844,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     func setExposureBias(_ bias: Double) {
         sessionQueue.async {
+            self.evOffset = bias
             guard let device = self.videoInput?.device else { return }
             try? device.lockForConfiguration()
             let clamped = min(max(Float(bias), device.minExposureTargetBias), device.maxExposureTargetBias)

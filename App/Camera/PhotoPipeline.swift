@@ -178,12 +178,14 @@ enum PhotoPipeline {
         frame: FrameStyle = .off,
         label: String = "",
         accentIndex: Int = 0,
+        portrait: PortraitDepth? = nil,
         orientation: DeviceOrientation = .portrait
     ) -> Developed? {
         guard let base = baseImage(source, pushPull: pushPull, scale: 1) else { return nil }
         let offset: Double
         if case let .raw(_, value) = source { offset = value } else { offset = 0 }
-        let finished = turned(finish(base, look: look, aspect: aspect, mirror: mirror), orientation)
+        let subject = portrait.map { portraitSubject($0, of: base) } ?? base
+        let finished = turned(finish(subject, look: look, aspect: aspect, mirror: mirror), orientation)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
     }
 
@@ -214,8 +216,14 @@ enum PhotoPipeline {
     /// The depth map comes from the sensor's landscape orientation, so it is turned to match the photo.
     /// Strengths and orientation were written without a device to check them against.
     static func portraitBlur(_ image: CIImage, depth: AVDepthData, fNumber: Double, lens: LensStyle) -> CIImage? {
+        let disparity = depth.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32).depthDataMap
+        return portraitBlur(image, disparity: disparity, fNumber: fNumber, lens: lens)
+    }
+
+    /// The same, from a disparity map in the sensor's landscape orientation (a kept depth map, or one just captured).
+    static func portraitBlur(_ image: CIImage, disparity: CVPixelBuffer, fNumber: Double, lens: LensStyle) -> CIImage? {
         let extent = image.extent
-        guard let mask = backgroundMask(depth: depth, extent: extent) else { return nil }
+        guard let mask = backgroundMask(disparity: disparity, extent: extent) else { return nil }
         let strength = PortraitAperture.blurStrength(fNumber: fNumber)
         guard let background = MetalGrader.shared?.portraitBackground(image: image, mask: mask, lens: lens, strength: strength, context: context),
               let blend = CIFilter(name: "CIBlendWithMask")
@@ -228,8 +236,7 @@ enum PhotoPipeline {
 
     /// White where the scene is behind the subject, black on the subject, with a soft edge. The subject is
     /// whatever is in the middle of the frame, as the portrait focus usually is.
-    private static func backgroundMask(depth: AVDepthData, extent: CGRect) -> CIImage? {
-        let disparity = depth.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32).depthDataMap
+    private static func backgroundMask(disparity: CVPixelBuffer, extent: CGRect) -> CIImage? {
         let map = CIImage(cvPixelBuffer: disparity).oriented(.right)
         let fitted = map
             .transformed(by: CGAffineTransform(translationX: -map.extent.minX, y: -map.extent.minY))
@@ -423,14 +430,89 @@ enum PhotoPipeline {
     }
 
     /// Grades a preview base with a look. A few milliseconds on the GPU.
-    static func gradePreview(_ base: CVPixelBuffer, look: FilmLook) -> UIImage? {
+    static func gradePreview(_ base: CVPixelBuffer, look: FilmLook, portrait: PortraitPass? = nil) -> UIImage? {
         let width = CVPixelBufferGetWidth(base), height = CVPixelBufferGetHeight(base)
         guard let grader = MetalGrader.shared,
               let output = MetalGrader.makePixelBuffer(width: width, height: height),
-              grader.grade(source: base, crop: CropRect(x: 0, y: 0, width: width, height: height), mirror: false, look: look, into: output, cachedMasks: false)
+              grader.grade(source: base, crop: CropRect(x: 0, y: 0, width: width, height: height), mirror: false, look: look, into: output, cachedMasks: false, portrait: portrait)
         else { return nil }
         let image = CIImage(cvPixelBuffer: output, options: [.colorSpace: sRGB])
         guard let cgImage = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: sRGB) else { return nil }
         return UIImage(cgImage: cgImage)
+    }
+
+    // MARK: Depth kept with a portrait photo
+
+    /// A portrait photo's depth, and the lens and aperture its background is drawn with.
+    struct PortraitDepth: Sendable {
+        var map: DepthMap
+        var fNumber: Double
+        var lens: LensStyle
+    }
+
+    /// The capture's depth as the app keeps it: disparity in the sensor's landscape orientation.
+    static func depthMap(_ depth: AVDepthData) -> DepthMap? {
+        let disparity = depth.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32).depthDataMap
+        CVPixelBufferLockBaseAddress(disparity, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(disparity, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(disparity) else { return nil }
+        let width = CVPixelBufferGetWidth(disparity), height = CVPixelBufferGetHeight(disparity)
+        let rowBytes = CVPixelBufferGetBytesPerRow(disparity)
+        var values = [Float](repeating: 0, count: width * height)
+        for y in 0 ..< height {
+            let row = (base + y * rowBytes).assumingMemoryBound(to: Float.self)
+            for x in 0 ..< width { values[y * width + x] = row[x] }
+        }
+        return DepthMap(width: width, height: height, values: values)
+    }
+
+    /// A kept depth map as a pixel buffer for the portrait mask.
+    static func disparityBuffer(_ map: DepthMap) -> CVPixelBuffer? {
+        guard let buffer = MetalGrader.makePixelBuffer(width: map.width, height: map.height, format: kCVPixelFormatType_OneComponent32Float) else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        for y in 0 ..< map.height {
+            let row = (base + y * rowBytes).assumingMemoryBound(to: Float.self)
+            for x in 0 ..< map.width { row[x] = map.values[y * map.width + x] }
+        }
+        return buffer
+    }
+
+    /// Half-float depth for the grader, the way the live depth arrives.
+    static func depthBuffer(width: Int, height: Int, values: [Float]) -> CVPixelBuffer? {
+        guard let buffer = MetalGrader.makePixelBuffer(width: width, height: height, format: kCVPixelFormatType_OneComponent16Half) else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        for y in 0 ..< height {
+            let row = (base + y * rowBytes).assumingMemoryBound(to: Float16.self)
+            for x in 0 ..< width { row[x] = Float16(values[y * width + x]) }
+        }
+        return buffer
+    }
+
+    /// The grader's portrait pass for a preview of `width` × `height`, cropped to `aspect` as the preview is.
+    static func portraitPass(_ portrait: PortraitDepth, aspect: AspectOption, width: Int, height: Int) -> PortraitPass? {
+        let values = portrait.map.portrait(aspect: aspect, outWidth: width, outHeight: height)
+        guard let buffer = depthBuffer(width: width, height: height, values: values) else { return nil }
+        let focus = DepthMap(width: width, height: height, values: values).middleDisparity ?? 1
+        return PortraitPass(
+            depth: buffer,
+            depthRotated: true,
+            focus: focus,
+            strength: Float(PortraitAperture.blurStrength(fNumber: portrait.fNumber)),
+            lens: portrait.lens
+        )
+    }
+
+    /// The photo with its background drawn by the lens, as a capture is developed.
+    private static func portraitSubject(_ portrait: PortraitDepth, of image: CIImage) -> CIImage {
+        guard let disparity = disparityBuffer(portrait.map),
+              let blurred = portraitBlur(image, disparity: disparity, fNumber: portrait.fNumber, lens: portrait.lens)
+        else { return image }
+        return lensLook(blurred, lens: portrait.lens)
     }
 }
