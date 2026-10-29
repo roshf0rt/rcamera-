@@ -71,3 +71,18 @@ final class PortraitRecordTests: XCTestCase {
         XCTAssertNil(decoded.portraitFNumber)
     }
 }
+
+final class LensPreviewTests: XCTestCase {
+    func testEveryLensDrawsItsOwnPreview() {
+        let previews = LensStyle.allCases.map { LensPreviewScene.render(lens: $0, size: 64) }
+        XCTAssertTrue(previews.allSatisfy { $0.count == 64 * 64 * 4 })
+        XCTAssertEqual(Set(previews).count, LensStyle.allCases.count, "each lens has its own shapes")
+    }
+
+    func testThePreviewIsANightSceneWithLights() {
+        let pixels = LensPreviewScene.render(lens: .solis, size: 96)
+        let brightest = stride(from: 0, to: pixels.count, by: 4).map { Int(pixels[$0]) + Int(pixels[$0 + 1]) + Int(pixels[$0 + 2]) }.max() ?? 0
+        XCTAssertGreaterThan(brightest, 200, "lights glow")
+        XCTAssertLessThan(Int(pixels[0]), 60, "the top-left corner stays dark")
+    }
+}

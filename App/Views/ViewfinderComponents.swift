@@ -629,6 +629,12 @@ struct LensOverlay: View {
     var body: some View {
         VStack(spacing: 14) {
             ZStack {
+                // The lens's own bokeh, in the ring it is named in.
+                LensPreview(lens: lens)
+                    .id(lens)
+                    .frame(width: 150, height: 150)
+                    .clipShape(Circle())
+                    .transition(.opacity)
                 Circle()
                     .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [0.1, 10]))
                     .frame(width: 150, height: 150)
@@ -636,6 +642,7 @@ struct LensOverlay: View {
                     .font(.system(size: 30, weight: .semibold))
                     .tracking(1.5)
                     .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.8), radius: 6)
                     .id(lens)
                     .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
