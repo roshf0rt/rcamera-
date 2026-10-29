@@ -1,0 +1,21 @@
+{
+  "name": "RCamera",
+  "identifier": "com.rcamera.source",
+  "subtitle": "RCamera: видео и фото с пресетами",
+  "apps": [
+    {
+      "name": "RCamera",
+      "bundleIdentifier": "com.rcamera.app",
+      "developerName": "roshf0rt",
+      "subtitle": "Камера с пресетами и LUT",
+      "localizedDescription": "Камера с пресетами, LUT, RAW и портретом. Сборка без подписи: подпишите в Feather или GBox.",
+      "version": "0.2.0",
+      "versionDate": "2026-10-29",
+      "downloadURL": "https://raw.githubusercontent.com/roshf0rt/rcamera-/claude/camera-state-machine/dist/RCamera-latest.ipa",
+      "size": 11952722,
+      "iconURL": "https://raw.githubusercontent.com/roshf0rt/rcamera-/claude/camera-state-machine/dist/icon.png",
+      "minOSVersion": "17.0"
+    }
+  ],
+  "news": []
+}
