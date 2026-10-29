@@ -370,7 +370,7 @@ final class AppModel {
             halation: base.halation * halation.multiplier,
             adjustments: base.adjustments
         )
-        guard shadowLift > 0 else { return look }
+        guard shadowLift != 0 else { return look }
         return look.with { $0.dynamicRange = ShadowLift.dynamicRange(for: shadowLift) }
     }
 

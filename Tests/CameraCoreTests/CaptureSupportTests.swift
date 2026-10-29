@@ -196,6 +196,10 @@ final class CaptureStoreTests: XCTestCase {
         XCTAssertEqual(ShadowLift.dynamicRange(for: 0), 1)
         XCTAssertEqual(ShadowLift.dynamicRange(for: 1), 1.5)
         XCTAssertEqual(ShadowLift.dynamicRange(for: 7), 1.5, "clamped")
+        XCTAssertEqual(ShadowLift.dynamicRange(for: -1), 0.25, accuracy: 1e-9, "shadows down bends towards an S-curve")
+        XCTAssertEqual(ShadowLift.dynamicRange(for: -7), 0.25, accuracy: 1e-9, "clamped")
+        XCTAssertLessThan(DynamicRangeCurve(ShadowLift.dynamicRange(for: -1)).apply(0.2), 0.2, "down darkens the shadows")
+        XCTAssertGreaterThan(DynamicRangeCurve(ShadowLift.dynamicRange(for: 1)).apply(0.2), 0.2, "up lifts them")
     }
 
     func testDaysUntilRAWExpires() throws {

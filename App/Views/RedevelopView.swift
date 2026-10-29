@@ -16,7 +16,7 @@ struct RedevelopView: View {
     @State private var pushPull = 0.0
     @State private var grainLevel = GrainLevel.medium
     @State private var halationLevel = EffectLevel.medium
-    /// Shadows pulled up afterwards, 0...1.
+    /// Shadows moved afterwards, -1 (down) ... 1 (up).
     @State private var shadowLift = 0.0
     /// Portrait photos: the aperture and lens the background is drawn with, and the depth it is drawn from.
     @State private var fNumber = PortraitAperture.standard
@@ -175,15 +175,19 @@ struct RedevelopView: View {
         .frame(height: 96)
     }
 
-    /// Pulls the shadows up. The camera has no such control: it is for the photo that came out dark.
+    /// Moves the shadows up or down. The camera has no such control: it is for the photo whose shadows came out
+    /// too dark or too milky. A double tap on the label puts it back to zero.
     private var shadowsControl: some View {
         HStack(spacing: 14) {
-            Text("Shadows").font(.system(size: 17)).foregroundStyle(.white)
-            Slider(value: $shadowLift, in: 0 ... 1)
+            Text("Shadows")
+                .font(.system(size: 17))
+                .foregroundStyle(.white)
+                .onTapGesture(count: 2) { shadowLift = 0 }
+            Slider(value: $shadowLift, in: -1 ... 1)
                 .tint(Theme.accent)
-            Text(String(format: "%.0f%%", shadowLift * 100))
+            Text(abs(shadowLift) < 0.005 ? "0" : String(format: "%+.0f", shadowLift * 100))
                 .font(.system(size: 17, design: .monospaced))
-                .foregroundStyle(shadowLift > 0 ? Theme.accent : Theme.secondaryText)
+                .foregroundStyle(abs(shadowLift) > 0.005 ? Theme.accent : Theme.secondaryText)
                 .frame(width: 52, alignment: .trailing)
         }
     }

@@ -43,7 +43,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     /// Portrait photos: the f-number and lens the background was drawn with. Nil for other photos. Redevelop changes them.
     public var portraitFNumber: Double?
     public var lensStyle: LensStyle?
-    /// Shadows lifted in Redevelop, 0 (none) to 1; see `ShadowLift`.
+    /// Shadows moved in Redevelop, -1 (down) to 1 (up), 0 for none; see `ShadowLift`.
     public var shadowLift: Double
 
     public init(
@@ -140,12 +140,15 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-/// Lifting shadows afterwards, in Redevelop: the one use of the dynamic-range curve that is left. The camera has
-/// no such control; a photo that came out dark in the shadows gets them pulled up here.
+/// Moving the shadows afterwards, in Redevelop: the one use of the dynamic-range curve that is left. The camera
+/// has no such control; a photo whose shadows came out too dark is pulled up here, one whose shadows are too
+/// milky is pushed down.
 public enum ShadowLift {
-    /// The `LookAdjustments.dynamicRange` that lifts the shadows by `lift`, 0 (none) to 1 (the curve's most).
+    /// The `LookAdjustments.dynamicRange` for `lift`: -1 (shadows down, an S-curve), 0 (none), 1 (shadows up,
+    /// highlights eased under white).
     public static func dynamicRange(for lift: Double) -> Double {
-        1 + 0.5 * min(max(lift, 0), 1)
+        let lift = min(max(lift, -1), 1)
+        return lift >= 0 ? 1 + 0.5 * lift : 1 + 0.75 * lift
     }
 }
 
