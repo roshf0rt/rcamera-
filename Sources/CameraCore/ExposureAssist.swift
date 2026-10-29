@@ -66,43 +66,49 @@ public enum WhiteBalanceSteps {
     }
 }
 
-/// An RGB waveform, as video monitors draw it: across are the columns of the picture, up each channel's
-/// level, brighter where more pixels share that level in that column.
+/// A luma waveform, as video monitors and Kino draw it: across are the columns of the picture as the phone
+/// is held, up the brightness, brighter where more pixels share that brightness in that column.
 public struct Waveform: Equatable, Sendable {
     public let columns: Int
     public let levels: Int
     /// Pixels sampled per column.
     public private(set) var samplesPerColumn = 0
-    /// Per channel (red, green, blue): `columns * levels` counts, column-major (`column * levels + level`).
-    public private(set) var counts: [[UInt32]]
+    /// `columns * levels` counts, column-major (`column * levels + level`).
+    public private(set) var counts: [UInt32]
 
     public init(columns: Int = 128, levels: Int = 64) {
         self.columns = max(1, columns)
         self.levels = max(2, levels)
-        counts = Array(repeating: Array(repeating: 0, count: self.columns * self.levels), count: 3)
+        counts = Array(repeating: 0, count: self.columns * self.levels)
     }
 
-    /// Counts made elsewhere (on the GPU): `flat` holds red, green and blue in turn, each `columns * levels`.
+    /// Counts made elsewhere (on the GPU), `columns * levels` of them.
     public init(columns: Int, levels: Int, flat: [UInt32], samplesPerColumn: Int) {
         self.init(columns: columns, levels: levels)
-        let size = self.columns * self.levels
-        guard flat.count >= size * 3 else { return }
-        counts = (0 ..< 3).map { Array(flat[$0 * size ..< ($0 + 1) * size]) }
+        guard flat.count >= counts.count else { return }
+        counts = Array(flat[0 ..< counts.count])
         self.samplesPerColumn = max(0, samplesPerColumn)
     }
 
-    public func level(of value: UInt8) -> Int {
-        min(Int(value) * levels / 256, levels - 1)
+    /// The level a luma of 0...1 falls in.
+    public func level(of luma: Double) -> Int {
+        min(max(Int(luma * Double(levels)), 0), levels - 1)
     }
 
-    mutating func add(column: Int, red: UInt8, green: UInt8, blue: UInt8) {
-        let base = column * levels
-        counts[0][base + level(of: red)] += 1
-        counts[1][base + level(of: green)] += 1
-        counts[2][base + level(of: blue)] += 1
+    /// Which column a pixel at `x`, `y` of a `width` × `height` picture falls in, for a phone turned
+    /// `quarterTurns` from portrait (`DeviceOrientation.quarterTurns`): the columns run left to right as
+    /// the picture is seen with the phone held that way.
+    public static func column(x: Int, y: Int, width: Int, height: Int, columns: Int, quarterTurns: Int) -> Int {
+        let across: Double
+        switch quarterTurns {
+        case 1: across = (Double(y) + 0.5) / Double(max(height, 1))
+        case -1: across = 1 - (Double(y) + 0.5) / Double(max(height, 1))
+        default: across = (Double(x) + 0.5) / Double(max(width, 1))
+        }
+        return min(max(Int(across * Double(columns)), 0), columns - 1)
     }
 
-    /// Measures BGRA pixels, sampling `rows` rows and two pixels per column.
+    /// Measures BGRA pixels, about `rows` × 2 `columns` samples, as `Grade.metal` does.
     public static func measure(
         bgra: UnsafeRawBufferPointer,
         width: Int,
@@ -110,66 +116,52 @@ public struct Waveform: Equatable, Sendable {
         bytesPerRow: Int,
         columns: Int = 128,
         levels: Int = 64,
-        rows: Int = 72
+        rows: Int = 72,
+        quarterTurns: Int = 0
     ) -> Waveform {
         var waveform = Waveform(columns: columns, levels: levels)
         guard width > 0, height > 0, bgra.count >= bytesPerRow * height else { return waveform }
-        let rowCount = min(rows, height)
-        for column in 0 ..< waveform.columns {
-            for sub in 0 ..< 2 {
-                let x = min(width - 1, (column * 2 + sub) * width / (waveform.columns * 2))
-                for r in 0 ..< rowCount {
-                    let y = min(height - 1, (r * height + height / 2) / rowCount)
-                    let offset = y * bytesPerRow + x * 4
-                    waveform.add(column: column, red: bgra[offset + 2], green: bgra[offset + 1], blue: bgra[offset])
-                }
+        let stepX = max(1, width / (waveform.columns * 2))
+        let stepY = max(1, height / rows)
+        var samples = 0
+        for y in stride(from: 0, to: height, by: stepY) {
+            for x in stride(from: 0, to: width, by: stepX) {
+                let offset = y * bytesPerRow + x * 4
+                let luma = (0.299 * Double(bgra[offset + 2]) + 0.587 * Double(bgra[offset + 1]) + 0.114 * Double(bgra[offset])) / 255
+                let column = column(x: x, y: y, width: width, height: height, columns: waveform.columns, quarterTurns: quarterTurns)
+                waveform.counts[column * waveform.levels + waveform.level(of: luma)] += 1
+                samples += 1
             }
         }
-        waveform.samplesPerColumn = rowCount * 2
+        waveform.samplesPerColumn = samples / waveform.columns
         return waveform
     }
 
-    /// Brightness of a cell, 0...1: how many of the column's samples sit at that level, eased so a few
-    /// pixels still show.
-    public func intensity(channel: Int, column: Int, level: Int) -> Double {
+    /// Brightness of a cell, 0...1. A column whose pixels spread evenly over all levels draws at about a
+    /// third; a level holding an eighth of the column draws fully. A few stray pixels stay faint, so
+    /// noise does not fill the panel.
+    public func intensity(column: Int, level: Int) -> Double {
         guard samplesPerColumn > 0 else { return 0 }
-        let share = Double(counts[channel][column * levels + level]) / Double(samplesPerColumn)
-        return min(1, (share * Double(levels) / 3).squareRoot())
+        let share = Double(counts[column * levels + level]) / Double(samplesPerColumn)
+        return min(1, (share * 8).squareRoot())
     }
 
-    /// Mean brightness of the counted picture as a display level, 0...1, weighted as luma. Nil with nothing counted.
-    public var meanLevel: Double? {
-        let weights = [0.299, 0.587, 0.114]
-        var luma = 0.0
-        for channel in 0 ..< 3 {
-            var sum = 0.0
-            var total = 0.0
-            for (index, count) in counts[channel].enumerated() {
-                let level = index % levels
-                sum += Double(count) * (Double(level) + 0.5) / Double(levels)
-                total += Double(count)
-            }
-            guard total > 0 else { return nil }
-            luma += weights[channel] * sum / total
-        }
-        return luma
-    }
-
-    /// RGBA pixels, premultiplied, `columns` wide and `levels` high, white at the top. Each channel draws
-    /// in its own colour, so where they agree the trace is white.
+    /// RGBA pixels, premultiplied, `columns` wide and `levels` high, white at the top: a pale green trace,
+    /// whiter where it is dense, as on a monitor.
     public func render() -> [UInt8] {
         var pixels = [UInt8](repeating: 0, count: columns * levels * 4)
         for column in 0 ..< columns {
             for level in 0 ..< levels {
-                let r = intensity(channel: 0, column: column, level: level)
-                let g = intensity(channel: 1, column: column, level: level)
-                let b = intensity(channel: 2, column: column, level: level)
+                let value = intensity(column: column, level: level)
+                guard value > 0 else { continue }
                 let row = levels - 1 - level
                 let index = (row * columns + column) * 4
-                pixels[index] = UInt8(r * 255)
-                pixels[index + 1] = UInt8(g * 255)
-                pixels[index + 2] = UInt8(b * 255)
-                pixels[index + 3] = UInt8(max(r, g, b) * 255)
+                // Green when faint, towards white when dense.
+                let white = value * value
+                pixels[index] = UInt8(value * (0.55 + 0.45 * white) * 255)
+                pixels[index + 1] = UInt8(value * 255)
+                pixels[index + 2] = UInt8(value * (0.6 + 0.4 * white) * 255)
+                pixels[index + 3] = UInt8(value * 255)
             }
         }
         return pixels

@@ -812,8 +812,7 @@ struct ExposureHUD: View {
         if locked { return "AE LOCK" }
         guard autoMotion else { return "AUTO" }
         switch state?.status {
-        case .cinematic: return "180°"
-        case .settling, .none: return "180°…"
+        case .cinematic, .settling, .none: return "180°"
         case .bent(let stops) where stops > 0: return String(format: "ND %.1f", max(stops, 0.1))
         case .bent: return "LOW LIGHT"
         case .handedOver(let tooBright): return tooBright ? "ND 1+" : "LOW LIGHT"
@@ -832,22 +831,25 @@ struct ExposureHUD: View {
                         .font(.system(size: 11, weight: .bold))
                         .tracking(0.5)
                         .foregroundStyle(color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(width: 66, alignment: .leading)
                 }
                 divider
-                value(state?.shutter ?? "—", caption: nil)
+                value(state?.shutter ?? "—", caption: nil, width: 46)
                 divider
-                value(state.map { "\($0.angle)°" } ?? "—", caption: nil)
+                value(state.map { "\($0.angle)°" } ?? "—", caption: nil, width: 32)
                 divider
-                value(state.map { "\($0.iso)" } ?? "—", caption: "ISO")
+                value(state.map { "\($0.iso)" } ?? "—", caption: "ISO", width: 36)
                 divider
-                value("\(fps)", caption: "FPS")
+                value("\(fps)", caption: "FPS", width: 22)
             }
             .padding(.horizontal, 12)
             .frame(height: 30)
             .background(Capsule().fill(Color.black.opacity(0.55)))
             .overlay(Capsule().strokeBorder(autoMotion ? color.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 1))
-            .animation(.easeOut(duration: 0.25), value: state)
-            .animation(.easeOut(duration: 0.25), value: autoMotion)
+            // Only the light fades; the numbers change in place, several times a second.
+            .animation(.easeOut(duration: 0.25), value: color)
         }
         .buttonStyle(PressableStyle())
         .sensoryFeedback(.selection, trigger: autoMotion)
@@ -858,7 +860,8 @@ struct ExposureHUD: View {
         Rectangle().fill(Color.white.opacity(0.2)).frame(width: 1, height: 12)
     }
 
-    private func value(_ text: String, caption: String?) -> some View {
+    /// A number in a fixed width, so the bar keeps its size as the numbers change.
+    private func value(_ text: String, caption: String?, width: CGFloat) -> some View {
         HStack(spacing: 3) {
             if let caption {
                 Text(caption)
@@ -868,7 +871,10 @@ struct ExposureHUD: View {
             Text(text)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white)
-                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(width: width, alignment: .leading)
+                .transaction { $0.animation = nil }
         }
     }
 }

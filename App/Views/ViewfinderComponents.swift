@@ -367,7 +367,7 @@ struct OptionsPanel: View {
         }
     }
 
-    /// Short enough that the cell still fits once the icon turns with the phone (rotation does not re-lay out).
+    /// Short, so the chip fits the icon's square at a readable size.
     private static func shortStabilization(_ mode: VideoStabilization) -> String {
         switch mode {
         case .off: "OFF"
@@ -396,8 +396,15 @@ struct OptionsPanel: View {
 
     private func option<Icon: View>(title: String, active: Bool, action: @escaping () -> Void, @ViewBuilder icon: () -> Icon) -> some View {
         Button(action: action) {
-            VStack(spacing: 6) {
-                icon().frame(height: 30).followsDevice()
+            VStack(spacing: 2) {
+                // A square slot, and content no wider than it: turned with the phone it still fits, as
+                // rotation does not re-lay out ("1080p" sideways would otherwise run into the title).
+                icon()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(maxWidth: 40, maxHeight: 40)
+                    .followsDevice()
+                    .frame(width: 40, height: 40)
                 Text(title)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)

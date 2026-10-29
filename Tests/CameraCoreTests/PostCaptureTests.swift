@@ -33,29 +33,6 @@ final class DepthMapTests: XCTestCase {
     }
 }
 
-final class MeteringTests: XCTestCase {
-    func testMeanLevelWeightsTheChannelsAsLuma() throws {
-        // Two columns, four levels. Red sits at the top level, green and blue at the bottom.
-        var flat: [UInt32] = []
-        flat += [0, 0, 0, 4, 0, 0, 0, 4]
-        flat += [4, 0, 0, 0, 4, 0, 0, 0]
-        flat += [4, 0, 0, 0, 4, 0, 0, 0]
-        let waveform = Waveform(columns: 2, levels: 4, flat: flat, samplesPerColumn: 4)
-        let red = 3.5 / 4, green = 0.5 / 4, blue = 0.5 / 4
-        let expected = 0.299 * red + 0.587 * green + 0.114 * blue
-        XCTAssertEqual(try XCTUnwrap(waveform.meanLevel), expected, accuracy: 1e-9)
-        XCTAssertNil(Waveform(columns: 2, levels: 4, flat: Array(repeating: 0, count: 24), samplesPerColumn: 0).meanLevel)
-    }
-
-    func testStopsMeasureDoublingFromTheTarget() {
-        XCTAssertEqual(MotionExposure.stops(displayLevel: MotionExposure.targetLevel), 0, accuracy: 1e-9)
-        // One stop more light is a double linear level, which is a higher display level on the 2.2 gamma.
-        let oneStopUp = pow(2 * pow(MotionExposure.targetLevel, 2.2), 1 / 2.2)
-        XCTAssertEqual(MotionExposure.stops(displayLevel: oneStopUp), 1, accuracy: 1e-9)
-        XCTAssertLessThan(MotionExposure.stops(displayLevel: 0.2), 0)
-    }
-}
-
 final class PortraitRecordTests: XCTestCase {
     func testPortraitSettingsSurviveARoundTrip() throws {
         let record = CaptureRecord(kind: .photo, presetID: "preset-1", portraitFNumber: 2.8, lensStyle: .lumar)
@@ -83,6 +60,7 @@ final class LensPreviewTests: XCTestCase {
         let pixels = LensPreviewScene.render(lens: .solis, size: 96)
         let brightest = stride(from: 0, to: pixels.count, by: 4).map { Int(pixels[$0]) + Int(pixels[$0 + 1]) + Int(pixels[$0 + 2]) }.max() ?? 0
         XCTAssertGreaterThan(brightest, 200, "lights glow")
-        XCTAssertLessThan(Int(pixels[0]), 60, "the top-left corner stays dark")
+        let dark = stride(from: 0, to: pixels.count, by: 4).filter { Int(pixels[$0]) + Int(pixels[$0 + 1]) + Int(pixels[$0 + 2]) < 60 }.count
+        XCTAssertGreaterThan(dark, pixels.count / 4 / 5, "between the lights the night stays dark")
     }
 }

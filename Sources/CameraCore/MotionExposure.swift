@@ -6,8 +6,13 @@ import Foundation
 /// picture ramps instead of jumping.
 ///
 /// When ISO alone cannot reach the brightness, the shutter gives up to one stop (faster in bright light,
-/// slower in the dark, never longer than a frame). Past that the light is out of reach of 180°, and the
-/// iPhone's own auto exposure takes over until the light comes back within 0.7 stops.
+/// slower in the dark, never longer than a frame). Past that, for `patience` steps in a row, the light is
+/// out of reach of 180° and the iPhone's own auto exposure takes over, until the light has been back within
+/// 0.7 stops for as long. The wait keeps a brief flash or a noisy meter from throwing the camera between
+/// the two every frame.
+///
+/// The meter is the camera's: `AVCaptureDevice.exposureTargetOffset`, which in custom exposure still says
+/// how far the picture is from the camera's target, with the EV bias added.
 public enum MotionExposure {
     public enum Mode: Equatable, Sendable {
         /// The loop sets shutter and ISO.
@@ -33,15 +38,12 @@ public enum MotionExposure {
         /// Shutter and ISO to set. Nil hands exposure to the camera.
         public var setting: CineExposure.Setting?
         public var status: Status
+        /// Steps in a row the light has stood past the threshold for switching mode; pass it to the next step.
+        public var strikes = 0
     }
 
-    /// The brightness the loop meters towards: a mid grey in the picture as the camera shows it.
-    public static let targetLevel = 0.44
-
-    /// Stops the mean display level lies above (positive) or below (negative) `target`, on a gamma of 2.2.
-    public static func stops(displayLevel: Double, target: Double = targetLevel) -> Double {
-        log2(pow(max(displayLevel, 0.001), 2.2) / pow(max(target, 0.001), 2.2))
-    }
+    /// Steps in a row past a threshold before the mode switches.
+    public static let patience = 6
 
     /// Stops past the ISO range at which the loop hands over to the camera.
     public static let handOver = 1.0
@@ -63,13 +65,15 @@ public enum MotionExposure {
 
     /// One step. `current` is what the camera runs now, `offset` how far the metered picture is above the
     /// target in stops (positive: too bright), as `AVCaptureDevice.exposureTargetOffset` reports it.
+    /// `strikes` is the last decision's.
     public static func step(
         mode: Mode,
         current: CineExposure.Setting,
         offset: Double,
         fps: Int,
         limits: CineExposure.Limits,
-        mainsHz: Int? = nil
+        mainsHz: Int? = nil,
+        strikes: Int = 0
     ) -> Decision {
         let longest = min(limits.maxDuration, 1 / Double(max(fps, 1)))
         let reference = min(max(CineExposure.referenceShutter(fps: fps, mainsHz: mainsHz), limits.minDuration), longest)
@@ -81,15 +85,25 @@ public enum MotionExposure {
             guard gap.stops <= takeBack else {
                 return Decision(mode: .native, setting: nil, status: .handedOver(tooBright: gap.tooBright))
             }
+            guard strikes + 1 >= patience else {
+                // Within reach, not for long enough yet: amber while the camera still runs.
+                return Decision(mode: .native, setting: nil, status: .settling, strikes: strikes + 1)
+            }
             // The camera was exposing right, so the loop starts from its brightness at once.
-            return place(exposure: wanted, reference: reference, longest: longest, limits: limits, offset: offset)
+            return place(exposure: wanted, reference: reference, longest: longest, limits: limits, offset: 0)
         case .motion:
+            var outOfReach = 0
             if gap.stops > handOver {
-                return Decision(mode: .native, setting: nil, status: .handedOver(tooBright: gap.tooBright))
+                outOfReach = strikes + 1
+                if outOfReach >= patience {
+                    return Decision(mode: .native, setting: nil, status: .handedOver(tooBright: gap.tooBright))
+                }
             }
             let correction = abs(offset) < deadband ? 0 : -offset * rate
             let exposure = current.iso * current.duration * pow(2, correction)
-            return place(exposure: exposure, reference: reference, longest: longest, limits: limits, offset: offset)
+            var decision = place(exposure: exposure, reference: reference, longest: longest, limits: limits, offset: offset)
+            decision.strikes = outOfReach
+            return decision
         }
     }
 

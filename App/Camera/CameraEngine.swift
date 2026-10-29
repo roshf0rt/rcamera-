@@ -32,8 +32,10 @@ final class CameraEngine {
         var orientation: DeviceOrientation = .portrait
     }
 
-    /// How the phone is held now; photos and videos are turned to match.
-    var deviceOrientation: DeviceOrientation = .portrait
+    /// How the phone is held now; photos and videos are turned to match, and the waveform runs across.
+    var deviceOrientation: DeviceOrientation = .portrait {
+        didSet { if deviceOrientation != oldValue { updateAssist() } }
+    }
 
     private(set) var machine: CameraStateMachine
     private(set) var access: Access = .unknown
@@ -50,7 +52,7 @@ final class CameraEngine {
     private(set) var frameRates: [Int: [Int]] = [:]
     /// Shutter, ISO and, with AutoMotion on, its status, in video mode.
     private(set) var cineState: CaptureSessionController.CineState?
-    /// The RGB waveform of the viewfinder while it is on.
+    /// The luma waveform of the viewfinder while it is on.
     private(set) var waveform: CGImage?
     private(set) var appleLogActive = false
     /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
@@ -153,14 +155,18 @@ final class CameraEngine {
         }
         controller.setExposureMonitor(video: mode == .video, autoMotion: settings.autoMotion, fps: settings.videoFPS)
         controller.setWhiteBalance(kelvin: settings.whiteBalanceKelvin, tint: settings.whiteBalanceTint)
+        updateAssist()
+        if !settings.waveform { waveform = nil }
+    }
+
+    private func updateAssist() {
         controller.hub.setAssist(
             zebra: settings.zebra,
             falseColor: settings.falseColor,
             peaking: settings.focusPeaking,
             waveform: settings.waveform,
-            measure: settings.autoMotion && mode == .video
+            quarterTurns: deviceOrientation.quarterTurns
         )
-        if !settings.waveform { waveform = nil }
     }
 
     // MARK: User actions

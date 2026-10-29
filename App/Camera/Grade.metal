@@ -67,7 +67,7 @@ struct GradeParams {
     float fringing;       // red and blue rims of the bokeh drift apart
     float bokehRadius;    // blur radius in pixels of the small bokeh texture
     // Viewfinder aids, never set for recordings or photos. Mirrored in CameraCore/ExposureAssist.swift.
-    int assist;           // 1 zebra, 2 false colour, 4 focus peaking, 8 waveform counts
+    int assist;           // 1 zebra, 2 false colour, 4 focus peaking, 8 waveform counts (luma)
     int stripePhase;      // moves the zebra stripes from frame to frame
     float zebraLevel;
     float peakThreshold;  // focus peaking: Laplacian of the camera's luma above this lights up
@@ -75,6 +75,7 @@ struct GradeParams {
     int waveLevels;
     int waveStepX;        // every waveStepX-th pixel of every waveStepY-th row is counted
     int waveStepY;
+    int waveTurn;         // DeviceOrientation.quarterTurns: the columns run across the picture as it is held
 };
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
@@ -436,6 +437,15 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
         color *= 1.0 - p.lensVignette * 0.9 * smoothstep(0.3, 0.95, length(centred) * 1.414);
     }
 
+    // The waveform counts the graded picture before halation and grain, so film noise does not smear the
+    // trace. Mirrored in CameraCore/ExposureAssist.swift (Waveform.measure, Waveform.column).
+    if ((p.assist & 8) != 0 && gid.x % uint(p.waveStepX) == 0 && gid.y % uint(p.waveStepY) == 0) {
+        float across = p.waveTurn == 1 ? uv.y : (p.waveTurn == -1 ? 1.0 - uv.y : uv.x);
+        uint column = min(uint(across * float(p.waveColumns)), uint(p.waveColumns - 1));
+        uint level = min(uint(saturate(dot(color, kLuma)) * float(p.waveLevels)), uint(p.waveLevels - 1));
+        atomic_fetch_add_explicit(&wave[column * uint(p.waveLevels) + level], 1u, memory_order_relaxed);
+    }
+
     if (p.halation > 0.0) {
         float m = glow.sample(linearClamp, uv).r;
         float amount = p.halation * saturate(0.77 - dot(color, kLuma)) * m;
@@ -458,15 +468,6 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
     }
 
     if (p.assist != 0) {
-        // The waveform counts the picture as it will look, before any aid is drawn over it.
-        if ((p.assist & 8) != 0 && gid.x % uint(p.waveStepX) == 0 && gid.y % uint(p.waveStepY) == 0) {
-            uint column = min(gid.x * uint(p.waveColumns) / uint(p.width), uint(p.waveColumns - 1));
-            for (int channel = 0; channel < 3; channel++) {
-                uint level = min(uint(saturate(color[channel]) * float(p.waveLevels)), uint(p.waveLevels - 1));
-                uint index = (uint(channel) * uint(p.waveColumns) + column) * uint(p.waveLevels) + level;
-                atomic_fetch_add_explicit(&wave[index], 1u, memory_order_relaxed);
-            }
-        }
         float y = dot(color, kLuma);
         if ((p.assist & 2) != 0) {
             color = falseColor(y);

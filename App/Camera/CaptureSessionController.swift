@@ -228,6 +228,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         if structural {
             // A new format brings its own exposure limits: the loop starts again from the camera's exposure.
             motionMode = .native
+            motionStrikes = 0
             session.beginConfiguration()
             session.automaticallyConfiguresCaptureDeviceForWideColor = false
             installOutputsIfNeeded()
@@ -326,6 +327,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var motionEnabled = false
     /// Who runs exposure while AutoMotion is on: the loop, or the camera when the light is out of reach.
     private var motionMode: MotionExposure.Mode = .native
+    /// Steps in a row the light has stood past a switching threshold (`MotionExposure.patience`).
+    private var motionStrikes = 0
     private var videoFPS = 24
     private var userLocked = false
     /// Exposure and white balance held where they were when the recording started.
@@ -349,13 +352,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     /// Mains frequency where the phone is, for flicker-free shutter times.
     /// No flicker-safe timing: AutoMotion holds the exact 180° rule, as the room is lit for it.
     private let mainsHz: Int? = nil
-    /// The EV the wheel asks for, in stops; AutoMotion aims that much brighter or darker.
-    private var evOffset = 0.0
     private var lastCineState: CineState?
     private var lastReport = Date.distantPast
 
     /// Reads exposure out in video mode, and with `autoMotion` runs AutoMotion (`MotionExposure`) at `fps`.
-    /// The loop steps about 30 times a second, so the exposure ramps smoothly; the readout alone 8 times.
+    /// The loop steps every third frame (at most 30 times a second): a new exposure takes a couple of
+    /// frames to reach the meter, and stepping faster would overshoot. The readout alone runs 8 times a second.
     func setExposureMonitor(video: Bool, autoMotion: Bool, fps: Int) {
         sessionQueue.async {
             let fpsChanged = self.videoFPS != fps
@@ -363,8 +365,11 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             let wasOn = self.motionEnabled
             self.motionEnabled = video && autoMotion
             // A new frame rate or a new switch-on starts the loop from the camera's own exposure again.
-            if self.motionEnabled, !wasOn || fpsChanged { self.motionMode = .native }
-            let interval = self.motionEnabled ? 33 : 120
+            if self.motionEnabled, !wasOn || fpsChanged {
+                self.motionMode = .native
+                self.motionStrikes = 0
+            }
+            let interval = self.motionEnabled ? max(33, 3000 / max(fps, 1)) : 120
             if video, self.meterTimer == nil || self.meterInterval != interval {
                 self.meterTimer?.cancel()
                 let timer = DispatchSource.makeTimerSource(queue: self.sessionQueue)
@@ -426,15 +431,20 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             minDuration: format.minExposureDuration.seconds,
             maxDuration: format.maxExposureDuration.seconds
         )
+        // The camera's meter: in custom exposure it still reports how far the picture is from its target,
+        // with the EV wheel's bias added, as Kino's AutoMotion reads it.
+        let offset = min(max(Double(device.exposureTargetOffset), -4), 4)
         let decision = MotionExposure.step(
             mode: motionMode,
             current: current,
-            offset: measuredOffset(device),
+            offset: offset.isFinite ? offset : 0,
             fps: videoFPS,
             limits: limits,
-            mainsHz: mainsHz
+            mainsHz: mainsHz,
+            strikes: motionStrikes
         )
         motionMode = decision.mode
+        motionStrikes = decision.strikes
         guard (try? device.lockForConfiguration()) != nil else { return decision.status }
         defer { device.unlockForConfiguration() }
         if let next = decision.setting {
@@ -450,13 +460,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             device.exposureMode = .continuousAutoExposure
         }
         return decision.status
-    }
-
-    /// How far the picture stands above its target, in stops. The camera's own offset does not follow a manual
-    /// exposure, so AutoMotion meters the frames it shows instead; the camera's offset is the fallback.
-    private func measuredOffset(_ device: AVCaptureDevice) -> Double {
-        guard let level = hub.recentMeanLevel() else { return Double(device.exposureTargetOffset) }
-        return MotionExposure.stops(displayLevel: level) - evOffset
     }
 
     /// While recording, holds exposure and white balance where they were when it started. Both false
@@ -844,7 +847,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     func setExposureBias(_ bias: Double) {
         sessionQueue.async {
-            self.evOffset = bias
             guard let device = self.videoInput?.device else { return }
             try? device.lockForConfiguration()
             let clamped = min(max(Float(bias), device.minExposureTargetBias), device.maxExposureTargetBias)

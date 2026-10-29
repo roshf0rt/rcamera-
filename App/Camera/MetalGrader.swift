@@ -68,6 +68,7 @@ private struct GradeParams {
     var waveLevels: Int32 = 2
     var waveStepX: Int32 = 1
     var waveStepY: Int32 = 1
+    var waveTurn: Int32 = 0
 
     /// How `lens` draws the background, with a blur radius of `radius` pixels in the small bokeh texture.
     mutating func setLens(_ lens: LensStyle, radius: Float) {
@@ -103,14 +104,14 @@ struct AssistPass: Equatable {
     var peaking = false
     /// Draw the waveform picture (`FrameHub` shows it).
     var waveform = false
-    /// Measure the picture's brightness for AutoMotion's meter.
-    var measure = false
-    /// Count the graded picture this frame, for the waveform or the meter; `takeWaveform` returns the counts.
+    /// How the phone is held (`DeviceOrientation.quarterTurns`), so the waveform runs across the picture as seen.
+    var quarterTurns = 0
+    /// Count the graded picture this frame, for the waveform; `takeWaveform` returns the counts.
     var counts = false
     /// Frame counter, so the zebra stripes crawl.
     var phase = 0
 
-    var isEmpty: Bool { !zebra && !falseColor && !peaking && !waveform && !measure }
+    var isEmpty: Bool { !zebra && !falseColor && !peaking && !waveform }
 }
 
 /// Applies a `FilmLook` on the GPU in one pass, like Lampa's Ironstone: camera pixel, LUT, halation, grain.
@@ -367,8 +368,13 @@ final class MetalGrader: @unchecked Sendable {
                 params.assist |= 8
                 params.waveColumns = Int32(Self.waveColumns)
                 params.waveLevels = Int32(Self.waveLevels)
-                params.waveStepX = Int32(max(1, crop.width / (Self.waveColumns * 3)))
-                params.waveStepY = Int32(max(1, crop.height / 96))
+                params.waveTurn = Int32(assist.quarterTurns)
+                // About three samples per column along the columns, 96 across them.
+                let alongX = assist.quarterTurns == 0
+                let along = alongX ? crop.width : crop.height, across = alongX ? crop.height : crop.width
+                let stepAlong = Int32(max(1, along / (Self.waveColumns * 3))), stepAcross = Int32(max(1, across / 96))
+                params.waveStepX = alongX ? stepAlong : stepAcross
+                params.waveStepY = alongX ? stepAcross : stepAlong
                 memset(buffer.contents(), 0, buffer.length)
                 wave = buffer
                 let sampledX = (crop.width + Int(params.waveStepX) - 1) / Int(params.waveStepX)
@@ -398,7 +404,7 @@ final class MetalGrader: @unchecked Sendable {
         withExtendedLifetime(holders) {}
         let completed = commandBuffer.status == .completed
         if completed, waveSamples > 0 {
-            let count = Self.waveColumns * Self.waveLevels * 3
+            let count = Self.waveColumns * Self.waveLevels
             let flat = Array(UnsafeBufferPointer(start: wave.contents().assumingMemoryBound(to: UInt32.self), count: count))
             let measured = Waveform(columns: Self.waveColumns, levels: Self.waveLevels, flat: flat, samplesPerColumn: waveSamples)
             lock.lock()
@@ -421,7 +427,7 @@ final class MetalGrader: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if let waveBuffer { return waveBuffer }
-        let length = Self.waveColumns * Self.waveLevels * 3 * MemoryLayout<UInt32>.stride
+        let length = Self.waveColumns * Self.waveLevels * MemoryLayout<UInt32>.stride
         waveBuffer = device.makeBuffer(length: length, options: .storageModeShared)
         return waveBuffer
     }

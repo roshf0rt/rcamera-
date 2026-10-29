@@ -4,8 +4,12 @@ import XCTest
 final class MotionExposureTests: XCTestCase {
     private let limits = CineExposure.Limits(minISO: 50, maxISO: 6400, minDuration: 1.0 / 20000, maxDuration: 1.0 / 3)
 
-    private func step(_ mode: MotionExposure.Mode, iso: Double, duration: Double, offset: Double, fps: Int = 24) -> MotionExposure.Decision {
-        MotionExposure.step(mode: mode, current: .init(iso: iso, duration: duration), offset: offset, fps: fps, limits: limits, mainsHz: 50)
+    /// `strikes` defaults to one short of `patience`, so a mode switch due on this step happens.
+    private func step(
+        _ mode: MotionExposure.Mode, iso: Double, duration: Double, offset: Double, fps: Int = 24,
+        strikes: Int = MotionExposure.patience - 1
+    ) -> MotionExposure.Decision {
+        MotionExposure.step(mode: mode, current: .init(iso: iso, duration: duration), offset: offset, fps: fps, limits: limits, mainsHz: 50, strikes: strikes)
     }
 
     func testTakesOverAt180KeepingTheCamerasBrightness() throws {
@@ -63,6 +67,32 @@ final class MotionExposureTests: XCTestCase {
         XCTAssertEqual(stops, 0.5, accuracy: 1e-6)
     }
 
+    func testWaitsBeforeSwitchingSoTheModesDoNotThrash() throws {
+        // Within reach, but only for the first step: the camera keeps running, amber.
+        let first = step(.native, iso: 130, duration: 1.0 / 40, offset: 0, strikes: 0)
+        XCTAssertEqual(first.mode, .native)
+        XCTAssertNil(first.setting)
+        XCTAssertEqual(first.status, .settling)
+        XCTAssertEqual(first.strikes, 1)
+        // Out of reach for a moment only: the loop holds 180° with the shutter bent and counts.
+        let flash = step(.motion, iso: 50, duration: 1.0 / 50, offset: 2, strikes: 0)
+        XCTAssertEqual(flash.mode, .motion)
+        XCTAssertEqual(flash.strikes, 1)
+        guard case .bent = flash.status else { return XCTFail("expected bent, got \(flash.status)") }
+        // Back within reach: the count starts again.
+        XCTAssertEqual(step(.motion, iso: 400, duration: 1.0 / 50, offset: 0, strikes: 3).strikes, 0)
+        // Leaving the reach resets the count of a camera waiting to take back.
+        XCTAssertEqual(step(.native, iso: 50, duration: 1.0 / 400, offset: 0, strikes: 4).strikes, 0)
+    }
+
+    func testRoomLightAt24FpsGoesTo180() throws {
+        // The camera's own choice in a lit room, 1/40 at ISO 130, is well within reach of 1/50.
+        let decision = step(.native, iso: 130, duration: 1.0 / 40, offset: 0)
+        XCTAssertEqual(decision.mode, .motion)
+        XCTAssertEqual(decision.status, .cinematic)
+        XCTAssertEqual(try XCTUnwrap(decision.setting).duration, 1.0 / 50, accuracy: 1e-12)
+    }
+
     func testDarkNeverExposesLongerThanAFrame() throws {
         let decision = step(.motion, iso: 6400, duration: 1.0 / 50, offset: -0.9)
         let setting = try XCTUnwrap(decision.setting)
@@ -100,37 +130,71 @@ final class ExposureAssistTests: XCTestCase {
 }
 
 final class WaveformTests: XCTestCase {
-    func testColumnsFollowThePictureAndChannelsTheirLevels() throws {
-        // Left half black, right half pure red.
-        let width = 64, height = 8
+    /// Left half black, right half white, `width` × `height` BGRA.
+    private func halves(width: Int, height: Int) -> [UInt8] {
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         for y in 0 ..< height {
             for x in width / 2 ..< width {
                 let i = (y * width + x) * 4
+                pixels[i] = 255
+                pixels[i + 1] = 255
                 pixels[i + 2] = 255
                 pixels[i + 3] = 255
             }
         }
-        let waveform = pixels.withUnsafeBytes {
+        return pixels
+    }
+
+    func testColumnsFollowThePictureAndLevelsItsBrightness() throws {
+        let width = 64, height = 8
+        let waveform = halves(width: width, height: height).withUnsafeBytes {
             Waveform.measure(bgra: $0, width: width, height: height, bytesPerRow: width * 4, columns: 8, levels: 16, rows: 8)
         }
         XCTAssertEqual(waveform.samplesPerColumn, 16)
-        XCTAssertEqual(waveform.counts[0][0 * 16 + 0], 16, "left column: red at black")
-        XCTAssertEqual(waveform.counts[0][7 * 16 + 15], 16, "right column: red at the top")
-        XCTAssertEqual(waveform.counts[1][7 * 16 + 0], 16, "right column: green at black")
-        XCTAssertEqual(waveform.intensity(channel: 0, column: 7, level: 15), 1)
+        XCTAssertEqual(waveform.counts[0 * 16 + 0], 16, "left column: black")
+        XCTAssertEqual(waveform.counts[7 * 16 + 15], 16, "right column: white at the top")
+        XCTAssertEqual(waveform.intensity(column: 7, level: 15), 1)
+        XCTAssertEqual(waveform.intensity(column: 7, level: 3), 0)
 
         let image = waveform.render()
         XCTAssertEqual(image.count, 8 * 16 * 4)
-        // Top row, right column: red only.
+        // Top row, right column: the dense trace is white; top row, left column: empty.
         let top = (0 * 8 + 7) * 4
-        XCTAssertEqual(Array(image[top ..< top + 4]), [255, 0, 0, 255])
+        XCTAssertEqual(Array(image[top ..< top + 4]), [255, 255, 255, 255])
+        XCTAssertEqual(Array(image[0 ..< 4]), [0, 0, 0, 0])
+    }
+
+    func testColumnsRunAcrossThePictureAsThePhoneIsHeld() throws {
+        // Held portrait: across is x. Turned top-left (1): across is down the frame. Top-right (-1): up it.
+        XCTAssertEqual(Waveform.column(x: 0, y: 0, width: 100, height: 200, columns: 10, quarterTurns: 0), 0)
+        XCTAssertEqual(Waveform.column(x: 99, y: 0, width: 100, height: 200, columns: 10, quarterTurns: 0), 9)
+        XCTAssertEqual(Waveform.column(x: 99, y: 0, width: 100, height: 200, columns: 10, quarterTurns: 1), 0)
+        XCTAssertEqual(Waveform.column(x: 0, y: 199, width: 100, height: 200, columns: 10, quarterTurns: 1), 9)
+        XCTAssertEqual(Waveform.column(x: 0, y: 199, width: 100, height: 200, columns: 10, quarterTurns: -1), 0)
+        XCTAssertEqual(Waveform.column(x: 0, y: 0, width: 100, height: 200, columns: 10, quarterTurns: -1), 9)
+
+        // Black left, white right, held sideways: every column sees both halves.
+        let width = 64, height = 64
+        let turned = halves(width: width, height: height).withUnsafeBytes {
+            Waveform.measure(bgra: $0, width: width, height: height, bytesPerRow: width * 4, columns: 8, levels: 16, rows: 64, quarterTurns: 1)
+        }
+        XCTAssertGreaterThan(turned.counts[0 * 16 + 0], 0)
+        XCTAssertGreaterThan(turned.counts[0 * 16 + 15], 0)
+    }
+
+    func testStrayPixelsStayFaint() throws {
+        var flat = [UInt32](repeating: 0, count: 64)
+        flat[10] = 2
+        flat[40] = 398
+        let waveform = Waveform(columns: 1, levels: 64, flat: flat, samplesPerColumn: 400)
+        XCTAssertLessThan(waveform.intensity(column: 0, level: 10), 0.25)
+        XCTAssertEqual(waveform.intensity(column: 0, level: 40), 1)
     }
 
     func testEmptyPictureMeasuresNothing() throws {
         let waveform = [UInt8]().withUnsafeBytes { Waveform.measure(bgra: $0, width: 0, height: 0, bytesPerRow: 0) }
         XCTAssertEqual(waveform.samplesPerColumn, 0)
-        XCTAssertEqual(waveform.intensity(channel: 0, column: 0, level: 0), 0)
+        XCTAssertEqual(waveform.intensity(column: 0, level: 0), 0)
     }
 }
 

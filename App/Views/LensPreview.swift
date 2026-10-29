@@ -2,7 +2,7 @@ import CameraCore
 import SwiftUI
 import UIKit
 
-/// Lens previews, drawn once per lens from `LensPreviewScene` and kept for the session.
+/// Lens previews, drawn once per lens from `LensPreviewScene` at the ring's size on a 3× screen, and kept for the session.
 @MainActor
 final class LensPreviewCache {
     static let shared = LensPreviewCache()
@@ -12,7 +12,7 @@ final class LensPreviewCache {
 
     func load(_ lens: LensStyle) async -> UIImage? {
         if let cached = images[lens] { return cached }
-        let size = 192
+        let size = 320
         let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
             let pixels = LensPreviewScene.render(lens: lens, size: size)
             guard let provider = CGDataProvider(data: Data(pixels) as CFData),

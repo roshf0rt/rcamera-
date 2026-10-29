@@ -137,16 +137,18 @@ struct ProPanel: View {
 
     private func tool(_ title: String, symbol: String? = nil, text: String? = nil, on: Bool, change: @escaping (inout AppSettings) -> Void) -> some View {
         Button { update(change) } label: {
-            VStack(spacing: 6) {
+            VStack(spacing: 4) {
+                // A square slot that holds the icon turned either way (rotation does not re-lay out).
                 Group {
                     if let symbol {
                         Image(systemName: symbol).font(.system(size: 20))
                     } else if let text {
-                        Text(text).font(.system(size: 16, weight: .semibold))
+                        Text(text).font(.system(size: 16, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.6)
                     }
                 }
-                .frame(height: 26)
+                .frame(maxWidth: 30, maxHeight: 30)
                 .followsDevice()
+                .frame(width: 30, height: 30)
                 Text(title)
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
@@ -180,46 +182,68 @@ struct ProPanel: View {
     }
 }
 
-/// The RGB waveform in the corner of the viewfinder: across, the picture's columns; up, each channel's
-/// level, with lines at black, middle and white. It turns with the phone and sits in a square, so a turned
-/// panel stays inside the frame it was laid out in.
+/// The luma waveform in the corner of the viewfinder, as Kino draws it: across, the picture as it is held;
+/// up, brightness, with lines at black, 50% and white. The panel is laid out once, landscape, and turns
+/// with the phone inside a square, so turned it still sits in the corner and never leaves its frame.
 struct WaveformPanel: View {
     let engine: CameraEngine
     @Environment(\.iconRotation) private var angle
 
-    /// Turned a quarter: the panel is laid out upright and then turned, as the icons are.
+    static let side: CGFloat = 150
+    static let depth: CGFloat = 84
+
     private var sideways: Bool { abs(angle.truncatingRemainder(dividingBy: 180)) == 90 }
 
     var body: some View {
-        ZStack {
-            panel
-                .frame(width: sideways ? 84 : 150, height: sideways ? 150 : 84)
-                .followsDevice()
-        }
-        .frame(width: 150, height: 150)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        let slack = (Self.side - Self.depth) / 2
+        panel
+            .frame(width: Self.side, height: Self.depth)
+            .followsDevice()
+            // Held upright the panel hugs the top of its square, sideways the left.
+            .offset(x: sideways ? -slack : 0, y: sideways ? 0 : -slack)
+            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: sideways)
+            .frame(width: Self.side, height: Self.side)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private var panel: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.55))
-            if let image = engine.waveform {
-                Image(decorative: image, scale: 1)
-                    .resizable()
-                    .interpolation(.medium)
-                    .padding(4)
-            }
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.6))
             GeometryReader { geo in
+                let inset: CGFloat = 5
+                let height = geo.size.height - inset * 2
                 Path { path in
-                    for share in [0.0, 0.5, 1.0] {
-                        let y = 4 + (geo.size.height - 8) * share
-                        path.move(to: CGPoint(x: 4, y: y))
-                        path.addLine(to: CGPoint(x: geo.size.width - 4, y: y))
+                    for share in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                        let y = inset + height * share
+                        path.move(to: CGPoint(x: inset, y: y))
+                        path.addLine(to: CGPoint(x: geo.size.width - inset, y: y))
                     }
                 }
-                .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+                .stroke(Color.white.opacity(0.14), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                if let image = engine.waveform {
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .interpolation(.medium)
+                        .blendMode(.screen)
+                        .frame(width: geo.size.width - inset * 2, height: height)
+                        .offset(x: inset, y: inset)
+                }
             }
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("100").padding(.top, 1)
+                    Spacer()
+                    Text("50")
+                    Spacer()
+                    Text("0").padding(.bottom, 1)
+                }
+                Spacer()
+            }
+            .font(.system(size: 7, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.35))
+            .padding(.leading, 2)
         }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
