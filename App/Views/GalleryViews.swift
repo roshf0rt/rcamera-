@@ -333,7 +333,7 @@ struct CaptureViewer: View {
         .sheet(isPresented: $showVideoRedevelop) {
             if let record {
                 VideoRedevelopView(recordID: record.id)
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.large, .medium])
                     .presentationDragIndicator(.visible)
             }
         }

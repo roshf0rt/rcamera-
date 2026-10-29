@@ -1,9 +1,9 @@
 import CameraCore
 import SwiftUI
 
-/// Redevelop a recorded Log video in a sheet: a preview frame from the middle of the clip, graded as the
-/// chosen preset, grain and halation would make it. Render writes the whole clip, which takes about as long
-/// as the clip is long.
+/// Redevelop a recorded Log video, laid out as Kino's grading sheet: the picture takes the sheet, the looks
+/// run along the bottom, and Render writes the clip only once something has changed. The picture is a frame
+/// from the middle of the clip, graded as the chosen look, grain and halation would make it.
 struct VideoRedevelopView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -20,24 +20,38 @@ struct VideoRedevelopView: View {
     private var progress: Double? { model.videoProgress[recordID] }
     private var renderKey: String { "\(presetID)|\(grainLevel)|\(halationLevel)" }
 
+    /// Render is offered only when the look differs from the one the clip has now.
+    private var hasChanges: Bool {
+        guard let record else { return false }
+        return presetID != record.presetID || grainLevel != record.grainLevel || halationLevel != record.halationLevel
+    }
+
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             HStack {
-                Button("Cancel") { dismiss() }
-                    .disabled(isRendering)
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
+                }
+                .disabled(isRendering)
                 Spacer()
                 Text("Redevelop").font(.system(size: 17, weight: .semibold))
                 Spacer()
-                Button("Render") { render() }
-                    .disabled(isRendering || presetID.isEmpty)
-                    .fontWeight(.semibold)
+                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).hidden()
             }
-            .font(.system(size: 17))
             .foregroundStyle(.white)
-            .padding(.top, 4)
+            .padding(.top, 6)
 
             previewArea
-                .frame(height: 210)
+                .frame(maxHeight: .infinity)
+
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").font(.system(size: 15))
+                Text("Look").font(.system(size: 15, weight: .semibold))
+                Spacer()
+                LevelToggle(title: "GRAIN", level: grainLevel) { grainLevel = grainLevel.next }
+                LevelToggle(title: "HALATION", level: halationLevel) { halationLevel = halationLevel.next }
+            }
+            .foregroundStyle(.white)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -51,21 +65,41 @@ struct VideoRedevelopView: View {
             }
             .frame(height: 96)
 
-            HStack(spacing: 10) {
-                LevelToggle(title: "GRAIN", level: grainLevel) { grainLevel = grainLevel.next }
-                LevelToggle(title: "HALATION", level: halationLevel) { halationLevel = halationLevel.next }
-                Spacer()
-            }
-
             if let progress {
                 VStack(spacing: 4) {
-                    ProgressView(value: progress)
+                    ProgressView(value: progress).tint(Theme.accent)
                     Text("Rendering \(Int(progress * 100))% · keep the app open")
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Theme.secondaryText)
                 }
             }
-            Spacer(minLength: 0)
+
+            HStack(spacing: 12) {
+                if hasChanges {
+                    Button(action: render) {
+                        Text(isRendering ? "Rendering…" : "Render")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                            .background(Capsule().fill(Theme.accent))
+                    }
+                    .disabled(isRendering || presetID.isEmpty)
+                } else {
+                    Spacer()
+                }
+                if let record {
+                    ShareLink(item: model.shareURL(for: record)) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 50, height: 50)
+                            .background(Circle().fill(Theme.chrome))
+                    }
+                    .disabled(isRendering)
+                }
+            }
+            .padding(.bottom, 8)
         }
         .padding(.horizontal, 16)
         .background(Color.black.ignoresSafeArea())
