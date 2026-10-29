@@ -366,6 +366,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var lastCineState: CineState?
     private var lastReport = Date.distantPast
     private var meterDetail = ""
+    /// The shutter cap of `cappedStep` is in force, and whether it has been lifted to the frame time.
+    private var capHeld = false
+    private var capLifted = false
 
     /// Reads exposure out in video mode, and with `autoMotion` runs AutoMotion (`MotionExposure`) at `fps`.
     /// The loop steps every third frame (at most 30 times a second): a new exposure takes a couple of
@@ -403,6 +406,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                device.isExposureModeSupported(.continuousAutoExposure) {
                 try? device.lockForConfiguration()
                 if device.activeFormat.isVideoHDRSupported { device.automaticallyAdjustsVideoHDREnabled = true }
+                self.releaseCap(on: device)
                 device.exposureMode = .continuousAutoExposure
                 device.unlockForConfiguration()
             }
@@ -423,10 +427,13 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                     meterDetail = "held: AE lock"
                 } else if recordingExposureLock {
                     meterDetail = "held: recording"
-                } else if releaseVideoHDR(on: device) {
-                    meterDetail = "video HDR off"
                 } else {
-                    meterDetail = "no custom exposure"
+                    // The camera takes no manual exposure here: its auto exposure is held to the 180° time instead.
+                    if releaseVideoHDR(on: device) {
+                        meterDetail = "video HDR off"
+                    } else {
+                        status = cappedStep(device: device, current: current)
+                    }
                 }
             }
         }
@@ -444,6 +451,47 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         lastReport = Date()
         let report = onCineState
         DispatchQueue.main.async { report?(state) }
+    }
+
+    /// AutoMotion where the camera takes no manual exposure: auto exposure runs, and the longest shutter it may
+    /// use is capped at the 180° time, so ISO makes up the rest. Bright light still makes it go shorter (ND),
+    /// and where the ISO runs out the cap lifts to the frame time (LOW LIGHT), as the loop does with a manual shutter.
+    private func cappedStep(device: AVCaptureDevice, current: CineExposure.Setting) -> MotionExposure.Status {
+        let format = device.activeFormat
+        let limits = CineExposure.Limits(
+            minISO: Double(format.minISO),
+            maxISO: Double(format.maxISO),
+            minDuration: format.minExposureDuration.seconds,
+            maxDuration: format.maxExposureDuration.seconds
+        )
+        let longest = min(limits.maxDuration, 1 / Double(max(videoFPS, 1)))
+        let reference = min(max(CineExposure.referenceShutter(fps: videoFPS, mainsHz: mainsHz), limits.minDuration), longest)
+        if current.iso >= limits.maxISO * 0.9 { capLifted = true } else if current.iso < limits.maxISO * 0.6 { capLifted = false }
+        let cap = capLifted ? longest : reference
+        if (try? device.lockForConfiguration()) != nil {
+            if abs(device.activeMaxExposureDuration.seconds - cap) / cap > 0.01 {
+                device.activeMaxExposureDuration = CMTime(seconds: cap, preferredTimescale: 1_000_000)
+            }
+            if device.exposureMode != .continuousAutoExposure, device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            device.unlockForConfiguration()
+            capHeld = true
+        }
+        meterDetail = String(format: "auto, shutter cap 1/%d · ISO %d–%d", Int((1 / cap).rounded()), Int(limits.minISO), Int(limits.maxISO))
+        let ratio = current.duration / reference
+        if ratio > 1.15 { return .bent(stops: log2(reference / current.duration)) }
+        if ratio >= 0.85 { return .cinematic }
+        if ratio >= 0.7 { return .settling }
+        return .bent(stops: log2(reference / current.duration))
+    }
+
+    /// Lifts the shutter cap of `cappedStep`. The device is locked for configuration by the caller.
+    private func releaseCap(on device: AVCaptureDevice) {
+        guard capHeld else { return }
+        device.activeMaxExposureDuration = device.activeFormat.maxExposureDuration
+        capHeld = false
+        capLifted = false
     }
 
     /// Video HDR (Dolby Vision) keeps the camera from taking a manual shutter and ISO, which AutoMotion needs;
@@ -475,6 +523,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             return lastCineState?.status ?? .settling
         }
         defer { device.unlockForConfiguration() }
+        releaseCap(on: device)
 
         // Which way the meter reads is found out first, by changing the exposure a little and watching it.
         guard let sign = meterSign else {
@@ -784,9 +833,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     /// 12 MP photos (or the closest the format offers), and ProRAW where the format supports it unless Bayer RAW is wanted.
     private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution, rawFormat: RAWFormat, wantsRAW: Bool) {
         let dimensions = device.activeFormat.supportedMaxPhotoDimensions
-        // Bayer RAW is the sensor's plain 12 MP frame: the camera offers no Bayer RAW at the larger sizes, so a
-        // 48 MP setting is held at 12 MP while Bayer RAW is on (ProRAW keeps its 48 MP).
-        let bayerOnly = wantsRAW && rawFormat == .bayer
+        // Bayer RAW is the sensor's plain 12 MP frame and only a single camera offers it: the combined back camera
+        // (the one that switches lenses) has none, so there ProRAW is saved instead, at the size set. On a single
+        // camera a 48 MP setting is held at 12 MP while Bayer RAW is on, as the camera has no Bayer RAW above that.
+        let bayerOnly = wantsRAW && rawFormat == .bayer && !device.isVirtualDevice
         let limit = bayerOnly ? FormatChooser.preferredPhotoPixels : (resolution.pixelLimit ?? Int.max)
         let fitting = dimensions.filter { Int($0.width) * Int($0.height) <= limit }
         let pixels: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
@@ -794,7 +844,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             let current = photoOutput.maxPhotoDimensions
             if current.width != best.width || current.height != best.height { photoOutput.maxPhotoDimensions = best }
         }
-        let proRAW = photoOutput.isAppleProRAWSupported && rawFormat == .proRAW
+        let proRAW = photoOutput.isAppleProRAWSupported && (rawFormat == .proRAW || device.isVirtualDevice)
         if proRAW != photoOutput.isAppleProRAWEnabled {
             photoOutput.isAppleProRAWEnabled = proRAW
         }
