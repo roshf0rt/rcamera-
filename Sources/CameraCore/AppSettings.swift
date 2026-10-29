@@ -156,6 +156,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var videoFPS = 30
     public var videoStabilization: VideoStabilization = .standard
     public var appleLogVideo = true
+    /// With Apple Log on: the look goes into the recording as it is shot. Off, the Log frames are recorded flat,
+    /// the Log file is saved to Photos, and the preset is applied later in the gallery's Redevelop.
+    public var instantGrade = true
     /// Video only: exposure held on the 180° shutter with ISO doing the work, handing over to the camera's
     /// own auto exposure when the light is out of reach (see `MotionExposure`). On by default.
     public var autoMotion = true
@@ -188,7 +191,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, rawFormat, savesLocation, digitalZoomStop
         case grainLevel, halationLevel, frame, volumeShutter, portrait, portraitFNumber, lensStyle, photoResolution
-        case videoResolution, videoFPS, videoStabilization, appleLogVideo, autoMotion, revision
+        case videoResolution, videoFPS, videoStabilization, appleLogVideo, instantGrade, autoMotion, revision
         case zebra, focusPeaking, falseColor, waveform, lockExposureWhileRecording, lockWhiteBalanceWhileRecording
         case whiteBalanceKelvin, whiteBalanceTint
     }
@@ -234,6 +237,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo
+        instantGrade = (try? c.decode(Bool.self, forKey: .instantGrade)) ?? instantGrade
         // The earlier cine exposure switch is not carried over: AutoMotion replaces it and starts on.
         autoMotion = (try? c.decode(Bool.self, forKey: .autoMotion)) ?? autoMotion
         zebra = (try? c.decode(Bool.self, forKey: .zebra)) ?? zebra

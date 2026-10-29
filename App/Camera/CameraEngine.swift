@@ -521,8 +521,8 @@ final class CameraEngine {
     private func beginRecording() {
         controller.setRecordingLocks(exposure: settings.lockExposureWhileRecording, whiteBalance: settings.lockWhiteBalanceWhileRecording)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rec-\(UUID().uuidString).mov")
-        recordingKeepsLog = appleLogActive
-        controller.startRecording(url: url, fps: machine.configuration.format.fps, quarterTurns: deviceOrientation.quarterTurns, keepsLog: appleLogActive) { [weak self] in
+        recordingKeepsLog = appleLogActive && !settings.instantGrade
+        controller.startRecording(url: url, fps: machine.configuration.format.fps, quarterTurns: deviceOrientation.quarterTurns, keepsLog: recordingKeepsLog) { [weak self] in
             Task { @MainActor in self?.recordingDidStart() }
         } onFail: { [weak self] error in
             Task { @MainActor in

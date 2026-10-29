@@ -556,13 +556,9 @@ final class AppModel {
                 }
                 try captureStore.add(record)
                 captures = captureStore.records
-                if keepsLog {
-                    // The Log file is not what the library should show: the preset goes on first, then it is saved.
-                    let developed = await redevelopVideo(record, presetID: preset.id, grain: grain, halation: halation)
-                    try await PhotoLibrarySaver.saveVideo(url: developed ? captureStore.url(.processedVideo, for: record.id) : destination)
-                } else {
-                    try await PhotoLibrarySaver.saveVideo(url: destination)
-                }
+                // Flat Log is saved as it is, so it can be downloaded and graded elsewhere; the preset is applied
+                // later, from the gallery's Redevelop.
+                try await PhotoLibrarySaver.saveVideo(url: destination)
             } catch {
                 alert = error.localizedDescription
             }

@@ -122,10 +122,13 @@ struct SettingsView: View {
                         ForEach(VideoStabilization.allCases, id: \.self) { Text($0.label.capitalized).tag($0) }
                     }
                     Toggle("Apple Log", isOn: model.binding(\.appleLogVideo))
+                    if model.settings.appleLogVideo {
+                        Toggle("Instant Grade", isOn: model.binding(\.instantGrade))
+                    }
                 } header: {
                     Text("Video")
                 } footer: {
-                    Text("Apple Log is used by default when the iPhone supports it and the preset has an Apple Log LUT; otherwise normal video is recorded. Cinematic stabilization delays the viewfinder.")
+                    Text("Apple Log is used by default when the iPhone supports it and the preset has an Apple Log LUT; otherwise normal video is recorded. Instant Grade on records the preset into the video; off records flat Log, saves the Log file to Photos, and the preset is applied later from the gallery's Redevelop. Cinematic stabilization delays the viewfinder.")
                 }
                 .disabled(model.engine.isRecording)
 
