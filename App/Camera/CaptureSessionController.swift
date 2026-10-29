@@ -396,10 +396,11 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 let report = self.onCineState
                 DispatchQueue.main.async { report?(nil) }
             }
-            // Leaving AutoMotion hands exposure back to the camera.
+            // Leaving AutoMotion hands exposure back to the camera, and video HDR with it.
             if wasOn, !self.motionEnabled, !self.userLocked, !self.recordingExposureLock, let device = self.videoInput?.device,
                device.isExposureModeSupported(.continuousAutoExposure) {
                 try? device.lockForConfiguration()
+                if device.activeFormat.isVideoHDRSupported { device.automaticallyAdjustsVideoHDREnabled = true }
                 device.exposureMode = .continuousAutoExposure
                 device.unlockForConfiguration()
             }
@@ -416,7 +417,15 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 status = motionStep(device: device, current: current)
             } else {
                 status = lastCineState?.status
-                meterDetail = userLocked ? "held: AE lock" : recordingExposureLock ? "held: recording" : "no custom exposure"
+                if userLocked {
+                    meterDetail = "held: AE lock"
+                } else if recordingExposureLock {
+                    meterDetail = "held: recording"
+                } else if releaseVideoHDR(on: device) {
+                    meterDetail = "video HDR off"
+                } else {
+                    meterDetail = "no custom exposure"
+                }
             }
         }
         let state = CineState(
@@ -433,6 +442,17 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         lastReport = Date()
         let report = onCineState
         DispatchQueue.main.async { report?(state) }
+    }
+
+    /// Video HDR (Dolby Vision) keeps the camera from taking a manual shutter and ISO, which AutoMotion needs;
+    /// it is turned off while the loop runs. True when it was on and has just been turned off.
+    private func releaseVideoHDR(on device: AVCaptureDevice) -> Bool {
+        guard device.activeFormat.isVideoHDRSupported, device.automaticallyAdjustsVideoHDREnabled || device.isVideoHDREnabled,
+              (try? device.lockForConfiguration()) != nil else { return false }
+        defer { device.unlockForConfiguration() }
+        device.automaticallyAdjustsVideoHDREnabled = false
+        device.isVideoHDREnabled = false
+        return true
     }
 
     /// One step of AutoMotion: sets the next shutter and ISO, or hands exposure to the camera.
