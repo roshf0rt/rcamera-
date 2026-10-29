@@ -247,7 +247,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             currentFormatIndex = formatPlan.index
             currentAppleLog = formatPlan.appleLog
             setDepthFormat(on: device)
-            configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat)
+            configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW)
             if #available(iOS 18.0, *) { installControls(device: device) }
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
@@ -265,7 +265,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
 
         // A new photo size does not need a new format, so it is applied on every configuration.
-        if !structural { configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat) }
+        if !structural { configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW) }
 
         // RAW is what Redevelop works from. If the chosen format has none, fall back to the photo preset once.
         if structural, config.mode == .photo, config.wantsRAW, position == .back, formatPlan.index != nil,
@@ -782,9 +782,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     }
 
     /// 12 MP photos (or the closest the format offers), and ProRAW where the format supports it unless Bayer RAW is wanted.
-    private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution, rawFormat: RAWFormat) {
+    private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution, rawFormat: RAWFormat, wantsRAW: Bool) {
         let dimensions = device.activeFormat.supportedMaxPhotoDimensions
-        let limit = resolution.pixelLimit ?? Int.max
+        // Bayer RAW is the sensor's plain 12 MP frame: the camera offers no Bayer RAW at the larger sizes, so a
+        // 48 MP setting is held at 12 MP while Bayer RAW is on (ProRAW keeps its 48 MP).
+        let bayerOnly = wantsRAW && rawFormat == .bayer
+        let limit = bayerOnly ? FormatChooser.preferredPhotoPixels : (resolution.pixelLimit ?? Int.max)
         let fitting = dimensions.filter { Int($0.width) * Int($0.height) <= limit }
         let pixels: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
         if let best = fitting.max(by: { pixels($0) < pixels($1) }) ?? dimensions.min(by: { pixels($0) < pixels($1) }) {
