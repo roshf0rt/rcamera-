@@ -69,7 +69,9 @@ final class CameraEngine {
 
     @ObservationIgnored let controller = CaptureSessionController()
     @ObservationIgnored var onPhoto: ((PhotoResult) -> Void)?
-    @ObservationIgnored var onVideo: ((URL) -> Void)?
+    /// The finished video, and whether it was recorded as flat Apple Log.
+    @ObservationIgnored var onVideo: ((URL, Bool) -> Void)?
+    @ObservationIgnored private var recordingKeepsLog = false
     @ObservationIgnored var onModeChanged: ((CaptureMode) -> Void)?
     /// The video format had to step down to fit the camera's hardware budget.
     @ObservationIgnored var onFormatFallback: ((VideoFormat) -> Void)?
@@ -519,7 +521,8 @@ final class CameraEngine {
     private func beginRecording() {
         controller.setRecordingLocks(exposure: settings.lockExposureWhileRecording, whiteBalance: settings.lockWhiteBalanceWhileRecording)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rec-\(UUID().uuidString).mov")
-        controller.startRecording(url: url, fps: machine.configuration.format.fps, quarterTurns: deviceOrientation.quarterTurns) { [weak self] in
+        recordingKeepsLog = appleLogActive
+        controller.startRecording(url: url, fps: machine.configuration.format.fps, quarterTurns: deviceOrientation.quarterTurns, keepsLog: appleLogActive) { [weak self] in
             Task { @MainActor in self?.recordingDidStart() }
         } onFail: { [weak self] error in
             Task { @MainActor in
@@ -553,7 +556,7 @@ final class CameraEngine {
                 self.recordingStart = nil
                 self.send(.videoRecordingDidFinish)
                 if let url {
-                    self.onVideo?(url)
+                    self.onVideo?(url, self.recordingKeepsLog)
                 } else if let error {
                     self.message = error.localizedDescription
                 }

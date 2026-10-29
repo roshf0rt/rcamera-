@@ -217,6 +217,14 @@ final class CaptureStoreTests: XCTestCase {
         XCTAssertTrue(store.rawFiles().isEmpty)
     }
 
+    func testLogVideoFlagSurvivesAReloadAndOldRecordsAreNotLog() throws {
+        let record = CaptureRecord(kind: .video, presetID: "preset-1", logVideo: true)
+        let decoded = try JSONDecoder().decode(CaptureRecord.self, from: JSONEncoder().encode(record))
+        XCTAssertTrue(decoded.logVideo)
+        let old = try JSONDecoder().decode(CaptureRecord.self, from: Data(#"{"id":"\#(UUID().uuidString)","date":0,"kind":"video","presetID":"preset-1","evPushPull":0,"aspect":"16:9","hasRAW":false,"isFavorite":false,"rawExposureOffset":0,"mirrored":false,"frame":"off","grainLevel":"medium","halationLevel":"medium","orientation":"portrait"}"#.utf8))
+        XCTAssertFalse(old.logVideo)
+    }
+
     func testShadowsLiftedInRedevelopSurviveAReload() throws {
         let (store, url) = try makeStore()
         try store.add(CaptureRecord(kind: .photo, presetID: "preset-1", shadowLift: 0.4))

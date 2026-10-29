@@ -11,7 +11,10 @@ public enum CaptureFile: String, Sendable {
     case original = "original.heic"
     case processed = "processed.heic"
     case thumbnail = "thumb.jpg"
+    /// The video as recorded: flat Apple Log when the record is `logVideo`, otherwise the graded video.
     case video = "video.mov"
+    /// A Log video graded with its preset; Redevelop writes it again.
+    case processedVideo = "processed.mov"
     /// Portrait photos: the depth map the background was blurred with, so Redevelop can change the lens and aperture.
     case depth = "depth.bin"
 }
@@ -43,6 +46,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     /// Portrait photos: the f-number and lens the background was drawn with. Nil for other photos. Redevelop changes them.
     public var portraitFNumber: Double?
     public var lensStyle: LensStyle?
+    /// Recorded as flat Apple Log: the file is ungraded and is graded into `processedVideo`.
+    public var logVideo: Bool
     /// Shadows moved in Redevelop, -1 (down) to 1 (up), 0 for none; see `ShadowLift`.
     public var shadowLift: Double
 
@@ -64,7 +69,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         orientation: DeviceOrientation = .portrait,
         portraitFNumber: Double? = nil,
         lensStyle: LensStyle? = nil,
-        shadowLift: Double = 0
+        shadowLift: Double = 0,
+        logVideo: Bool = false
     ) {
         self.id = id
         self.date = date
@@ -84,11 +90,12 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.portraitFNumber = portraitFNumber
         self.lensStyle = lensStyle
         self.shadowLift = shadowLift
+        self.logVideo = logVideo
     }
 
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
-        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, portraitFNumber, lensStyle, shadowLift
+        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, portraitFNumber, lensStyle, shadowLift, logVideo
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -111,6 +118,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         try c.encodeIfPresent(portraitFNumber, forKey: .portraitFNumber)
         try c.encodeIfPresent(lensStyle, forKey: .lensStyle)
         try c.encode(shadowLift, forKey: .shadowLift)
+        try c.encode(logVideo, forKey: .logVideo)
     }
 
     /// Index files from earlier releases lack newer keys; they keep their captures.
@@ -137,6 +145,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         portraitFNumber = try? c.decodeIfPresent(Double.self, forKey: .portraitFNumber)
         lensStyle = try? c.decodeIfPresent(LensStyle.self, forKey: .lensStyle)
         shadowLift = (try? c.decode(Double.self, forKey: .shadowLift)) ?? 0
+        logVideo = (try? c.decode(Bool.self, forKey: .logVideo)) ?? false
     }
 }
 

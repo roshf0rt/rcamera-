@@ -148,7 +148,7 @@ struct GalleryView: View {
                                     Button { model.toggleFavorite(record) } label: {
                                         Label(record.isFavorite ? "Unfavorite" : "Favorite", systemImage: record.isFavorite ? "heart.slash" : "heart")
                                     }
-                                    ShareLink(item: model.url(record.kind == .video ? .video : .processed, for: record)) {
+                                    ShareLink(item: model.shareURL(for: record)) {
                                         Label("Share", systemImage: "square.and.arrow.up")
                                     }
                                     Button(role: .destructive) { pendingDelete = record } label: {
@@ -201,7 +201,7 @@ struct GalleryView: View {
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
                     if isSelecting {
-                        ShareLink(items: pickedRecords.map { model.url($0.kind == .video ? .video : .processed, for: $0) }) {
+                        ShareLink(items: pickedRecords.map { model.shareURL(for: $0) }) {
                             Image(systemName: "square.and.arrow.up")
                         }
                         .disabled(picked.isEmpty)
@@ -257,6 +257,9 @@ struct GalleryView: View {
         HStack(spacing: 4) {
             if record.kind == .video { Image(systemName: "video.fill") }
             if record.isFavorite { Image(systemName: "heart.fill") }
+            if let progress = model.videoProgress[record.id] {
+                Text("\(Int(progress * 100))%").font(.system(size: 11, weight: .semibold, design: .monospaced))
+            }
         }
         .font(.system(size: 12))
         .foregroundStyle(.white)
@@ -323,7 +326,13 @@ struct CaptureViewer: View {
         }
         .sensoryFeedback(.selection, trigger: current)
         .fullScreenCover(isPresented: $showRedevelop) {
-            if let record { RedevelopView(recordID: record.id) }
+            if let record {
+                if record.kind == .video {
+                    VideoRedevelopView(recordID: record.id)
+                } else {
+                    RedevelopView(recordID: record.id)
+                }
+            }
         }
         .confirmationDialog("Delete this capture?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deleteCurrent() }
@@ -401,7 +410,7 @@ struct CaptureViewer: View {
             .font(.system(size: 13, design: .monospaced))
             .foregroundStyle(.white.opacity(0.75))
             Spacer()
-            ShareLink(item: model.url(record.kind == .video ? .video : .processed, for: record)) {
+            ShareLink(item: model.shareURL(for: record)) {
                 Image(systemName: "square.and.arrow.up").font(.system(size: 20)).frame(width: 44, height: 44)
             }
         }
@@ -494,7 +503,7 @@ private struct CapturePage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: "\(record.id)-\(record.presetID)-\(record.evPushPull)") {
             if record.kind == .video {
-                player = AVPlayer(url: model.url(.video, for: record))
+                player = AVPlayer(url: model.videoURL(for: record))
             } else {
                 let url = model.url(.processed, for: record)
                 let loaded = await Task.detached { UIImage(contentsOfFile: url.path) }.value

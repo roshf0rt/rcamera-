@@ -121,6 +121,9 @@ struct AssistPass: Equatable {
 final class MetalGrader: @unchecked Sendable {
     static let shared = MetalGrader()
 
+    /// A grader of its own, for redeveloping videos in the background without sharing the viewfinder's.
+    static func makeForBackground() -> MetalGrader? { MetalGrader() }
+
     let device: MTLDevice
     private let queue: MTLCommandQueue
     private let gradeState: MTLComputePipelineState

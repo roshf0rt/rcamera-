@@ -1106,11 +1106,11 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     // MARK: Video
 
-    func startRecording(url: URL, fps: Int, quarterTurns: Int = 0, onStart: @escaping @Sendable () -> Void, onFail: @escaping @Sendable (Error) -> Void) {
+    func startRecording(url: URL, fps: Int, quarterTurns: Int = 0, keepsLog: Bool = false, onStart: @escaping @Sendable () -> Void, onFail: @escaping @Sendable (Error) -> Void) {
         // The audio queue owns the microphone session and its cached writer settings.
         audioQueue.async {
             let settings = self.audioSession.isRunning ? self.audioSettings : nil
-            self.hub.startRecording(url: url, fps: fps, quarterTurns: quarterTurns, audioSettings: settings, onStart: onStart, onFail: onFail)
+            self.hub.startRecording(url: url, fps: fps, quarterTurns: quarterTurns, keepsLog: keepsLog, audioSettings: settings, onStart: onStart, onFail: onFail)
         }
     }
 

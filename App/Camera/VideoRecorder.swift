@@ -20,10 +20,12 @@ final class VideoRecorder {
     private let fps: Int
     private var lastBuffer: CVPixelBuffer?
     private var lastTime = CMTime.invalid
+    /// Frames are the camera's own Apple Log frames, not graded ones.
+    let keepsLog: Bool
 
     /// `quarterTurns` counter-clockwise turns the file asks players to show the portrait frames with,
     /// for a phone held sideways.
-    init(url: URL, width: Int, height: Int, fps: Int, quarterTurns: Int = 0, audioSettings: [String: Any]?) throws {
+    init(url: URL, width: Int, height: Int, fps: Int, quarterTurns: Int = 0, keepsLog: Bool = false, pixelFormat: OSType = kCVPixelFormatType_32BGRA, audioSettings: [String: Any]?) throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
 
@@ -43,7 +45,7 @@ final class VideoRecorder {
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoInput,
             sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
                 kCVPixelBufferWidthKey as String: width,
                 kCVPixelBufferHeightKey as String: height,
             ]
@@ -62,6 +64,7 @@ final class VideoRecorder {
         }
 
         self.url = url
+        self.keepsLog = keepsLog
         self.fps = fps
         self.writer = writer
         self.videoInput = videoInput

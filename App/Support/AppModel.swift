@@ -19,6 +19,8 @@ final class AppModel {
     private(set) var presets: [Preset]
     private(set) var captures: [CaptureRecord]
     private(set) var processingCount = 0
+    /// Log videos being graded, 0 to 1, by record id.
+    var videoProgress: [UUID: Double] = [:]
     var alert: String?
 
     @ObservationIgnored private let presetLibrary: PresetLibrary
@@ -50,7 +52,7 @@ final class AppModel {
         captures = captureStore.records
 
         engine.onPhoto = { [weak self] result in self?.ingest(photo: result) }
-        engine.onVideo = { [weak self] url in self?.ingest(videoAt: url) }
+        engine.onVideo = { [weak self] url, keepsLog in self?.ingest(videoAt: url, keepsLog: keepsLog) }
         engine.onModeChanged = { [weak self] mode in self?.updateSettings { $0.lastCaptureMode = mode } }
         engine.onFormatFallback = { [weak self] format in
             self?.updateSettings {
@@ -413,6 +415,11 @@ final class AppModel {
         captureStore.url(file, for: record.id)
     }
 
+    /// What Share sends: the photo, or the video as it is shown.
+    func shareURL(for record: CaptureRecord) -> URL {
+        record.kind == .video ? videoURL(for: record) : url(.processed, for: record)
+    }
+
     func fileExists(_ file: CaptureFile, for record: CaptureRecord) -> Bool {
         captureStore.fileExists(file, for: record.id)
     }
@@ -523,13 +530,23 @@ final class AppModel {
         }
     }
 
-    private func ingest(videoAt tempURL: URL) {
+    private func ingest(videoAt tempURL: URL, keepsLog: Bool) {
         let preset = selectedPreset
         let saveLocation = settings.savesLocation
+        let grain = settings.grainLevel
+        let halation = settings.halationLevel
 
         Task {
             let place = saveLocation ? await location.currentPlaceName() : nil
-            let record = CaptureRecord(kind: .video, presetID: preset.id, aspect: .ratio16x9, placeName: place)
+            let record = CaptureRecord(
+                kind: .video,
+                presetID: preset.id,
+                aspect: .ratio16x9,
+                placeName: place,
+                grainLevel: grain,
+                halationLevel: halation,
+                logVideo: keepsLog
+            )
             do {
                 let destination = captureStore.url(.video, for: record.id)
                 try FileManager.default.createDirectory(at: captureStore.folder(for: record.id), withIntermediateDirectories: true)
@@ -539,11 +556,66 @@ final class AppModel {
                 }
                 try captureStore.add(record)
                 captures = captureStore.records
-                try await PhotoLibrarySaver.saveVideo(url: destination)
+                if keepsLog {
+                    // The Log file is not what the library should show: the preset goes on first, then it is saved.
+                    let developed = await redevelopVideo(record, presetID: preset.id, grain: grain, halation: halation)
+                    try await PhotoLibrarySaver.saveVideo(url: developed ? captureStore.url(.processedVideo, for: record.id) : destination)
+                } else {
+                    try await PhotoLibrarySaver.saveVideo(url: destination)
+                }
             } catch {
                 alert = error.localizedDescription
             }
         }
+    }
+
+    /// The video to play and share: the graded one once it is developed, otherwise the file as recorded.
+    func videoURL(for record: CaptureRecord) -> URL {
+        fileExistsForVideo(record) ? url(.processedVideo, for: record) : url(.video, for: record)
+    }
+
+    private func fileExistsForVideo(_ record: CaptureRecord) -> Bool {
+        captureStore.fileExists(.processedVideo, for: record.id)
+    }
+
+    /// Grades a recorded Log video with a preset and the given grain and halation, into `processedVideo`.
+    /// Frame by frame, so it takes about as long as the clip; the gallery card shows its progress.
+    @discardableResult
+    func redevelopVideo(_ record: CaptureRecord, presetID: String, grain: GrainLevel, halation: EffectLevel) async -> Bool {
+        guard let preset = preset(id: presetID) else { return false }
+        let base = await baseLook(for: preset, slot: .appleLog)
+        let look = base.with(
+            grain: min(1, base.grain * grain.multiplier),
+            halation: base.halation * halation.multiplier,
+            adjustments: base.adjustments
+        )
+        let id = record.id
+        let source = captureStore.url(.video, for: id)
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("redevelop-\(UUID().uuidString).mov")
+        videoProgress[id] = 0
+        defer { videoProgress[id] = nil }
+        do {
+            try await VideoRedeveloper.develop(source: source, output: temporary, look: look) { [weak self] value in
+                Task { @MainActor in self?.videoProgress[id] = value }
+            }
+            let output = captureStore.url(.processedVideo, for: id)
+            try? FileManager.default.removeItem(at: output)
+            try FileManager.default.moveItem(at: temporary, to: output)
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            alert = error.localizedDescription
+            return false
+        }
+        var updated = record
+        updated.presetID = presetID
+        updated.grainLevel = grain
+        updated.halationLevel = halation
+        try? captureStore.update(updated)
+        captures = captureStore.records
+        if let thumbnail = await Self.videoThumbnail(url: captureStore.url(.processedVideo, for: id)) {
+            try? captureStore.write(thumbnail, as: .thumbnail, for: id)
+        }
+        return true
     }
 
     private static func videoThumbnail(url: URL) async -> Data? {
@@ -558,7 +630,8 @@ final class AppModel {
 
     /// A photo can be redeveloped from its RAW, or from the camera's original image.
     func canRedevelop(_ record: CaptureRecord) -> Bool {
-        record.kind == .photo && (record.hasRAW || captureStore.fileExists(.original, for: record.id))
+        if record.kind == .video { return record.logVideo }
+        return record.kind == .photo && (record.hasRAW || captureStore.fileExists(.original, for: record.id))
     }
 
     /// The RAW while it is kept, otherwise the camera's original image. Reads files; call off the main thread when possible.

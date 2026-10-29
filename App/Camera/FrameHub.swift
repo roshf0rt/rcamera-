@@ -28,6 +28,8 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         var fps: Int
         /// The phone held sideways: the file says to show the frames turned.
         var quarterTurns: Int
+        /// Apple Log frames are written as they come, not graded.
+        var keepsLog: Bool
         var audioSettings: [String: Any]?
         /// Frames captured before the button press are dropped. Stabilization delays frames, so some arrive late.
         var requestTime: CMTime
@@ -208,10 +210,10 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
 
     // MARK: Recording
 
-    func startRecording(url: URL, fps: Int, quarterTurns: Int = 0, audioSettings: [String: Any]?, onStart: @escaping () -> Void, onFail: @escaping (Error) -> Void) {
+    func startRecording(url: URL, fps: Int, quarterTurns: Int = 0, keepsLog: Bool = false, audioSettings: [String: Any]?, onStart: @escaping () -> Void, onFail: @escaping (Error) -> Void) {
         let now = CMClockGetTime(CMClockGetHostTimeClock())
         lock.lock()
-        pending = PendingRecording(url: url, fps: fps, quarterTurns: quarterTurns, audioSettings: audioSettings, requestTime: now, onStart: onStart, onFail: onFail)
+        pending = PendingRecording(url: url, fps: fps, quarterTurns: quarterTurns, keepsLog: keepsLog, audioSettings: audioSettings, requestTime: now, onStart: onStart, onFail: onFail)
         lock.unlock()
     }
 
@@ -269,6 +271,8 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         let separateRecordStream = recordOutput != nil
         let isRecordStream = separateRecordStream && output === recordOutput
         let wantsRecording = recorder != nil || pending != nil
+        // Apple Log recordings keep the camera's frames as they come, and the preset is applied afterwards.
+        let keepsLog = (recorder?.keepsLog ?? pending?.keepsLog) ?? false
         // The viewfinder may skip frames, unless it is also what gets recorded.
         var skipsFrame = false
         if previewRate > 0, !isRecordStream, separateRecordStream || !wantsRecording {
@@ -295,8 +299,12 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         if skipsFrame { return }
 
         if isRecordStream {
-            guard wantsRecording,
-                  let rendered = render(source, pool: recordPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror)
+            guard wantsRecording else { return }
+            if keepsLog {
+                record(source, at: time, width: CVPixelBufferGetWidth(source), height: CVPixelBufferGetHeight(source))
+                return
+            }
+            guard let rendered = render(source, pool: recordPool, look: look, previous: previous, previousMix: previousMix, aspect: aspect, mirror: mirror)
             else { return }
             record(rendered.buffer, at: time, width: rendered.crop.width, height: rendered.crop.height)
             return
@@ -314,7 +322,11 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
 
         display(buffer, at: time)
         if !separateRecordStream, wantsRecording {
-            record(buffer, at: time, width: crop.width, height: crop.height)
+            if keepsLog {
+                record(source, at: time, width: CVPixelBufferGetWidth(source), height: CVPixelBufferGetHeight(source))
+            } else {
+                record(buffer, at: time, width: crop.width, height: crop.height)
+            }
         }
     }
 
@@ -381,7 +393,16 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         if recorder == nil, let pending {
             if CMTimeCompare(time, pending.requestTime) < 0 { return }
             do {
-                recorder = try VideoRecorder(url: pending.url, width: width, height: height, fps: pending.fps, quarterTurns: pending.quarterTurns, audioSettings: pending.audioSettings)
+                recorder = try VideoRecorder(
+                    url: pending.url,
+                    width: width,
+                    height: height,
+                    fps: pending.fps,
+                    quarterTurns: pending.quarterTurns,
+                    keepsLog: pending.keepsLog,
+                    pixelFormat: pending.keepsLog ? CVPixelBufferGetPixelFormatType(buffer) : kCVPixelFormatType_32BGRA,
+                    audioSettings: pending.audioSettings
+                )
             } catch {
                 lock.lock()
                 self.pending = nil
