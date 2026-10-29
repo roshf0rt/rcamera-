@@ -43,6 +43,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     /// Portrait photos: the f-number and lens the background was drawn with. Nil for other photos. Redevelop changes them.
     public var portraitFNumber: Double?
     public var lensStyle: LensStyle?
+    /// Shadows lifted in Redevelop, 0 (none) to 1; see `ShadowLift`.
+    public var shadowLift: Double
 
     public init(
         id: UUID = UUID(),
@@ -61,7 +63,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         halationLevel: EffectLevel = .medium,
         orientation: DeviceOrientation = .portrait,
         portraitFNumber: Double? = nil,
-        lensStyle: LensStyle? = nil
+        lensStyle: LensStyle? = nil,
+        shadowLift: Double = 0
     ) {
         self.id = id
         self.date = date
@@ -80,11 +83,12 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.orientation = orientation
         self.portraitFNumber = portraitFNumber
         self.lensStyle = lensStyle
+        self.shadowLift = shadowLift
     }
 
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
-        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, portraitFNumber, lensStyle
+        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, portraitFNumber, lensStyle, shadowLift
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -106,6 +110,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         try c.encode(orientation, forKey: .orientation)
         try c.encodeIfPresent(portraitFNumber, forKey: .portraitFNumber)
         try c.encodeIfPresent(lensStyle, forKey: .lensStyle)
+        try c.encode(shadowLift, forKey: .shadowLift)
     }
 
     /// Index files from earlier releases lack newer keys; they keep their captures.
@@ -131,6 +136,16 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         orientation = (try? c.decode(DeviceOrientation.self, forKey: .orientation)) ?? .portrait
         portraitFNumber = try? c.decodeIfPresent(Double.self, forKey: .portraitFNumber)
         lensStyle = try? c.decodeIfPresent(LensStyle.self, forKey: .lensStyle)
+        shadowLift = (try? c.decode(Double.self, forKey: .shadowLift)) ?? 0
+    }
+}
+
+/// Lifting shadows afterwards, in Redevelop: the one use of the dynamic-range curve that is left. The camera has
+/// no such control; a photo that came out dark in the shadows gets them pulled up here.
+public enum ShadowLift {
+    /// The `LookAdjustments.dynamicRange` that lifts the shadows by `lift`, 0 (none) to 1 (the curve's most).
+    public static func dynamicRange(for lift: Double) -> Double {
+        1 + 0.5 * min(max(lift, 0), 1)
     }
 }
 
@@ -217,6 +232,39 @@ public final class CaptureStore {
         }
         if !purged.isEmpty { try saveIndex() }
         return purged
+    }
+
+    /// A capture's RAW file on disk and what it takes.
+    public struct RAWFile: Identifiable, Equatable, Sendable {
+        public var id: UUID
+        public var date: Date
+        public var bytes: Int64
+    }
+
+    /// The RAW files that are on disk, newest first, with their sizes.
+    public func rawFiles() -> [RAWFile] {
+        records.compactMap { record in
+            guard record.hasRAW else { return nil }
+            let path = url(.rawDNG, for: record.id).path
+            guard let size = (try? fileManager.attributesOfItem(atPath: path))?[.size] as? NSNumber else { return nil }
+            return RAWFile(id: record.id, date: record.date, bytes: size.int64Value)
+        }
+    }
+
+    /// Deletes the RAW files of `ids` (every RAW when nil); the photos stay. Returns the bytes freed.
+    @discardableResult
+    public func removeRAW(ids: Set<UUID>? = nil) throws -> Int64 {
+        var freed: Int64 = 0
+        var changed = false
+        for index in records.indices where records[index].hasRAW && (ids?.contains(records[index].id) ?? true) {
+            let url = self.url(.rawDNG, for: records[index].id)
+            if let size = (try? fileManager.attributesOfItem(atPath: url.path))?[.size] as? NSNumber { freed += size.int64Value }
+            if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
+            records[index].hasRAW = false
+            changed = true
+        }
+        if changed { try saveIndex() }
+        return freed
     }
 
     public func daysUntilRAWExpires(_ record: CaptureRecord, now: Date = Date()) -> Int {

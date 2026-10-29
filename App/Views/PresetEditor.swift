@@ -3,7 +3,7 @@ import PhotosUI
 import SwiftUI
 
 /// The preset editor, in the three tabs of mood.camera: Emulation (strength and colour balance), Quality
-/// (grain, halation, fringing, bloom, film speed) and Tone (contrast, dynamic range, curve, fade, mute, contrast
+/// (grain, halation, fringing, bloom, film speed) and Tone (contrast, curve, fade, mute, contrast
 /// curves). A live preview on top shows the look on a test picture; holding it shows the picture untouched.
 /// Every change is saved as soon as the control is released.
 struct PresetEditorView: View {
@@ -49,7 +49,7 @@ struct PresetEditorView: View {
     @State private var confirmDelete = false
     @Environment(\.dismiss) private var dismiss
 
-    /// Built-in presets only change film speed, contrast curve and dynamic range, as in mood.
+    /// Built-in presets only change film speed and contrast curve, as in mood.
     private var isCustom: Bool { current.isCustom }
 
     private var preset: Preset? { model.preset(id: presetID) }
@@ -137,7 +137,7 @@ struct PresetEditorView: View {
         adjustments = preset.adjustments
     }
 
-    /// Built-in preset: the Quality and Tone wheels and dynamic range, like mood's preset screen.
+    /// Built-in preset: the Quality and Tone wheels, like mood's preset screen.
     private var builtInControls: some View {
         ScrollView {
             VStack(spacing: 10) {
@@ -149,10 +149,6 @@ struct PresetEditorView: View {
                 }
                 WheelPicker(title: "Tone", labels: ContrastCurve.allCases.map { $0.label.uppercased() }, index: selectedCurve) { index in
                     ContrastCurve.allCases[index].apply(to: &adjustments)
-                    save()
-                }
-                WheelPicker(title: "Dynamic range", labels: Self.rangeLabels, index: rangeIndex) { index in
-                    adjustments.dynamicRange = Self.rangeValues[index]
                     save()
                 }
                 grid {
@@ -181,13 +177,6 @@ struct PresetEditorView: View {
             .padding(.bottom, 30)
         }
         .scrollIndicators(.hidden)
-    }
-
-    static let rangeLabels = ["ZERO", "LOW", "MED", "HIGH", "EXT+"]
-    static let rangeValues = [0, 1.0 / 3, 2.0 / 3, 1, 1.5]
-
-    private var rangeIndex: Int? {
-        Self.rangeValues.firstIndex { abs($0 - adjustments.dynamicRange) < 0.01 }
     }
 
     /// Custom preset: every regulator, in mood's three tabs.
@@ -469,7 +458,6 @@ struct PresetEditorView: View {
             }
             grid {
                 continuousTile("Contrast", value: $adjustments.contrast, range: 0.5 ... 1.5) { String(format: "%.2f×", $0) }
-                steppedTile("Dynamic range", labels: ["ZERO", "LOW", "MED", "HIGH", "EXT+"], values: [0, 1.0 / 3, 2.0 / 3, 1, 1.5], value: $adjustments.dynamicRange)
                 continuousTile("Shadows", value: $adjustments.shadows, range: -1 ... 1) { Regulator.shadows.format($0) }
                 continuousTile("Midtones", value: $adjustments.midpoint, range: -1 ... 1) { Regulator.midpoint.format($0) }
                 continuousTile("Highlights", value: $adjustments.highlights, range: -1 ... 1) { Regulator.highlights.format($0) }

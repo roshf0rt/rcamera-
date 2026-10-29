@@ -95,6 +95,7 @@ struct SettingsView: View {
                             ForEach(RAWFormat.allCases, id: \.self) { Text($0.label).tag($0) }
                         }
                     }
+                    NavigationLink("RAW storage") { RAWStorageView() }
                     Toggle("Save location", isOn: model.binding(\.savesLocation))
                     Toggle("Volume buttons take photos", isOn: model.binding(\.volumeShutter))
                         .onChange(of: model.settings.volumeShutter) { _, on in
@@ -148,5 +149,73 @@ struct SettingsView: View {
         }
         .preferredColorScheme(.dark)
         .tint(Theme.accent)
+    }
+}
+
+/// The RAW files the app keeps (30 days, then they go by themselves): what each takes, and a way to clear them.
+/// The photos stay; a photo without its RAW is redeveloped from the camera image.
+struct RAWStorageView: View {
+    @Environment(AppModel.self) private var model
+    @State private var files: [CaptureStore.RAWFile] = []
+    @State private var confirmClear = false
+
+    private var total: Int64 { files.reduce(0) { $0 + $1.bytes } }
+
+    private static func size(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    Text("RAW files")
+                    Spacer()
+                    Text("\(files.count) · \(Self.size(total))").foregroundStyle(Theme.secondaryText)
+                }
+                Button("Delete all RAW", role: .destructive) { confirmClear = true }
+                    .disabled(files.isEmpty)
+            } footer: {
+                Text("RAW is kept for \(CaptureStore.rawRetentionDays) days. Deleting it keeps the photos; they can still be redeveloped from the camera image.")
+            }
+            if !files.isEmpty {
+                Section("Files") {
+                    ForEach(files) { file in
+                        HStack(spacing: 12) {
+                            if let record = model.captures.first(where: { $0.id == file.id }) {
+                                CaptureThumbnail(record: record)
+                                    .frame(width: 44, height: 44)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(CaptureViewer.dateText(file.date))
+                                if let record = model.captures.first(where: { $0.id == file.id }) {
+                                    Text("\(max(model.daysUntilRAWExpires(record), 0)) days left")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Theme.secondaryText)
+                                }
+                            }
+                            Spacer()
+                            Text(Self.size(file.bytes)).foregroundStyle(Theme.secondaryText)
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                model.removeRAW(ids: [file.id])
+                                files = model.rawFiles()
+                            } label: { Label("Delete", systemImage: "trash") }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("RAW storage")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { files = model.rawFiles() }
+        .confirmationDialog("Delete all RAW files?", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("Delete \(Self.size(total))", role: .destructive) {
+                model.removeRAW()
+                files = model.rawFiles()
+            }
+        }
     }
 }

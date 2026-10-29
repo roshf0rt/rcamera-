@@ -16,6 +16,8 @@ struct RedevelopView: View {
     @State private var pushPull = 0.0
     @State private var grainLevel = GrainLevel.medium
     @State private var halationLevel = EffectLevel.medium
+    /// Shadows pulled up afterwards, 0...1.
+    @State private var shadowLift = 0.0
     /// Portrait photos: the aperture and lens the background is drawn with, and the depth it is drawn from.
     @State private var fNumber = PortraitAperture.standard
     @State private var lens = LensStyle.solis
@@ -37,11 +39,12 @@ struct RedevelopView: View {
             || abs(pushPull - record.evPushPull) > 0.01
             || grainLevel != record.grainLevel
             || halationLevel != record.halationLevel
+            || abs(shadowLift - record.shadowLift) > 0.01
             || (record.lensStyle != nil && (fNumber != record.portraitFNumber || lens != record.lensStyle))
     }
 
     private var renderKey: String {
-        "\(presetID)|\(pushPull)|\(grainLevel)|\(halationLevel)|\(source != nil)|\(fNumber)|\(lens)|\(depth != nil)"
+        "\(presetID)|\(pushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(source != nil)|\(fNumber)|\(lens)|\(depth != nil)"
     }
 
     var body: some View {
@@ -51,6 +54,7 @@ struct RedevelopView: View {
             effects.padding(.top, 12)
             if record?.lensStyle != nil { portraitControls.padding(.top, 10) }
             presetRow.padding(.top, 10)
+            shadowsControl.padding(.top, 12)
             evControl.padding(.top, 14)
             footer
         }
@@ -171,6 +175,19 @@ struct RedevelopView: View {
         .frame(height: 96)
     }
 
+    /// Pulls the shadows up. The camera has no such control: it is for the photo that came out dark.
+    private var shadowsControl: some View {
+        HStack(spacing: 14) {
+            Text("Shadows").font(.system(size: 17)).foregroundStyle(.white)
+            Slider(value: $shadowLift, in: 0 ... 1)
+                .tint(Theme.accent)
+            Text(String(format: "%.0f%%", shadowLift * 100))
+                .font(.system(size: 17, design: .monospaced))
+                .foregroundStyle(shadowLift > 0 ? Theme.accent : Theme.secondaryText)
+                .frame(width: 52, alignment: .trailing)
+        }
+    }
+
     private var evControl: some View {
         VStack(spacing: 10) {
             HStack {
@@ -204,6 +221,7 @@ struct RedevelopView: View {
         pushPull = record.evPushPull
         grainLevel = record.grainLevel
         halationLevel = record.halationLevel
+        shadowLift = record.shadowLift
         fNumber = record.portraitFNumber ?? PortraitAperture.standard
         lens = record.lensStyle ?? .solis
         loaded = true
@@ -232,7 +250,7 @@ struct RedevelopView: View {
         }
         guard let base else { return }
 
-        var look = await model.leveledLook(for: preset, grain: grainLevel, halation: halationLevel)
+        var look = await model.leveledLook(for: preset, grain: grainLevel, halation: halationLevel, shadowLift: shadowLift)
         let pass = depth.flatMap {
             PhotoPipeline.portraitPass(
                 PhotoPipeline.PortraitDepth(map: $0, fNumber: fNumber, lens: lens),
@@ -274,7 +292,8 @@ struct RedevelopView: View {
             grain: grainLevel,
             halation: halationLevel,
             portraitFNumber: fNumber,
-            lens: lens
+            lens: lens,
+            shadowLift: shadowLift
         )
         isSaving = false
         if ok { dismiss() }

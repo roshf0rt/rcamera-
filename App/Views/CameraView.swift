@@ -12,7 +12,6 @@ struct CameraView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showOptions = false
-    @State private var showDynamicRange = false
     /// The pro tools, opened from the PRO row of the options shade.
     @State private var showPro = false
     /// The aperture or lens dial over the picture in portrait mode.
@@ -143,9 +142,6 @@ struct CameraView: View {
                         mode: engine.mode,
                         settings: model.settings,
                         update: { change in model.updateSettings(change) },
-                        openDynamicRange: {
-                            withAnimation(Self.panelSpring) { showOptions = false; showDynamicRange = true }
-                        },
                         openPro: {
                             withAnimation(Self.panelSpring) { showOptions = false; showPro = true }
                         },
@@ -169,15 +165,6 @@ struct CameraView: View {
                     .transition(.blurReveal)
                 }
 
-                if showDynamicRange {
-                    DynamicRangeStrip(selected: model.settings.dynamicRange) { choice in
-                        model.updateSettings { $0.dynamicRange = choice }
-                        withAnimation(Self.panelSpring) { showDynamicRange = false }
-                    }
-                    .frame(width: geo.size.width)
-                    .offset(y: topBarHeight + 6)
-                    .transition(.blurReveal)
-                }
             }
             .animation(.easeInOut(duration: 0.22), value: engine.mode)
         }
@@ -313,7 +300,6 @@ struct CameraView: View {
                     showOptions = !(showOptions || showPro)
                     showPro = false
                     showPresets = false
-                    showDynamicRange = false
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -401,7 +387,6 @@ struct CameraView: View {
             dial = which
             showPresets = false
             showOptions = false
-            showDynamicRange = false
             showPro = false
         }
         dialTouch += 1
@@ -526,8 +511,8 @@ struct CameraView: View {
         .contentShape(Rectangle())
         .simultaneousGesture(
             SpatialTapGesture().onEnded { value in
-                if showOptions || showPresets || showDynamicRange || showPro {
-                    withAnimation(Self.panelSpring) { showOptions = false; showPresets = false; showDynamicRange = false; showPro = false }
+                if showOptions || showPresets || showPro {
+                    withAnimation(Self.panelSpring) { showOptions = false; showPresets = false; showPro = false }
                     return
                 }
                 focusMarker = FocusPoint(location: value.location)
@@ -564,8 +549,8 @@ struct CameraView: View {
         if abs(dy) > abs(dx) * 1.4, abs(dy) > 60 {
             if dy < 0 {
                 // Up: closes the shade if it is down, otherwise brings up the presets.
-                if showOptions || showDynamicRange || showPro {
-                    withAnimation(Self.panelSpring) { showOptions = false; showDynamicRange = false; showPro = false }
+                if showOptions || showPro {
+                    withAnimation(Self.panelSpring) { showOptions = false; showPro = false }
                 } else if !showPresets {
                     withAnimation(Self.panelSpring) { showPresets = true }
                 }
@@ -573,7 +558,7 @@ struct CameraView: View {
                 withAnimation(Self.panelSpring) { showPresets = false }
             } else {
                 // Down: pulls the shade with the camera options from the top.
-                withAnimation(Self.panelSpring) { showOptions = true; showDynamicRange = false; showPro = false }
+                withAnimation(Self.panelSpring) { showOptions = true; showPro = false }
             }
         } else if abs(dx) > abs(dy) * 1.4, abs(dx) > 70, !engine.isRecording, !engine.isSwitchingMode {
             engine.selectMode(engine.mode == .photo ? .video : .photo)

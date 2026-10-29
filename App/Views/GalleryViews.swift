@@ -45,6 +45,10 @@ struct GalleryView: View {
     @State private var pullDown: CGFloat = 0
     /// The grid is scrolled to its top, so a downward drag closes instead of scrolling.
     @State private var atTop = true
+    /// Several captures being picked for sharing, favouriting or deleting.
+    @State private var isSelecting = false
+    @State private var picked: Set<UUID> = []
+    @State private var confirmDeletePicked = false
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
@@ -58,7 +62,7 @@ struct GalleryView: View {
                     .clipShape(RoundedRectangle(cornerRadius: min(pullDown / 3, 38), style: .continuous))
                     .scaleEffect(1 - min(pullDown / geo.size.height, 1) * 0.12, anchor: .top)
                     .offset(y: pullDown)
-                    .simultaneousGesture(pullToClose(height: geo.size.height), including: selection == nil ? .all : .subviews)
+                    .simultaneousGesture(pullToClose(height: geo.size.height), including: selection == nil && !isSelecting ? .all : .subviews)
                 viewer
             }
         }
@@ -125,12 +129,18 @@ struct GalleryView: View {
                         LazyVGrid(columns: columns, spacing: 3) {
                             ForEach(model.captures) { record in
                                 Button {
-                                    withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { selection = record.id }
+                                    if isSelecting {
+                                        if picked.contains(record.id) { picked.remove(record.id) } else { picked.insert(record.id) }
+                                    } else {
+                                        withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { selection = record.id }
+                                    }
                                 } label: {
                                     Color.clear
                                         .aspectRatio(1, contentMode: .fit)
                                         .overlay { CaptureThumbnail(record: record) }
+                                        .overlay { if picked.contains(record.id) { Color.black.opacity(0.35) } }
                                         .overlay(alignment: .bottomLeading) { badges(for: record) }
+                                        .overlay(alignment: .topTrailing) { if isSelecting { pickMark(picked.contains(record.id)) } }
                                         .clipped()
                                 }
                                 .buttonStyle(PressableStyle(scale: 0.96))
@@ -163,14 +173,79 @@ struct GalleryView: View {
                     pendingDelete = nil
                 }
             }
-            .navigationTitle("Library")
+            .confirmationDialog(
+                "Delete \(picked.count) \(picked.count == 1 ? "capture" : "captures")?",
+                isPresented: $confirmDeletePicked,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) { deletePicked() }
+            }
+            .navigationTitle(isSelecting ? (picked.isEmpty ? "Select items" : "\(picked.count) selected") : "Library")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: { Image(systemName: "chevron.down") }
+                    if isSelecting {
+                        Button("Cancel") { endSelecting() }
+                    } else {
+                        Button { dismiss() } label: { Image(systemName: "chevron.down") }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if isSelecting {
+                        Button(picked.count == model.captures.count ? "None" : "All") {
+                            picked = picked.count == model.captures.count ? [] : Set(model.captures.map(\.id))
+                        }
+                    } else if !model.captures.isEmpty {
+                        Button("Select") { isSelecting = true }
+                    }
+                }
+                ToolbarItemGroup(placement: .bottomBar) {
+                    if isSelecting {
+                        ShareLink(items: pickedRecords.map { model.url($0.kind == .video ? .video : .processed, for: $0) }) {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .disabled(picked.isEmpty)
+                        Spacer()
+                        Button { favoritePicked() } label: {
+                            Image(systemName: pickedRecords.allSatisfy(\.isFavorite) && !picked.isEmpty ? "heart.slash" : "heart")
+                        }
+                        .disabled(picked.isEmpty)
+                        Spacer()
+                        Button(role: .destructive) { confirmDeletePicked = true } label: { Image(systemName: "trash") }
+                            .disabled(picked.isEmpty)
+                    }
                 }
             }
         }
+    }
+
+    private var pickedRecords: [CaptureRecord] { model.captures.filter { picked.contains($0.id) } }
+
+    private func endSelecting() {
+        isSelecting = false
+        picked = []
+    }
+
+    private func deletePicked() {
+        for record in pickedRecords { model.delete(record) }
+        endSelecting()
+    }
+
+    /// Favourites them all, or when they all already are, takes the heart away.
+    private func favoritePicked() {
+        let records = pickedRecords
+        let make = !records.allSatisfy(\.isFavorite)
+        for record in records where record.isFavorite != make { model.toggleFavorite(record) }
+    }
+
+    private func pickMark(_ on: Bool) -> some View {
+        ZStack {
+            Circle().fill(on ? Theme.accent : Color.black.opacity(0.35))
+            Circle().strokeBorder(.white, lineWidth: 1.5)
+            if on { Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.black) }
+        }
+        .frame(width: 22, height: 22)
+        .padding(6)
     }
 
     private struct GridTopKey: PreferenceKey {

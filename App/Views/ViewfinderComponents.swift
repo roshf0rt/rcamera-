@@ -55,7 +55,10 @@ struct LevelOverlay: View {
     let roll: Double
 
     var body: some View {
-        let isLevel = abs(roll) < 0.02
+        // Level is measured from the nearest quarter turn, so a phone held level on its side lights too.
+        let quarter = Double.pi / 2
+        let off = roll - (roll / quarter).rounded() * quarter
+        let isLevel = abs(off) < 0.02
         Capsule()
             .fill(isLevel ? Theme.accent : .white.opacity(0.8))
             .frame(width: 120, height: 2)
@@ -272,17 +275,16 @@ struct EVBubble: View {
 
 /// The panel under the "..." button, a grid of fixed-width cells so labels never wrap, and below it the
 /// PRO row that opens the tools for those who want them (`ProPanel`).
-/// Photo: Flash, Timer, Aspect, Frame, Range, Portrait. Video: FPS, Resolution, Stabilization.
+/// Photo: Flash, Timer, Aspect, Frame, Portrait. Video: FPS, Resolution, Stabilization.
 struct OptionsPanel: View {
     let mode: CaptureMode
     let settings: AppSettings
     let update: ((inout AppSettings) -> Void) -> Void
-    let openDynamicRange: () -> Void
     let openPro: () -> Void
     /// Frame rates the camera runs, by video width; 120 appears only where the camera has it.
     var frameRates: [Int: [Int]] = [:]
 
-    /// Six photo options sit three by two, three video options in one row, so no cell is left empty.
+    /// Photo options sit three to a row, the three video options in one row.
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 4), count: 3)
     }
@@ -319,18 +321,8 @@ struct OptionsPanel: View {
         option(title: settings.frame == .off ? "Frame" : settings.frame.label, active: settings.frame != .off, action: { update { $0.frame = $0.frame.next } }) {
             Image(systemName: "rectangle.inset.filled").font(.system(size: 22))
         }
-        dynamicRangeOption
         option(title: "Portrait", active: settings.portrait, action: { update { $0.portrait.toggle() } }) {
             Image(systemName: "person.crop.circle").font(.system(size: 22))
-        }
-    }
-
-    private var dynamicRangeOption: some View {
-        option(title: "Range", active: settings.dynamicRange != .preset, action: openDynamicRange) {
-            VStack(spacing: 1) {
-                Text("DR").font(.system(size: 15, weight: .bold))
-                Text(settings.dynamicRange.label).font(.system(size: 8, weight: .semibold))
-            }
         }
     }
 
@@ -415,37 +407,6 @@ struct OptionsPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-/// The strip under the top bar for the dynamic-range control: one tap picks a step. Equal cells, one line.
-struct DynamicRangeStrip: View {
-    let selected: DynamicRangeChoice
-    let pick: (DynamicRangeChoice) -> Void
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(DynamicRangeChoice.allCases, id: \.self) { choice in
-                Button { pick(choice) } label: {
-                    Text(choice.label)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .foregroundStyle(choice == selected ? Theme.accent : .white.opacity(0.7))
-                        .frame(maxWidth: .infinity, minHeight: 36)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(choice == selected ? Color.white.opacity(0.14) : .clear)
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(6)
-        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .padding(.horizontal, 10)
     }
 }
 

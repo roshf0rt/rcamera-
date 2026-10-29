@@ -164,6 +164,40 @@ final class CaptureStoreTests: XCTestCase {
         XCTAssertEqual(store.record(id: expired.id)?.hasRAW, false)
     }
 
+    func testRAWFilesAreListedWithSizesAndCanBeCleared() throws {
+        let (store, _) = try makeStore()
+        let first = CaptureRecord(date: Date(timeIntervalSinceNow: -10), kind: .photo, presetID: "preset-1", hasRAW: true)
+        let second = CaptureRecord(date: Date(), kind: .photo, presetID: "preset-1", hasRAW: true)
+        let plain = CaptureRecord(kind: .photo, presetID: "preset-1")
+        try store.write(Data(count: 1_000), as: .rawDNG, for: first.id)
+        try store.write(Data(count: 3_000), as: .rawDNG, for: second.id)
+        for record in [first, second, plain] {
+            try store.write(Data([2]), as: .processed, for: record.id)
+            try store.add(record)
+        }
+
+        XCTAssertEqual(store.rawFiles().map(\.id), [second.id, first.id], "newest first, only captures with RAW")
+        XCTAssertEqual(store.rawFiles().map(\.bytes), [3_000, 1_000])
+
+        XCTAssertEqual(try store.removeRAW(ids: [first.id]), 1_000)
+        XCTAssertFalse(store.fileExists(.rawDNG, for: first.id))
+        XCTAssertEqual(store.record(id: first.id)?.hasRAW, false)
+        XCTAssertTrue(store.fileExists(.processed, for: first.id), "the photo stays")
+        XCTAssertTrue(store.fileExists(.rawDNG, for: second.id))
+
+        XCTAssertEqual(try store.removeRAW(), 3_000)
+        XCTAssertTrue(store.rawFiles().isEmpty)
+    }
+
+    func testShadowsLiftedInRedevelopSurviveAReload() throws {
+        let (store, url) = try makeStore()
+        try store.add(CaptureRecord(kind: .photo, presetID: "preset-1", shadowLift: 0.4))
+        XCTAssertEqual(try CaptureStore(directory: url).records.first?.shadowLift, 0.4)
+        XCTAssertEqual(ShadowLift.dynamicRange(for: 0), 1)
+        XCTAssertEqual(ShadowLift.dynamicRange(for: 1), 1.5)
+        XCTAssertEqual(ShadowLift.dynamicRange(for: 7), 1.5, "clamped")
+    }
+
     func testDaysUntilRAWExpires() throws {
         let (store, _) = try makeStore()
         let now = Date()

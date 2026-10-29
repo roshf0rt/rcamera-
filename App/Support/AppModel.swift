@@ -221,7 +221,6 @@ final class AppModel {
         guard updated != settings else { return }
         let togglesChanged = updated.grainLevel != settings.grainLevel
             || updated.halationLevel != settings.halationLevel
-            || updated.dynamicRange != settings.dynamicRange
         settings = updated
         try? settingsStore.save(updated)
         engine.update(settings: updated)
@@ -344,7 +343,12 @@ final class AppModel {
             }
         }.value
         if let cached = lookCache[key] { return cached }
-        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation, adjustments: preset.adjustments)
+        var adjustments = preset.adjustments
+        // The camera has no dynamic-range control: shadows are lifted afterwards, in Redevelop.
+        adjustments.dynamicRange = 1
+        // LUT strength is a photo setting; video and Apple Log always take the whole LUT.
+        if slot != .photo { adjustments.filmStrength = 1 }
+        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation, adjustments: adjustments)
         lookCache[key] = look
         return look
     }
@@ -359,26 +363,25 @@ final class AppModel {
     }
 
     /// The preset's look with grain and halation at the given levels, as on the camera screen.
-    func leveledLook(for preset: Preset, grain: GrainLevel, halation: EffectLevel) async -> FilmLook {
+    func leveledLook(for preset: Preset, grain: GrainLevel, halation: EffectLevel, shadowLift: Double = 0) async -> FilmLook {
         let base = await baseLook(for: preset)
-        return base.with(
+        let look = base.with(
             grain: min(1, base.grain * grain.multiplier),
             halation: base.halation * halation.multiplier,
             adjustments: base.adjustments
         )
+        guard shadowLift > 0 else { return look }
+        return look.with { $0.dynamicRange = ShadowLift.dynamicRange(for: shadowLift) }
     }
 
     /// The preset's look with the camera-screen grain and halation toggles applied.
     func cameraLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
         let base = await baseLook(for: preset, slot: slot)
-        let look = base.with(
+        return base.with(
             grain: min(1, base.grain * settings.grainLevel.multiplier),
             halation: base.halation * settings.halationLevel.multiplier,
             adjustments: base.adjustments
         )
-        // The dynamic-range strip is a photo control; video keeps the preset's own range.
-        guard slot == .photo, let range = settings.dynamicRange.value else { return look }
-        return look.with { $0.dynamicRange = range }
     }
 
     /// Resolves the selected preset in the background, then hands it to the camera. The old look stays on
@@ -412,6 +415,16 @@ final class AppModel {
 
     func fileExists(_ file: CaptureFile, for record: CaptureRecord) -> Bool {
         captureStore.fileExists(file, for: record.id)
+    }
+
+    func rawFiles() -> [CaptureStore.RAWFile] { captureStore.rawFiles() }
+
+    /// Deletes RAW files (all when `ids` is nil); photos stay and redevelop from the camera image.
+    @discardableResult
+    func removeRAW(ids: Set<UUID>? = nil) -> Int64 {
+        let freed = (try? captureStore.removeRAW(ids: ids)) ?? 0
+        captures = captureStore.records
+        return freed
     }
 
     func daysUntilRAWExpires(_ record: CaptureRecord) -> Int {
@@ -583,7 +596,8 @@ final class AppModel {
         grain: GrainLevel,
         halation: EffectLevel,
         portraitFNumber: Double,
-        lens: LensStyle
+        lens: LensStyle,
+        shadowLift: Double = 0
     ) async -> Bool {
         guard let preset = preset(id: presetID),
               let source = await redevelopSource(for: record)
@@ -591,7 +605,7 @@ final class AppModel {
         let portrait = await depthMap(for: record).map {
             PhotoPipeline.PortraitDepth(map: $0, fNumber: portraitFNumber, lens: lens)
         }
-        var look = await leveledLook(for: preset, grain: grain, halation: halation)
+        var look = await leveledLook(for: preset, grain: grain, halation: halation, shadowLift: shadowLift)
         if portrait != nil { look = look.with { lens.apply(to: &$0) } }
         let aspect = record.aspect
         let mirror = record.mirrored
@@ -621,6 +635,7 @@ final class AppModel {
             updated.evPushPull = pushPull
             updated.grainLevel = grain
             updated.halationLevel = halation
+            updated.shadowLift = shadowLift
             if portrait != nil {
                 updated.portraitFNumber = portraitFNumber
                 updated.lensStyle = lens
