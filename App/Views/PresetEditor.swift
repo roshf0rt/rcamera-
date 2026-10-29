@@ -29,6 +29,9 @@ struct PresetEditorView: View {
     @State private var name = ""
     @State private var grain = 0.0
     @State private var halation = 0.0
+    /// What grain and halation were when the preset opened: where a double tap puts their sliders back.
+    @State private var openingGrain = 0.0
+    @State private var openingHalation = 0.0
     @State private var adjustments = LookAdjustments.neutral
     @State private var loaded = false
     @State private var lut: LUT3D?
@@ -134,6 +137,8 @@ struct PresetEditorView: View {
         name = preset.name
         grain = preset.grain
         halation = preset.halation
+        openingGrain = preset.grain
+        openingHalation = preset.halation
         adjustments = preset.adjustments
     }
 
@@ -152,8 +157,8 @@ struct PresetEditorView: View {
                     save()
                 }
                 grid {
-                    continuousTile("LUT strength", value: $adjustments.filmStrength, range: 0 ... 1) { String(format: "%.0f%%", $0 * 100) }
-                    continuousTile("Saturation", value: $adjustments.saturation, range: 0 ... 2) { String(format: "%.2f×", $0) }
+                    continuousTile("LUT strength", value: $adjustments.filmStrength, range: 0 ... 1, reset: LookAdjustments.neutral.filmStrength) { String(format: "%.0f%%", $0 * 100) }
+                    continuousTile("Saturation", value: $adjustments.saturation, range: 0 ... 2, reset: LookAdjustments.neutral.saturation) { String(format: "%.2f×", $0) }
                 }
                 cardSection
                     .padding(.top, 6)
@@ -413,11 +418,11 @@ struct PresetEditorView: View {
     private var emulation: some View {
         VStack(alignment: .leading, spacing: 18) {
             grid {
-                continuousTile("Strength", value: $adjustments.filmStrength, range: 0 ... 1) { String(format: "%.0f%%", $0 * 100) }
-                continuousTile("Saturation", value: $adjustments.saturation, range: 0 ... 2) { String(format: "%.2f×", $0) }
-                continuousTile("Temp", value: $adjustments.temp, range: -1 ... 1) { Regulator.temp.format($0) }
-                continuousTile("Tint", value: $adjustments.tint, range: -1 ... 1) { Regulator.tint.format($0) }
-                continuousTile("Hue", value: $adjustments.hue, range: -30 ... 30) { Regulator.hue.format($0) }
+                continuousTile("Strength", value: $adjustments.filmStrength, range: 0 ... 1, reset: LookAdjustments.neutral.filmStrength) { String(format: "%.0f%%", $0 * 100) }
+                continuousTile("Saturation", value: $adjustments.saturation, range: 0 ... 2, reset: LookAdjustments.neutral.saturation) { String(format: "%.2f×", $0) }
+                continuousTile("Temp", value: $adjustments.temp, range: -1 ... 1, reset: LookAdjustments.neutral.temp) { Regulator.temp.format($0) }
+                continuousTile("Tint", value: $adjustments.tint, range: -1 ... 1, reset: LookAdjustments.neutral.tint) { Regulator.tint.format($0) }
+                continuousTile("Hue", value: $adjustments.hue, range: -30 ... 30, reset: LookAdjustments.neutral.hue) { Regulator.hue.format($0) }
             }
             section("Colour chart") {
                 ColourChartCard(look: adjustments, lut: lut)
@@ -438,12 +443,12 @@ struct PresetEditorView: View {
                 }
             }
             grid {
-                continuousTile("Grain level", value: $grain, range: 0 ... 1) { String(Int(($0 * 10).rounded())) }
-                steppedTile("Grain size", labels: ["Fine", "Medium", "Coarse", "Heavy"], values: [1, 2, 3, 4], value: $adjustments.grainSize)
-                steppedTile("Halation", labels: ["Off", "Low", "Medium", "High"], values: [0, 1.0 / 3, 2.0 / 3, 1], value: $halation)
-                steppedTile("Aberration", labels: ["Off", "Low", "Medium", "High"], values: [0, 1, 2, 4], value: $adjustments.chromaticAberration)
-                steppedTile("Bloom", labels: ["Off", "Low", "Medium", "High"], values: [0, 1.0 / 3, 2.0 / 3, 1], value: $adjustments.bloom)
-                continuousTile("Sharpness", value: $adjustments.sharpness, range: -0.5 ... 0.5) { Regulator.sharpness.format($0) }
+                continuousTile("Grain level", value: $grain, range: 0 ... 1, reset: openingGrain) { String(Int(($0 * 10).rounded())) }
+                steppedTile("Grain size", labels: ["Fine", "Medium", "Coarse", "Heavy"], values: [1, 2, 3, 4], value: $adjustments.grainSize, reset: LookAdjustments.neutral.grainSize)
+                steppedTile("Halation", labels: ["Off", "Low", "Medium", "High"], values: [0, 1.0 / 3, 2.0 / 3, 1], value: $halation, reset: openingHalation)
+                steppedTile("Aberration", labels: ["Off", "Low", "Medium", "High"], values: [0, 1, 2, 4], value: $adjustments.chromaticAberration, reset: LookAdjustments.neutral.chromaticAberration)
+                steppedTile("Bloom", labels: ["Off", "Low", "Medium", "High"], values: [0, 1.0 / 3, 2.0 / 3, 1], value: $adjustments.bloom, reset: LookAdjustments.neutral.bloom)
+                continuousTile("Sharpness", value: $adjustments.sharpness, range: -0.5 ... 0.5, reset: LookAdjustments.neutral.sharpness) { Regulator.sharpness.format($0) }
             }
         }
     }
@@ -457,13 +462,13 @@ struct PresetEditorView: View {
                 }
             }
             grid {
-                continuousTile("Contrast", value: $adjustments.contrast, range: 0.5 ... 1.5) { String(format: "%.2f×", $0) }
-                continuousTile("Shadows", value: $adjustments.shadows, range: -1 ... 1) { Regulator.shadows.format($0) }
-                continuousTile("Midtones", value: $adjustments.midpoint, range: -1 ... 1) { Regulator.midpoint.format($0) }
-                continuousTile("Highlights", value: $adjustments.highlights, range: -1 ... 1) { Regulator.highlights.format($0) }
-                continuousTile("Fade", value: $adjustments.fade, range: 0 ... 1) { String(format: "%.0f%%", $0 * 100) }
-                continuousTile("Mute", value: $adjustments.mute, range: 0 ... 1) { String(format: "%.0f%%", $0 * 100) }
-                continuousTile("Brightness", value: $adjustments.postExposure, range: -1 ... 1) { Regulator.postExposure.format($0) }
+                continuousTile("Contrast", value: $adjustments.contrast, range: 0.5 ... 1.5, reset: LookAdjustments.neutral.contrast) { String(format: "%.2f×", $0) }
+                continuousTile("Shadows", value: $adjustments.shadows, range: -1 ... 1, reset: LookAdjustments.neutral.shadows) { Regulator.shadows.format($0) }
+                continuousTile("Midtones", value: $adjustments.midpoint, range: -1 ... 1, reset: LookAdjustments.neutral.midpoint) { Regulator.midpoint.format($0) }
+                continuousTile("Highlights", value: $adjustments.highlights, range: -1 ... 1, reset: LookAdjustments.neutral.highlights) { Regulator.highlights.format($0) }
+                continuousTile("Fade", value: $adjustments.fade, range: 0 ... 1, reset: LookAdjustments.neutral.fade) { String(format: "%.0f%%", $0 * 100) }
+                continuousTile("Mute", value: $adjustments.mute, range: 0 ... 1, reset: LookAdjustments.neutral.mute) { String(format: "%.0f%%", $0 * 100) }
+                continuousTile("Brightness", value: $adjustments.postExposure, range: -1 ... 1, reset: LookAdjustments.neutral.postExposure) { Regulator.postExposure.format($0) }
             }
         }
     }
@@ -589,9 +594,13 @@ struct PresetEditorView: View {
         _ title: String,
         value: Binding<Double>,
         range: ClosedRange<Double>,
+        reset: Double,
         format: @escaping (Double) -> String
     ) -> some View {
-        DialTile(title: title, valueText: format(value.wrappedValue)) {
+        DialTile(title: title, valueText: format(value.wrappedValue), reset: {
+            value.wrappedValue = reset
+            save()
+        }) {
             Slider(value: value, in: range) { editing in
                 if !editing { save() }
             }
@@ -599,7 +608,7 @@ struct PresetEditorView: View {
     }
 
     /// Stops the slider on fixed values, the way mood's Off / Low / Medium / High controls do.
-    private func steppedTile(_ title: String, labels: [String], values: [Double], value: Binding<Double>) -> some View {
+    private func steppedTile(_ title: String, labels: [String], values: [Double], value: Binding<Double>, reset: Double) -> some View {
         let index = Binding<Double>(
             get: {
                 let current = value.wrappedValue
@@ -609,7 +618,10 @@ struct PresetEditorView: View {
             set: { value.wrappedValue = values[min(max(Int($0.rounded()), 0), values.count - 1)] }
         )
         let text = labels[min(max(Int(index.wrappedValue.rounded()), 0), labels.count - 1)]
-        return DialTile(title: title, valueText: text) {
+        return DialTile(title: title, valueText: text, reset: {
+            value.wrappedValue = reset
+            save()
+        }) {
             Slider(value: index, in: 0 ... Double(values.count - 1), step: 1) { editing in
                 if !editing { save() }
             }
@@ -663,6 +675,8 @@ struct PresetEditorView: View {
 struct DialTile<Control: View>: View {
     let title: String
     let valueText: String
+    /// A double tap on the tile puts the slider back where it starts.
+    var reset: (() -> Void)?
     @ViewBuilder let control: () -> Control
 
     var body: some View {
@@ -682,6 +696,12 @@ struct DialTile<Control: View>: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.chrome.opacity(0.55)))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            guard let reset else { return }
+            withAnimation(.smooth(duration: 0.25)) { reset() }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        })
     }
 }
 

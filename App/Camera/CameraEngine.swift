@@ -79,6 +79,8 @@ final class CameraEngine {
     @ObservationIgnored private var settings: AppSettings
     @ObservationIgnored private var looks = Looks()
     @ObservationIgnored private var appleLogRequested = false
+    /// The last note about Apple Log missing from a frame rate, so it is shown once and not on every change.
+    @ObservationIgnored private var lastLogNote: String?
     @ObservationIgnored private var focalLengths = ZoomStop.defaultFocalLengths
     @ObservationIgnored private var digitalZoom = 1.0
     @ObservationIgnored private var recordingTimer: Timer?
@@ -199,7 +201,7 @@ final class CameraEngine {
         }
         // The back cameras are one virtual device, so changing lens is only a zoom change. Apply it at once
         // instead of waiting for the session to be reconfigured.
-        controller.setZoom(lens: stop.lens, digital: stop.digitalZoom)
+        controller.setZoom(lens: stop.lens, digital: stop.digitalZoom, move: .glide)
         zoomFactor = stop.digitalZoom
         updateZoomReading()
     }
@@ -216,7 +218,7 @@ final class CameraEngine {
         let lowest = zoomStops.map { $0.factor(focalLengths: focalLengths) }.min() ?? 1
         digitalZoom = min(max(zoom, lowest), Self.maxZoom) / lensFactor
         zoomFactor = digitalZoom
-        controller.setZoom(lens: lens, digital: digitalZoom)
+        controller.setZoom(lens: lens, digital: digitalZoom, move: .follow)
         updateZoomReading()
     }
 
@@ -369,6 +371,14 @@ final class CameraEngine {
         if !info.frameRates.isEmpty { frameRates = info.frameRates }
         settleRotation(deviceID: info.deviceID)
         syncExposure()
+        // Apple Log asked for, but the camera has no Log format at this frame rate: say so once.
+        if appleLogRequested, !info.appleLogActive, info.budgetFallback == nil, config.format.fps > FormatChooser.highFrameRate {
+            let note = "This iPhone has no Apple Log format at \(Self.describe(config.format)), so it is recorded with the preset. Pick a lower frame rate for Log."
+            if lastLogNote != note { message = note }
+            lastLogNote = note
+        } else {
+            lastLogNote = nil
+        }
         if let fallback = info.budgetFallback {
             let load = info.budgetCost.map { " (load \(String(format: "%.2f", $0)), the limit is 1)" } ?? ""
             message = "\(Self.describe(config.format)) is more than the camera can run here\(load), so \(Self.describe(fallback)) is used."

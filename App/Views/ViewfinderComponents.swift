@@ -493,7 +493,8 @@ struct HoldScrub: ViewModifier {
 }
 
 /// A sideways scale of values centred on the current one, the neighbours fading out, as under mood's
-/// aperture dial.
+/// aperture dial. Each value keeps one size and one weight and moves, scales and blurs between its states,
+/// so the strip glides to the next value instead of swapping text.
 struct ScaleStrip: View {
     let labels: [String]
     let index: Int
@@ -504,19 +505,40 @@ struct ScaleStrip: View {
             ZStack {
                 ForEach(labels.indices, id: \.self) { item in
                     let distance = abs(item - index)
+                    let isCurrent = distance == 0
                     Text(labels[item])
-                        .font(.system(size: item == index ? 26 : 22, weight: item == index ? .semibold : .medium))
-                        .foregroundStyle(item == index ? Theme.accent : .white.opacity(distance == 1 ? 0.75 : 0.3))
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(isCurrent ? Theme.accent : .white.opacity(distance == 1 ? 0.75 : 0.3))
                         .fixedSize()
+                        .scaleEffect(isCurrent ? 1.1 : 0.88)
+                        .blur(radius: isCurrent ? 0 : min(CGFloat(distance), 3) * 0.9)
                         .position(x: geo.size.width / 2 + CGFloat(item - index) * spacing, y: geo.size.height / 2)
                 }
             }
-            .animation(.spring(response: 0.28, dampingFraction: 0.82), value: index)
+            .animation(.smooth(duration: 0.3), value: index)
         }
         .frame(height: 36)
         .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.25),
                                      .init(color: .black, location: 0.75), .init(color: .clear, location: 1)],
                              startPoint: .leading, endPoint: .trailing))
+    }
+}
+
+/// Fades a view in and out through a blur, so one icon or name melts into the next.
+private struct BlurFade: ViewModifier {
+    let blur: CGFloat
+    let opacity: Double
+    let scale: CGFloat
+
+    func body(content: Content) -> some View {
+        content.blur(radius: blur).opacity(opacity).scaleEffect(scale)
+    }
+}
+
+extension AnyTransition {
+    /// Comes in out of a blur and leaves into one, a little smaller than it rests.
+    static var blurFade: AnyTransition {
+        .modifier(active: BlurFade(blur: 14, opacity: 0, scale: 0.9), identity: BlurFade(blur: 0, opacity: 1, scale: 1))
     }
 }
 
@@ -617,7 +639,7 @@ struct LensOverlay: View {
                     .id(lens)
                     .frame(width: 150, height: 150)
                     .clipShape(Circle())
-                    .transition(.opacity)
+                    .transition(.blurFade)
                 Circle()
                     .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [0.1, 10]))
                     .frame(width: 150, height: 150)
@@ -627,10 +649,10 @@ struct LensOverlay: View {
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.8), radius: 6)
                     .id(lens)
-                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    .transition(.blurFade)
             }
             .frame(height: 160)
-            .animation(.spring(response: 0.3, dampingFraction: 0.78), value: lens)
+            .animation(.smooth(duration: 0.32), value: lens)
             ScaleStrip(labels: lenses.map(\.label), index: lenses.firstIndex(of: lens) ?? 0, spacing: 76)
                 .frame(width: 320)
             Text(lens.summary.uppercased())
@@ -640,6 +662,9 @@ struct LensOverlay: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
                 .background(Capsule().fill(Color.black.opacity(0.55)))
+                .id(lens)
+                .transition(.blurFade)
+                .animation(.smooth(duration: 0.32), value: lens)
         }
         .shadow(color: .black.opacity(0.35), radius: 12)
     }

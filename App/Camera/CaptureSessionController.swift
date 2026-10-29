@@ -225,7 +225,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let position: AVCaptureDevice.Position = config.lens == .front ? .front : .back
         // The multi-camera virtual device offers no formats above 60 fps; the main camera alone does.
         let highFrameRate = config.mode == .video && config.format.fps > FormatChooser.highFrameRate && position == .back
-        // 4K at 120 fps takes nearly all of the camera's budget, so the photo output asks for as little as it can.
+        // 4K at 120 fps takes nearly all of the camera's budget: the photo output asks for as little as it can, and
+        // the recording takes the viewfinder's own stream instead of a second one at full size.
         let leanPhotoOutput = config.mode == .video && config.format.fps > FormatChooser.highFrameRate
         // Bayer RAW photos come from one camera at a time: the lens asked for, on its own.
         let singleCamera = config.mode == .photo && config.wantsRAW && config.rawFormat == .bayer && !config.portrait && position == .back
@@ -252,6 +253,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             session.beginConfiguration()
             session.automaticallyConfiguresCaptureDeviceForWideColor = false
             installOutputsIfNeeded()
+            setRecordStream(separate: !leanPhotoOutput)
             if needsInput {
                 swapInput(to: device, position: position)
                 currentHighFrameRate = highFrameRate
@@ -297,7 +299,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         // Queued frames of a 4K 120 fps recording would fill memory; past 60 fps late frames are dropped
         // (the recorder repeats the previous one).
         if hasRecordOutput { recordOutput.alwaysDiscardsLateVideoFrames = config.format.fps > FormatChooser.highFrameRate }
-        configureDevice(config, device: device)
+        configureDevice(config, device: device, rampZoom: !structural)
         applyWhiteBalance(on: device)
         configureConnections(config)
         updateDepthOutput(enabled: config.portrait && config.mode == .photo && position == .back, device: device)
@@ -777,6 +779,22 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         hub.setRecordOutput(hasRecordOutput ? recordOutput : nil)
     }
 
+    /// Whether the recording has a video output of its own. Past 60 fps it does not: two outputs at 4K 120 fps are
+    /// more than the camera can run, so the viewfinder's frames are recorded (the hub handles a single stream).
+    private func setRecordStream(separate: Bool) {
+        guard separate != hasRecordOutput else { return }
+        if separate {
+            guard session.canAddOutput(recordOutput) else { return }
+            session.addOutput(recordOutput)
+            // Writing is slower than showing; let the recording queue up frames rather than drop them.
+            recordOutput.alwaysDiscardsLateVideoFrames = false
+        } else {
+            session.removeOutput(recordOutput)
+        }
+        hasRecordOutput = separate
+        hub.setRecordOutput(separate ? recordOutput : nil)
+    }
+
     private func swapInput(to device: AVCaptureDevice, position: AVCaptureDevice.Position) {
         guard let input = try? AVCaptureDeviceInput(device: device) else { return }
         if let old = videoInput { session.removeInput(old) }
@@ -951,7 +969,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    private func configureDevice(_ config: Config, device: AVCaptureDevice) {
+    private func configureDevice(_ config: Config, device: AVCaptureDevice, rampZoom: Bool = false) {
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
@@ -970,7 +988,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 if device.activeVideoMaxFrameDuration != longest { device.activeVideoMaxFrameDuration = longest }
             }
 
-            device.videoZoomFactor = clampedZoom(zoomFactor(lens: config.lens, digital: config.digitalZoom), for: device)
+            // A zoom that changes on a running camera glides, so a lens change is as smooth as on the stock camera.
+            moveZoom(to: clampedZoom(zoomFactor(lens: config.lens, digital: config.digitalZoom), for: device), on: device, move: rampZoom ? .glide : .jump)
             let bias = min(max(Float(config.exposureBias), device.minExposureTargetBias), device.maxExposureTargetBias)
             device.setExposureTargetBias(bias)
         } catch {
@@ -1002,13 +1021,42 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     // MARK: Live adjustments
 
+    /// How the camera gets to a new zoom.
+    enum ZoomMove {
+        /// At once: a new camera or format, which starts from its own zoom anyway.
+        case jump
+        /// A chip tap: the camera ramps to the new zoom in about half a second and hands over lenses on the way.
+        case glide
+        /// A finger on the zoom: each new value is followed quickly but smoothly, so the picture does not step.
+        case follow
+    }
+
+    /// Call with the device locked.
+    private func moveZoom(to target: CGFloat, on device: AVCaptureDevice, move: ZoomMove) {
+        // Ramps only make sense on a running virtual camera that switches lenses itself; a single camera just goes there.
+        guard move != .jump, session.isRunning else {
+            if device.isRampingVideoZoom { device.cancelVideoZoomRamp() }
+            if device.videoZoomFactor != target { device.videoZoomFactor = target }
+            return
+        }
+        let current = Double(device.videoZoomFactor)
+        let octaves = abs(log2(Double(target) / max(current, 0.01)))
+        guard octaves > 0.002 else {
+            if device.isRampingVideoZoom { device.cancelVideoZoomRamp() }
+            device.videoZoomFactor = target
+            return
+        }
+        // Rates are in powers of two per second: a glide takes about 0.45 s whatever the distance.
+        let rate: Float = move == .glide ? Float(min(max(octaves / 0.45, 1.5), 12)) : 8
+        device.ramp(toVideoZoomFactor: target, withRate: rate)
+    }
+
     /// Switches lens or zooms. With the virtual device this is only a zoom change, so it is instant.
-    func setZoom(lens: LensID, digital: Double) {
+    func setZoom(lens: LensID, digital: Double, move: ZoomMove = .jump) {
         sessionQueue.async {
             guard let device = self.videoInput?.device else { return }
             try? device.lockForConfiguration()
-            if device.isRampingVideoZoom { device.cancelVideoZoomRamp() }
-            device.videoZoomFactor = self.clampedZoom(self.zoomFactor(lens: lens, digital: digital), for: device)
+            self.moveZoom(to: self.clampedZoom(self.zoomFactor(lens: lens, digital: digital), for: device), on: device, move: move)
             device.unlockForConfiguration()
         }
     }

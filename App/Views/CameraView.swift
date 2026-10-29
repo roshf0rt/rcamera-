@@ -34,6 +34,8 @@ struct CameraView: View {
     @State private var evActive = false
     @State private var focusMarker: FocusPoint?
     @State private var pinchStart: Double?
+    /// Where the zoom stood when a finger began to slide along the lens chips.
+    @State private var scrubStart: Double?
 
     private struct FocusPoint: Equatable {
         var location: CGPoint
@@ -81,8 +83,9 @@ struct CameraView: View {
                         .frame(width: geo.size.width, height: 290)
                         .contentShape(Rectangle())
                         .gesture(dialDrag(dial))
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { resetDial(dial) })
                         .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50 - 300)
-                        .transition(.scale(scale: 0.85).combined(with: .opacity))
+                        .transition(.blurFade)
                 }
 
                 if engine.mode == .video, !engine.isSwitchingMode, !showPresets {
@@ -348,6 +351,7 @@ struct CameraView: View {
                 Text(model.settings.lensStyle.label)
                     .font(.system(size: 14, weight: .semibold))
                     .tracking(0.6)
+                    .contentTransition(.interpolate)
             }
             .foregroundStyle(dial == .lens ? Theme.accent : .white)
             .padding(.horizontal, 14)
@@ -358,6 +362,7 @@ struct CameraView: View {
             .modifier(pillScrub(.lens))
         }
         .animation(Self.panelSpring, value: dial)
+        .animation(.smooth(duration: 0.3), value: model.settings.lensStyle)
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: model.settings.portraitFNumber)
     }
 
@@ -379,6 +384,16 @@ struct CameraView: View {
         case .aperture: model.updateSettings { $0.portraitFNumber = PortraitAperture.stops[index] }
         case .lens: model.updateSettings { $0.lensStyle = sortedLenses[index] }
         }
+        dialTouch += 1
+    }
+
+    /// A double tap on an open dial puts it back to where it starts: f/4, and the first lens.
+    private func resetDial(_ which: Dial) {
+        switch which {
+        case .aperture: model.updateSettings { $0.portraitFNumber = PortraitAperture.standard }
+        case .lens: model.updateSettings { $0.lensStyle = AppSettings().lensStyle }
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         dialTouch += 1
     }
 
@@ -577,6 +592,16 @@ struct CameraView: View {
                 }
                 .padding(.horizontal, 4)
                 .background(Capsule().fill(Color.black.opacity(0.35)))
+                // Sliding along the chips zooms smoothly: right zooms in, left out, a doubling for about 150 points.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { value in
+                            let start = scrubStart ?? engine.absoluteZoom
+                            scrubStart = start
+                            engine.setContinuousZoom(start * pow(2, Double(value.translation.width) / 150))
+                        }
+                        .onEnded { _ in scrubStart = nil }
+                )
             }
             HStack {
                 Spacer()

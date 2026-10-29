@@ -176,13 +176,12 @@ struct RedevelopView: View {
     }
 
     /// Moves the shadows up or down. The camera has no such control: it is for the photo whose shadows came out
-    /// too dark or too milky. A double tap on the label puts it back to zero.
+    /// too dark or too milky. A double tap on the control puts it back to zero.
     private var shadowsControl: some View {
         HStack(spacing: 14) {
             Text("Shadows")
                 .font(.system(size: 17))
                 .foregroundStyle(.white)
-                .onTapGesture(count: 2) { shadowLift = 0 }
             Slider(value: $shadowLift, in: -1 ... 1)
                 .tint(Theme.accent)
             Text(abs(shadowLift) < 0.005 ? "0" : String(format: "%+.0f", shadowLift * 100))
@@ -190,6 +189,12 @@ struct RedevelopView: View {
                 .foregroundStyle(abs(shadowLift) > 0.005 ? Theme.accent : Theme.secondaryText)
                 .frame(width: 52, alignment: .trailing)
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            guard shadowLift != 0 else { return }
+            withAnimation(.smooth(duration: 0.25)) { shadowLift = 0 }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        })
     }
 
     private var evControl: some View {
