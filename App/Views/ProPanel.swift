@@ -184,6 +184,10 @@ struct ProPanel: View {
 /// level, with lines at black, middle and white.
 struct WaveformPanel: View {
     let engine: CameraEngine
+    @Environment(\.iconRotation) private var angle
+
+    /// Turned a quarter: the box is laid out upright and then turned, as the icons are.
+    private var sideways: Bool { abs(angle.truncatingRemainder(dividingBy: 180)) == 90 }
 
     var body: some View {
         ZStack {
@@ -205,7 +209,8 @@ struct WaveformPanel: View {
                 .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
             }
         }
-        .frame(width: 150, height: 84)
+        .frame(width: sideways ? 84 : 150, height: sideways ? 150 : 84)
+        .followsDevice()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

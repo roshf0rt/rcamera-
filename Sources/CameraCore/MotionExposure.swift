@@ -89,7 +89,8 @@ public enum MotionExposure {
     private static func place(exposure: Double, reference: Double, longest: Double, limits: CineExposure.Limits, offset: Double) -> Decision {
         let iso = exposure / reference
         if iso >= limits.minISO, iso <= limits.maxISO {
-            let status: Status = abs(offset) < 0.3 ? .cinematic : .settling
+            // The shutter is already on 180°; the status goes green once the picture has ramped near its target.
+            let status: Status = abs(offset) < 0.5 ? .cinematic : .settling
             return Decision(mode: .motion, setting: .init(iso: iso, duration: reference), status: status)
         }
         let edgeISO = iso < limits.minISO ? limits.minISO : limits.maxISO

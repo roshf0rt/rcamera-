@@ -226,6 +226,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let wasRunning = session.isRunning
 
         if structural {
+            // A new format brings its own exposure limits: the loop starts again from the camera's exposure.
+            motionMode = .native
             session.beginConfiguration()
             session.automaticallyConfiguresCaptureDeviceForWideColor = false
             installOutputsIfNeeded()
@@ -353,10 +355,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     /// The loop steps about 30 times a second, so the exposure ramps smoothly; the readout alone 8 times.
     func setExposureMonitor(video: Bool, autoMotion: Bool, fps: Int) {
         sessionQueue.async {
+            let fpsChanged = self.videoFPS != fps
             self.videoFPS = fps
             let wasOn = self.motionEnabled
             self.motionEnabled = video && autoMotion
-            if self.motionEnabled, !wasOn { self.motionMode = .native }
+            // A new frame rate or a new switch-on starts the loop from the camera's own exposure again.
+            if self.motionEnabled, !wasOn || fpsChanged { self.motionMode = .native }
             let interval = self.motionEnabled ? 33 : 120
             if video, self.meterTimer == nil || self.meterInterval != interval {
                 self.meterTimer?.cancel()

@@ -26,6 +26,11 @@ final class MotionExposureTests: XCTestCase {
         XCTAssertEqual(setting.iso, 400 * pow(2, 0.2), accuracy: 1e-6)
     }
 
+    func testGreenOnceThePictureIsNearTarget() throws {
+        XCTAssertEqual(step(.motion, iso: 400, duration: 1.0 / 50, offset: 0.4).status, .cinematic)
+        XCTAssertEqual(step(.motion, iso: 400, duration: 1.0 / 50, offset: 0.6).status, .settling)
+    }
+
     func testSmallErrorsAreLeftAlone() throws {
         let decision = step(.motion, iso: 400, duration: 1.0 / 50, offset: 0.05)
         XCTAssertEqual(decision.setting, .init(iso: 400, duration: 1.0 / 50))

@@ -357,13 +357,22 @@ struct OptionsPanel: View {
             Text(settings.videoResolution.label).font(.system(size: 18, weight: .semibold))
         }
         option(title: "Stabilize", active: settings.videoStabilization != .off, action: { update { $0.videoStabilization = $0.videoStabilization.next } }) {
-            Text(settings.videoStabilization.label)
+            Text(Self.shortStabilization(settings.videoStabilization))
                 .font(.system(size: 12, weight: .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(settings.videoStabilization == .off ? 0.1 : 0.28)))
+        }
+    }
+
+    /// Short enough that the cell still fits once the icon turns with the phone (rotation does not re-lay out).
+    private static func shortStabilization(_ mode: VideoStabilization) -> String {
+        switch mode {
+        case .off: "OFF"
+        case .standard: "STD"
+        case .cinematic: "CINE"
         }
     }
 
