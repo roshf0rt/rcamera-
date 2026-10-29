@@ -59,6 +59,9 @@ final class CameraEngine {
     /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
     private(set) var showsSwitchBlur = false
     var message: String?
+    /// A short note shown over the viewfinder for a moment, not an alert: why a tap did nothing.
+    private(set) var notice: String?
+    @ObservationIgnored private var noticeTask: Task<Void, Never>?
 
     var phase: CameraPhase { machine.phase }
     var mode: CaptureMode { machine.configuration.mode }
@@ -190,7 +193,22 @@ final class CameraEngine {
         }
     }
 
+    /// Shows `text` over the viewfinder for a few seconds.
+    private func showNotice(_ text: String) {
+        notice = text
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            if !Task.isCancelled { self?.notice = nil }
+        }
+    }
+
     func selectZoom(_ stop: ZoomStop) {
+        // Past 60 fps only the main camera runs, so the other lenses are out of reach until the rate comes down.
+        if mode == .video, lens != .front, machine.configuration.format.fps > FormatChooser.highFrameRate, stop.lens != .wide {
+            showNotice("\(Self.describe(machine.configuration.format)) runs on the main camera only. Lower the frame rate to switch lenses.")
+            return
+        }
         let previousZoom = digitalZoom
         digitalZoom = stop.digitalZoom
         if stop.lens != lens {

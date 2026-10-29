@@ -102,6 +102,21 @@ struct CameraView: View {
                     .transition(.opacity)
                 }
 
+                if let notice = engine.notice {
+                    Text(notice)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .background(Capsule().fill(Color.black.opacity(0.6)))
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .frame(width: geo.size.width - 48)
+                        .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 92)
+                        .transition(.opacity.combined(with: .offset(y: 8)))
+                        .allowsHitTesting(false)
+                }
+
                 zoomLine(engine: engine)
                     .frame(width: geo.size.width, height: zoomLineHeight)
                     .offset(y: geo.size.height - controlsHeight - zoomLineHeight)
@@ -170,6 +185,7 @@ struct CameraView: View {
 
             }
             .animation(.easeInOut(duration: 0.22), value: engine.mode)
+            .animation(.smooth(duration: 0.25), value: engine.notice)
         }
         .background(Color.black.ignoresSafeArea())
         .environment(\.iconRotation, model.orientation.current.iconRotation)
@@ -859,21 +875,6 @@ struct ExposureHUD: View {
             .frame(height: 30)
             .background(Capsule().fill(Color.black.opacity(0.55)))
             .overlay(Capsule().strokeBorder(autoMotion ? color.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 1))
-            // What the loop sees, while AutoMotion is being tuned: the meter, the ISO range, which way it reads.
-            .overlay(alignment: .top) {
-                if autoMotion, let detail = state?.detail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.black.opacity(0.6)))
-                        .offset(y: -17)
-                        .transaction { $0.animation = nil }
-                }
-            }
             // Only the light fades; the numbers change in place, several times a second.
             .animation(.easeOut(duration: 0.25), value: color)
         }

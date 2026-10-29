@@ -1129,7 +1129,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: codec])
                 if wantsRAW {
                     let size = self.photoOutput.maxPhotoDimensions
-                    skipped = portrait ? "Portrait photos have no RAW."
+                    // Portrait photos never carry RAW, which is no news: no note for them.
+                    skipped = portrait ? nil
                         : "this camera offers no RAW at \(size.width)×\(size.height) (\(rawTypes.count) RAW types, ProRAW \(self.photoOutput.isAppleProRAWEnabled ? "on" : "off"))."
                 }
             }
@@ -1151,7 +1152,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             let delegate = PhotoCaptureDelegate { outcome in
                 self.sessionQueue.async { self.photoDelegates[id] = nil }
                 var outcome = outcome
-                if wantsRAW, outcome.raw == nil, outcome.processed != nil {
+                if wantsRAW, !portrait, outcome.raw == nil, outcome.processed != nil {
                     outcome.rawNote = rawSkipped ?? "the camera returned no RAW file."
                 }
                 completion(outcome)

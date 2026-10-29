@@ -283,9 +283,20 @@ struct CaptureViewer: View {
     @State private var showRedevelop = false
     /// Set while a Log video is redeveloped: the viewer's own player then plays the look, and the panel takes the bottom bar's place.
     @State private var grade: VideoGrade?
+    /// Clips whose picture is wider than tall as it is shown, found by their pages.
+    @State private var wideClips: Set<UUID> = []
+    /// The full-screen landscape view was dismissed; it comes back when the phone is turned again.
+    @State private var landscapeDismissed = false
     @State private var confirmDelete = false
 
     private var record: CaptureRecord? { model.captures.first { $0.id == (current ?? startID) } }
+
+    /// A wide clip shown while the phone is held sideways fills the screen turned to match, as in Kino, so the
+    /// clip is seen the size the phone is held. Zero when it stays in the portrait layout.
+    private var landscapeTurn: Double {
+        guard let record, record.kind == .video, wideClips.contains(record.id), grade == nil, !landscapeDismissed else { return 0 }
+        return model.orientation.current.iconRotation
+    }
 
     var body: some View {
         let progress: CGFloat = min(max(dragY / 320, 0), 1)
@@ -300,6 +311,10 @@ struct CaptureViewer: View {
                             record: item,
                             isCurrent: item.id == (current ?? startID),
                             grade: item.kind == .video && item.id == (current ?? startID) ? grade : nil,
+                            turn: item.id == (current ?? startID) ? landscapeTurn : 0,
+                            reportShape: { wide in
+                                if wide { wideClips.insert(item.id) } else { wideClips.remove(item.id) }
+                            },
                             zoomed: $zoomed,
                             askDelete: { confirmDelete = true }
                         )
@@ -312,18 +327,20 @@ struct CaptureViewer: View {
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $current)
             .scrollIndicators(.hidden)
-            .scrollDisabled(zoomed || dragY > 0 || grade != nil)
+            .scrollDisabled(zoomed || dragY > 0 || grade != nil || landscapeTurn != 0)
             .ignoresSafeArea()
             .offset(y: dragY)
             .scaleEffect(1 - 0.25 * progress)
             .simultaneousGesture(dismissDrag)
 
-            if let record {
+            if let record, landscapeTurn == 0 {
                 chrome(record)
                     .opacity(chromeOpacity)
             }
+            if landscapeTurn != 0 { landscapeChrome }
         }
         .onAppear { current = startID }
+        .onChange(of: model.orientation.current) { landscapeDismissed = false }
         .onChange(of: current) { grade = nil }
         .onChange(of: model.captures.map(\.id)) { _, ids in
             if ids.isEmpty { close() }
@@ -337,10 +354,37 @@ struct CaptureViewer: View {
         }
     }
 
+    /// What stays over a clip shown full screen: a Dismiss pill in the corner, turned with the picture.
+    private var landscapeChrome: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topTrailing) {
+                Color.clear
+                Button {
+                    withAnimation(.smooth(duration: 0.3)) { landscapeDismissed = true }
+                } label: {
+                    Text("Dismiss")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .frame(height: 38)
+                        .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
+                }
+                .buttonStyle(PressableStyle())
+                .padding(.top, 14)
+                .padding(.trailing, 16)
+            }
+            .frame(width: geo.size.height, height: geo.size.width)
+            .rotationEffect(.degrees(landscapeTurn))
+            .position(x: geo.size.width / 2, y: geo.size.height / 2)
+        }
+        .ignoresSafeArea()
+        .transition(.opacity)
+    }
+
     private var dismissDrag: some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
-                guard !zoomed else { return }
+                guard !zoomed, landscapeTurn == 0 else { return }
                 if closingDrag == nil {
                     let dx = value.translation.width, dy = value.translation.height
                     closingDrag = dy > 0 && dy > abs(dx) * 1.2
@@ -484,6 +528,10 @@ private struct CapturePage: View {
     let isCurrent: Bool
     /// The look the clip plays with while it is redeveloped; nil plays it as it is.
     let grade: VideoGrade?
+    /// Degrees the clip is turned to fill the screen while the phone is held sideways; 0 for the portrait layout.
+    let turn: Double
+    /// Tells the viewer whether the clip is wider than tall as shown.
+    let reportShape: (Bool) -> Void
     @Binding var zoomed: Bool
     let askDelete: () -> Void
 
@@ -500,11 +548,20 @@ private struct CapturePage: View {
             if record.kind == .video {
                 if let player {
                     // The clip is fitted to its own shape, so a landscape one is wide and its controls offer full screen.
-                    // Room is left for the header, and for the bottom bar or the redevelop panel.
-                    VideoPlayer(player: player)
-                        .padding(.top, 52)
-                        .padding(.bottom, grade == nil ? 72 : VideoGradePanel.height)
-                        .animation(.smooth(duration: 0.25), value: grade == nil)
+                    // Room is left for the header, and for the bottom bar or the redevelop panel. Held sideways, a wide clip
+                    // takes the whole screen turned to match.
+                    GeometryReader { geo in
+                        let turned = turn != 0
+                        let top: CGFloat = 52
+                        let bottom: CGFloat = grade == nil ? 72 : VideoGradePanel.height
+                        let fitted = CGSize(width: geo.size.width, height: max(geo.size.height - top - bottom, 0))
+                        VideoPlayer(player: player)
+                            .frame(width: turned ? geo.size.height : fitted.width, height: turned ? geo.size.width : fitted.height)
+                            .rotationEffect(.degrees(turn))
+                            .position(x: geo.size.width / 2, y: turned ? geo.size.height / 2 : top + fitted.height / 2)
+                            .animation(.smooth(duration: 0.35), value: turned)
+                            .animation(.smooth(duration: 0.25), value: grade == nil)
+                    }
                 } else {
                     ProgressView().tint(.white)
                 }
@@ -551,6 +608,12 @@ private struct CapturePage: View {
         }
         if Task.isCancelled { return }
         let item = graded ?? AVPlayerItem(url: model.videoURL(for: record))
+        if let track = try? await item.asset.loadTracks(withMediaType: .video).first,
+           let size = try? await track.load(.naturalSize),
+           let transform = try? await track.load(.preferredTransform) {
+            let shown = size.applying(transform)
+            reportShape(abs(shown.width) > abs(shown.height))
+        }
         let player = self.player ?? AVPlayer()
         // Before the first item the player's time is invalid, and seeking to it raises an Objective-C exception
         // that Swift cannot catch.
