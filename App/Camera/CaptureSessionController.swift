@@ -160,9 +160,19 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         return nil
     }
 
-    private func device(for position: AVCaptureDevice.Position, highFrameRate: Bool = false) -> AVCaptureDevice? {
+    /// `physicalLens` asks for that lens as a camera of its own, not as part of the combined back camera: Bayer RAW
+    /// exists only on single cameras. The lenses then switch by swapping cameras, without the smooth zoom.
+    private func device(for position: AVCaptureDevice.Position, highFrameRate: Bool = false, physicalLens: LensID? = nil) -> AVCaptureDevice? {
         if position == .front { return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) }
         if highFrameRate, let wide = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) { return wide }
+        if let physicalLens {
+            let type: AVCaptureDevice.DeviceType = switch physicalLens {
+            case .ultraWide: .builtInUltraWideCamera
+            case .telephoto: .builtInTelephotoCamera
+            default: .builtInWideAngleCamera
+            }
+            if let single = AVCaptureDevice.default(type, for: .video, position: .back) { return single }
+        }
         return backDevice()
     }
 
@@ -213,8 +223,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let position: AVCaptureDevice.Position = config.lens == .front ? .front : .back
         // The multi-camera virtual device offers no formats above 60 fps; the main camera alone does.
         let highFrameRate = config.mode == .video && config.format.fps > FormatChooser.highFrameRate && position == .back
+        // Bayer RAW photos come from one camera at a time: the lens asked for, on its own.
+        let singleCamera = config.mode == .photo && config.wantsRAW && config.rawFormat == .bayer && !config.portrait && position == .back
+        let wanted = self.device(for: position, highFrameRate: highFrameRate, physicalLens: singleCamera ? config.lens : nil)
         let needsInput = videoInput == nil || currentPosition != position || currentHighFrameRate != highFrameRate
-        let candidate = needsInput ? self.device(for: position, highFrameRate: highFrameRate) : videoInput?.device
+            || (wanted != nil && videoInput?.device.uniqueID != wanted?.uniqueID)
+        let candidate = needsInput ? wanted : videoInput?.device
         guard let device = candidate else {
             return DeviceInfo(focalLengths: ZoomStop.defaultFocalLengths, rawAvailable: false, appleLogActive: false, didReconfigure: false, frameRates: [:])
         }
@@ -966,9 +980,14 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     /// 35 mm equivalent focal lengths, anchored to 24 mm for the main lens and scaled by where each lens takes over.
     private func focalLengths() -> [LensID: Double] {
-        let wideZoom = lensZoomFactors[.wide] ?? 1
+        // On a single camera (Bayer RAW) the lenses are still offered: they are read from the combined camera.
+        var factors = lensZoomFactors
+        if let device = videoInput?.device, !device.isVirtualDevice, currentPosition == .back, let combined = backDevice(), combined.isVirtualDevice {
+            factors = zoomFactors(of: combined)
+        }
+        let wideZoom = factors[.wide] ?? 1
         var result: [LensID: Double] = [:]
-        for (lens, zoom) in lensZoomFactors { result[lens] = 24 * zoom / wideZoom }
+        for (lens, zoom) in factors { result[lens] = 24 * zoom / wideZoom }
         return result.isEmpty ? ZoomStop.defaultFocalLengths : result
     }
 

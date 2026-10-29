@@ -107,7 +107,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Camera")
                 } footer: {
-                    Text("Lenses (0.5×, 1×, telephoto) are detected automatically. The extra stop is a crop of the main camera. Bayer RAW needs a single camera: while the lenses switch, RAW is saved as ProRAW.")
+                    Text("Lenses (0.5×, 1×, telephoto) are detected automatically. The extra stop is a crop of the main camera. Bayer RAW is the sensor's own frame, so with it on the photo screen runs one camera at a time: lenses switch as separate cameras, without the smooth zoom. Video keeps the smooth zoom.")
                 }
 
                 Section {
