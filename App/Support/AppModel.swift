@@ -578,17 +578,22 @@ final class AppModel {
         captureStore.fileExists(.processedVideo, for: record.id)
     }
 
-    /// Grades a recorded Log video with a preset and the given grain and halation, into `processedVideo`.
-    /// Frame by frame, so it takes about as long as the clip; the gallery card shows its progress.
-    @discardableResult
-    func redevelopVideo(_ record: CaptureRecord, presetID: String, grain: GrainLevel, halation: EffectLevel) async -> Bool {
-        guard let preset = preset(id: presetID) else { return false }
+    /// The look a Log video is graded with: the preset's Apple Log look, with grain and halation at the given levels.
+    func videoDevelopLook(presetID: String, grain: GrainLevel, halation: EffectLevel) async -> FilmLook? {
+        guard let preset = preset(id: presetID) else { return nil }
         let base = await baseLook(for: preset, slot: .appleLog)
-        let look = base.with(
+        return base.with(
             grain: min(1, base.grain * grain.multiplier),
             halation: base.halation * halation.multiplier,
             adjustments: base.adjustments
         )
+    }
+
+    /// Grades a recorded Log video with a preset and the given grain and halation, into `processedVideo`.
+    /// Frame by frame, so it takes about as long as the clip; the gallery card shows its progress.
+    @discardableResult
+    func redevelopVideo(_ record: CaptureRecord, presetID: String, grain: GrainLevel, halation: EffectLevel) async -> Bool {
+        guard let look = await videoDevelopLook(presetID: presetID, grain: grain, halation: halation) else { return false }
         let id = record.id
         let source = captureStore.url(.video, for: id)
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("redevelop-\(UUID().uuidString).mov")

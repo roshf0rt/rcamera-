@@ -281,6 +281,8 @@ struct CaptureViewer: View {
     @State private var closingDrag: Bool?
     @State private var zoomed = false
     @State private var showRedevelop = false
+    /// A Log video is redeveloped in a sheet with a preview, not over the whole screen.
+    @State private var showVideoRedevelop = false
     @State private var confirmDelete = false
 
     private var record: CaptureRecord? { model.captures.first { $0.id == (current ?? startID) } }
@@ -326,12 +328,13 @@ struct CaptureViewer: View {
         }
         .sensoryFeedback(.selection, trigger: current)
         .fullScreenCover(isPresented: $showRedevelop) {
+            if let record { RedevelopView(recordID: record.id) }
+        }
+        .sheet(isPresented: $showVideoRedevelop) {
             if let record {
-                if record.kind == .video {
-                    VideoRedevelopView(recordID: record.id)
-                } else {
-                    RedevelopView(recordID: record.id)
-                }
+                VideoRedevelopView(recordID: record.id)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
         }
         .confirmationDialog("Delete this capture?", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -432,7 +435,9 @@ struct CaptureViewer: View {
             .sensoryFeedback(.impact(weight: .light), trigger: record.isFavorite)
             Spacer()
             if model.canRedevelop(record) {
-                Button { showRedevelop = true } label: {
+                Button {
+                    if record.kind == .video { showVideoRedevelop = true } else { showRedevelop = true }
+                } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "square.stack.3d.up.fill")
                         Text("Redevelop").font(.system(size: 18, weight: .semibold))

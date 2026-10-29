@@ -1,8 +1,9 @@
 import CameraCore
 import SwiftUI
 
-/// Redevelop a recorded Log video: another preset, grain and halation. The clip is graded again from its
-/// Apple Log frames, one frame at a time, so it takes about as long as the clip is long.
+/// Redevelop a recorded Log video in a sheet: a preview frame from the middle of the clip, graded as the
+/// chosen preset, grain and halation would make it. Render writes the whole clip, which takes about as long
+/// as the clip is long.
 struct VideoRedevelopView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -11,26 +12,32 @@ struct VideoRedevelopView: View {
     @State private var presetID = ""
     @State private var grainLevel = GrainLevel.medium
     @State private var halationLevel = EffectLevel.medium
-    @State private var isRunning = false
+    @State private var preview: UIImage?
+    @State private var grader: MetalGrader?
+    @State private var isRendering = false
 
     private var record: CaptureRecord? { model.captures.first { $0.id == recordID } }
     private var progress: Double? { model.videoProgress[recordID] }
+    private var renderKey: String { "\(presetID)|\(grainLevel)|\(halationLevel)" }
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
             HStack {
                 Button("Cancel") { dismiss() }
-                    .disabled(isRunning)
-                    .foregroundStyle(.white)
+                    .disabled(isRendering)
                 Spacer()
-                Text("Redevelop").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                Text("Redevelop").font(.system(size: 17, weight: .semibold))
                 Spacer()
-                Button("Develop") { develop() }
-                    .disabled(isRunning || presetID.isEmpty)
-                    .foregroundStyle(isRunning || presetID.isEmpty ? Theme.secondaryText : .white)
+                Button("Render") { render() }
+                    .disabled(isRendering || presetID.isEmpty)
+                    .fontWeight(.semibold)
             }
-            .font(.system(size: 18))
-            .frame(height: 46)
+            .font(.system(size: 17))
+            .foregroundStyle(.white)
+            .padding(.top, 4)
+
+            previewArea
+                .frame(height: 210)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -51,40 +58,60 @@ struct VideoRedevelopView: View {
             }
 
             if let progress {
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     ProgressView(value: progress)
-                    Text("\(Int(progress * 100))%")
-                        .font(.system(size: 14, design: .monospaced))
+                    Text("Rendering \(Int(progress * 100))% · keep the app open")
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Theme.secondaryText)
                 }
-                .padding(.top, 8)
             }
-
-            Text("The clip is graded frame by frame from its Apple Log file. Keep the app open until it finishes.")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
-        .padding(.top, 10)
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .interactiveDismissDisabled(isRendering)
         .onAppear {
             guard let record else { return }
             presetID = record.presetID
             grainLevel = record.grainLevel
             halationLevel = record.halationLevel
+            grader = MetalGrader.makeForBackground()
+        }
+        .task(id: renderKey) { await updatePreview() }
+    }
+
+    private var previewArea: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14).fill(Color(white: 0.08))
+            if let preview {
+                Image(uiImage: preview)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else {
+                ProgressView()
+            }
         }
     }
 
-    private func develop() {
+    /// Grades one frame again after each change; a quick run of changes only grades the last one.
+    private func updatePreview() async {
+        guard let record, !presetID.isEmpty, let grader else { return }
+        try? await Task.sleep(for: .milliseconds(150))
+        if Task.isCancelled { return }
+        guard let look = await model.videoDevelopLook(presetID: presetID, grain: grainLevel, halation: halationLevel) else { return }
+        let source = model.url(.video, for: record)
+        let image = await VideoRedeveloper.previewImage(source: source, look: look, grader: grader)
+        if !Task.isCancelled, let image { preview = image }
+    }
+
+    private func render() {
         guard let record, !presetID.isEmpty else { return }
-        isRunning = true
+        isRendering = true
         Task {
             let ok = await model.redevelopVideo(record, presetID: presetID, grain: grainLevel, halation: halationLevel)
-            isRunning = false
+            isRendering = false
             if ok { dismiss() }
         }
     }

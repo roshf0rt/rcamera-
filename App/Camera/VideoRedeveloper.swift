@@ -1,6 +1,7 @@
 import AVFoundation
 import CameraCore
 import CoreVideo
+import UIKit
 
 /// Grades a recorded Apple Log video frame by frame with a look, as the viewfinder grades live frames, and
 /// writes the result as a new file. The sound is copied across as it is. Runs in the background; the
@@ -19,6 +20,54 @@ enum VideoRedeveloper {
             case .cannotWrite: "The developed video could not be written."
             case .grading: "The video could not be graded on this device."
             }
+        }
+    }
+
+    /// One frame from the middle of the clip, graded with `look`, for the preview in Redevelop. Nil when the
+    /// frame cannot be read or graded.
+    static func previewImage(source: URL, look: FilmLook, grader: MetalGrader) async -> UIImage? {
+        let asset = AVURLAsset(url: source)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let duration = try? await asset.load(.duration).seconds,
+              let size = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform),
+              let reader = try? AVAssetReader(asset: asset)
+        else { return nil }
+        let width = Int(size.width), height = Int(size.height)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+        ])
+        reader.add(output)
+        reader.timeRange = CMTimeRange(start: CMTime(seconds: duration / 2, preferredTimescale: 600), duration: CMTime(value: 1, timescale: 30))
+        guard reader.startReading(), let sample = output.copyNextSampleBuffer(),
+              let source = CMSampleBufferGetImageBuffer(sample)
+        else { return nil }
+
+        var target: CVPixelBuffer?
+        CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, [
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+        ] as CFDictionary, &target)
+        guard let target, grader.grade(
+            source: source,
+            crop: CropRect(x: 0, y: 0, width: width, height: height),
+            mirror: false,
+            look: look,
+            into: target
+        ) else { return nil }
+
+        guard let cgImage = CIContext().createCGImage(CIImage(cvPixelBuffer: target), from: CGRect(x: 0, y: 0, width: width, height: height))
+        else { return nil }
+        return UIImage(cgImage: cgImage, scale: 1, orientation: orientation(of: transform))
+    }
+
+    /// The picture's turn, from the track's transform, so the preview stands the way the video does.
+    private static func orientation(of transform: CGAffineTransform) -> UIImage.Orientation {
+        switch (transform.a, transform.b, transform.c, transform.d) {
+        case (0, 1, -1, 0): .right
+        case (0, -1, 1, 0): .left
+        case (-1, 0, 0, -1): .down
+        default: .up
         }
     }
 
