@@ -522,7 +522,7 @@ struct CameraView: View {
         .simultaneousGesture(
             MagnifyGesture()
                 .onChanged { value in
-                    let start = pinchStart ?? engine.zoomFactor
+                    let start = pinchStart ?? engine.absoluteZoom
                     pinchStart = start
                     engine.setContinuousZoom(start * value.magnification)
                 }
@@ -572,7 +572,7 @@ struct CameraView: View {
             if evActive {
                 EVBubble(value: engine.evBias)
             } else if engine.lens != .front, !engine.zoomStops.isEmpty, !showPresets {
-                ZoomChips(stops: engine.zoomStops, active: engine.activeStop, mode: engine.mode) { stop in
+                ZoomChips(stops: engine.zoomStops, reading: engine.zoomReading, mode: engine.mode) { stop in
                     engine.selectZoom(stop)
                 }
                 .padding(.horizontal, 4)

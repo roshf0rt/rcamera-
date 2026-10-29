@@ -106,6 +106,34 @@ final class ZoomStopTests: XCTestCase {
         let stops = ZoomStop.photoStops(focalLengths: ZoomStop.defaultFocalLengths, digital: .x1_5)
         XCTAssertEqual(Set(stops.map(\.id)).count, stops.count)
     }
+
+    func testPinchReadsTheLiveValueBetweenStopsAndSnapsOnThem() {
+        let focals: [LensID: Double] = [.ultraWide: 13, .wide: 24, .telephoto: 100]
+        let stops = ZoomStop.photoStops(focalLengths: focals, digital: .x1_5)
+        let wide = stops.first { $0.lens == .wide && $0.digitalZoom == 1 }!
+
+        XCTAssertEqual(ZoomStop.reading(zoom: 1, stops: stops, focalLengths: focals).stop, wide)
+        XCTAssertNil(ZoomStop.reading(zoom: 1, stops: stops, focalLengths: focals).live, "on the stop: no live value")
+
+        let between = ZoomStop.reading(zoom: 1.2, stops: stops, focalLengths: focals)
+        XCTAssertEqual(between.stop, wide, "between 1 and 1.5 the wide chip shows the value")
+        XCTAssertEqual(between.live ?? 0, 1.2, accuracy: 1e-9)
+
+        let snapped = ZoomStop.reading(zoom: 1.5, stops: stops, focalLengths: focals)
+        XCTAssertEqual(snapped.stop?.digitalZoom, 1.5, "at 1.5 the crop stop takes over")
+        XCTAssertNil(snapped.live)
+
+        let past = ZoomStop.reading(zoom: 2.3, stops: stops, focalLengths: focals)
+        XCTAssertEqual(past.stop?.digitalZoom, 1.5, "past 1.5 and short of the telephoto, the crop chip shows 2.3")
+        XCTAssertEqual(past.live ?? 0, 2.3, accuracy: 1e-9)
+    }
+
+    func testTheTelephotoStopIsItsFocalOverTheWide() throws {
+        let focals: [LensID: Double] = [.ultraWide: 13, .wide: 24, .telephoto: 100]
+        let telephoto = try XCTUnwrap(ZoomStop.photoStops(focalLengths: focals).first { $0.lens == .telephoto })
+        XCTAssertEqual(telephoto.factor(focalLengths: focals), 100.0 / 24, accuracy: 0.01)
+        XCTAssertEqual(ZoomStop.reading(zoom: 4.1, stops: [telephoto], focalLengths: focals).live ?? 0, 4.1, accuracy: 1e-9)
+    }
 }
 
 final class CaptureStoreTests: XCTestCase {

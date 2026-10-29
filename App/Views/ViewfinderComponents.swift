@@ -100,36 +100,43 @@ struct CircleIconButton: View {
 
 struct ZoomChips: View {
     let stops: [ZoomStop]
-    let active: ZoomStop?
+    /// The stop the zoom is on, and between stops the live value its chip shows.
+    let reading: ZoomStop.Reading
     let mode: CaptureMode
     let select: (ZoomStop) -> Void
 
     var body: some View {
         HStack(spacing: 6) {
             ForEach(stops) { stop in
-                let isActive = stop == active
+                let isActive = stop == reading.stop
                 Button { select(stop) } label: {
-                    chip(for: stop, isActive: isActive)
+                    chip(for: stop, isActive: isActive, live: isActive ? reading.live : nil)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .animation(.easeOut(duration: 0.15), value: active)
+        .animation(.easeOut(duration: 0.15), value: reading.stop)
+        // A tick as the zoom passes a lens or a stop.
+        .sensoryFeedback(.selection, trigger: reading.stop)
     }
 
+    /// `live` is the zoom while it sits between stops: one decimal on photo, the focal length on video.
     @ViewBuilder
-    private func chip(for stop: ZoomStop, isActive: Bool) -> some View {
+    private func chip(for stop: ZoomStop, isActive: Bool, live: Double?) -> some View {
         Group {
             if mode == .video {
                 VStack(spacing: -1) {
-                    Text(stop.label).font(.system(size: isActive ? 20 : 17, weight: .semibold))
+                    Text(live.map { "\(Int(($0 * 24).rounded()))" } ?? stop.label)
+                        .font(.system(size: isActive ? 20 : 17, weight: .semibold))
                     if isActive { Text("mm").font(.system(size: 11, weight: .medium)) }
                 }
             } else {
-                Text(isActive ? "\(stop.label)×" : stop.label)
+                Text(live.map { String(format: "%.1f×", $0) } ?? (isActive ? "\(stop.label)×" : stop.label))
                     .font(.system(size: isActive ? 18 : 17, weight: .semibold))
             }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
         .foregroundStyle(isActive ? Theme.accent : .white)
         .followsDevice()
         .frame(width: isActive ? 54 : 42, height: 54)

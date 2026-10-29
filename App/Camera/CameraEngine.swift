@@ -40,7 +40,8 @@ final class CameraEngine {
     private(set) var machine: CameraStateMachine
     private(set) var access: Access = .unknown
     private(set) var zoomStops: [ZoomStop] = []
-    private(set) var activeStop: ZoomStop?
+    /// Which chip the zoom sits on, and the live value it shows between stops.
+    private(set) var zoomReading = ZoomStop.Reading(stop: nil, live: nil)
     private(set) var zoomFactor = 1.0
     private(set) var isAELocked = false
     private(set) var evBias = 0.0
@@ -131,7 +132,7 @@ final class CameraEngine {
         }
         if new.digitalZoomStop != old.digitalZoomStop {
             refreshStops()
-            if let active = activeStop, !zoomStops.contains(active), let fallback = zoomStops.first(where: { $0.lens == lens }) {
+            if let active = zoomReading.stop, !zoomStops.contains(active), let fallback = zoomStops.first(where: { $0.lens == lens }) {
                 selectZoom(fallback)
             }
         }
@@ -198,14 +199,30 @@ final class CameraEngine {
         // instead of waiting for the session to be reconfigured.
         controller.setZoom(lens: stop.lens, digital: stop.digitalZoom)
         zoomFactor = stop.digitalZoom
-        activeStop = stop
+        updateZoomReading()
     }
 
-    func setContinuousZoom(_ factor: Double) {
-        digitalZoom = max(1, factor)
+    /// The zoom in the chips' units (the wide lens is 1), what the lens in use and its digital zoom make.
+    var absoluteZoom: Double {
+        ZoomStop(lens: lens, digitalZoom: digitalZoom, label: "").factor(focalLengths: focalLengths)
+    }
+
+    /// A pinch sets the zoom in the chips' units. The digital zoom on the lens in use follows, and the
+    /// camera switches lenses itself where the zoom passes them, so the chips show the value as it goes.
+    func setContinuousZoom(_ zoom: Double) {
+        let lensFactor = ZoomStop(lens: lens, label: "").factor(focalLengths: focalLengths)
+        let lowest = zoomStops.map { $0.factor(focalLengths: focalLengths) }.min() ?? 1
+        digitalZoom = min(max(zoom, lowest), Self.maxZoom) / lensFactor
         zoomFactor = digitalZoom
-        activeStop = nil
         controller.setZoom(lens: lens, digital: digitalZoom)
+        updateZoomReading()
+    }
+
+    /// The most the camera zooms to, the same cap the capture session puts on the device.
+    private static let maxZoom = 30.0
+
+    private func updateZoomReading() {
+        zoomReading = ZoomStop.reading(zoom: absoluteZoom, stops: zoomStops, focalLengths: focalLengths)
     }
 
     func flipCamera() {
@@ -406,15 +423,14 @@ final class CameraEngine {
     private func refreshStops() {
         if lens == .front {
             zoomStops = []
-            activeStop = nil
+            zoomReading = ZoomStop.Reading(stop: nil, live: nil)
             return
         }
         zoomStops = mode == .photo
             ? ZoomStop.photoStops(focalLengths: focalLengths, digital: settings.digitalZoomStop)
             : ZoomStop.videoStops(focalLengths: focalLengths)
-        activeStop = zoomStops.first { $0.lens == lens && abs($0.digitalZoom - digitalZoom) < 0.01 }
-            ?? zoomStops.first { $0.lens == lens }
         zoomFactor = digitalZoom
+        updateZoomReading()
     }
 
     private var mirrorsOutput: Bool { lens == .front && settings.mirrorFrontCamera }
