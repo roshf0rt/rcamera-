@@ -10,9 +10,9 @@
       "subtitle": "Камера с пресетами и LUT",
       "localizedDescription": "Камера с пресетами, LUT, RAW и портретом. Сборка без подписи: подпишите в Feather или GBox.",
       "version": "0.2.0",
-      "versionDate": "2026-10-30T09:15:12Z",
+      "versionDate": "2026-10-30T09:24:25Z",
       "downloadURL": "https://raw.githubusercontent.com/roshf0rt/rcamera-/claude/camera-state-machine/dist/RCamera-latest.ipa",
-      "size": 13921160,
+      "size": 13922196,
       "iconURL": "https://raw.githubusercontent.com/roshf0rt/rcamera-/claude/camera-state-machine/dist/icon.png",
       "minOSVersion": "17.0"
     }
