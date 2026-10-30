@@ -1023,7 +1023,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         guard device.isVirtualDevice else { return }
         let behavior: AVCaptureDevice.PrimaryConstituentDeviceSwitchingBehavior = autoMacro ? .auto : .restricted
         let conditions: AVCaptureDevice.PrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions = autoMacro ? [] : [.videoZoomChanged]
-        guard device.supportedConstituentDeviceSwitchingBehaviors.contains(behavior),
+        // A device that cannot switch by itself reports .unsupported.
+        guard device.primaryConstituentDeviceSwitchingBehavior != .unsupported,
               device.primaryConstituentDeviceSwitchingBehavior != behavior
                 || (!autoMacro && device.primaryConstituentDeviceRestrictedSwitchingBehaviorConditions != conditions),
               (try? device.lockForConfiguration()) != nil
