@@ -601,7 +601,7 @@ struct PresetEditorView: View {
             value.wrappedValue = reset
             save()
         }) {
-            Slider(value: value, in: range) { editing in
+            ResettableSlider(value: value, range: range, reset: reset) { editing in
                 if !editing { save() }
             }
         }
@@ -618,11 +618,12 @@ struct PresetEditorView: View {
             set: { value.wrappedValue = values[min(max(Int($0.rounded()), 0), values.count - 1)] }
         )
         let text = labels[min(max(Int(index.wrappedValue.rounded()), 0), labels.count - 1)]
+        let resetIndex = Double(values.indices.min { abs(values[$0] - reset) < abs(values[$1] - reset) } ?? 0)
         return DialTile(title: title, valueText: text, reset: {
             value.wrappedValue = reset
             save()
         }) {
-            Slider(value: index, in: 0 ... Double(values.count - 1), step: 1) { editing in
+            ResettableSlider(value: index, range: 0 ... Double(values.count - 1), reset: resetIndex, step: 1) { editing in
                 if !editing { save() }
             }
         }

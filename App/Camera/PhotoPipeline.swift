@@ -386,7 +386,12 @@ enum PhotoPipeline {
     /// part, so the Redevelop screen keeps this and only re-grades it when the preset or effects change.
     static func previewBase(source: Source, pushPull: Double, aspect: AspectOption, mirror: Bool, scale: Float) -> CVPixelBuffer? {
         guard let base = baseImage(source, pushPull: pushPull, scale: scale) else { return nil }
-        let extent = base.extent.integral
+        // Only whole pixels: a scaled image ends on a fraction, and a row the picture covers in part would show as a line.
+        let whole = base.extent
+        let extent = CGRect(
+            x: ceil(whole.minX), y: ceil(whole.minY),
+            width: floor(whole.maxX) - ceil(whole.minX), height: floor(whole.maxY) - ceil(whole.minY)
+        )
         let crop = aspect.cropRect(sourceWidth: Int(extent.width), sourceHeight: Int(extent.height))
         let rect = CGRect(x: extent.minX + CGFloat(crop.x), y: extent.minY + CGFloat(crop.y), width: CGFloat(crop.width), height: CGFloat(crop.height))
         var image = base.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))

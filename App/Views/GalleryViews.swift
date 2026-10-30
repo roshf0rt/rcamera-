@@ -2,6 +2,14 @@ import AVKit
 import CameraCore
 import SwiftUI
 
+extension CaptureRecord {
+    /// Everything Redevelop can change about a capture's picture. Views reload the picture when it changes, so a
+    /// new grain, halation, shadows or portrait setting shows at once, not only a new preset or push/pull.
+    var lookKey: String {
+        "\(presetID)|\(evPushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(portraitFNumber ?? 0)|\(lensStyle?.rawValue ?? "")"
+    }
+}
+
 enum ThumbnailCache {
     private static let cache = NSCache<NSString, UIImage>()
 
@@ -26,10 +34,10 @@ struct CaptureThumbnail: View {
                 Image(uiImage: image).resizable().scaledToFill()
             }
         }
-        .task(id: "\(record.id)-\(record.presetID)-\(record.evPushPull)") {
+        .task(id: "\(record.id)-\(record.lookKey)") {
             image = await ThumbnailCache.load(
                 url: model.url(.thumbnail, for: record),
-                version: "\(record.presetID)-\(record.evPushPull)"
+                version: record.lookKey
             )
         }
     }
@@ -292,9 +300,10 @@ struct CaptureViewer: View {
     private var record: CaptureRecord? { model.captures.first { $0.id == (current ?? startID) } }
 
     /// A wide clip shown while the phone is held sideways fills the screen turned to match, as in Kino, so the
-    /// clip is seen the size the phone is held. Zero when it stays in the portrait layout.
+    /// clip is seen the size the phone is held, graded as it is while redeveloping (the panel waits in the portrait
+    /// layout). Zero when it stays in the portrait layout.
     private var landscapeTurn: Double {
-        guard let record, record.kind == .video, wideClips.contains(record.id), grade == nil, !landscapeDismissed else { return 0 }
+        guard let record, record.kind == .video, wideClips.contains(record.id), !landscapeDismissed else { return 0 }
         return model.orientation.current.iconRotation
     }
 
@@ -577,7 +586,7 @@ private struct CapturePage: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: "\(record.id)-\(record.presetID)-\(record.evPushPull)-\(gradeKey)") {
+        .task(id: "\(record.id)-\(record.lookKey)-\(gradeKey)") {
             if record.kind == .video {
                 await loadVideo()
             } else {

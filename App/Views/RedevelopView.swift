@@ -30,6 +30,9 @@ struct RedevelopView: View {
     @State private var isSaving = false
     @State private var loaded = false
     @State private var original: UIImage?
+    /// The picture is pinched in: the preview is then made larger, so details can be checked before Render.
+    @State private var zoomed = false
+    @State private var baseScale: Float = 0.35
 
     private var record: CaptureRecord? { model.captures.first { $0.id == recordID } }
 
@@ -44,7 +47,7 @@ struct RedevelopView: View {
     }
 
     private var renderKey: String {
-        "\(presetID)|\(pushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(source != nil)|\(fNumber)|\(lens)|\(depth != nil)"
+        "\(presetID)|\(pushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(source != nil)|\(fNumber)|\(lens)|\(depth != nil)|\(zoomed)"
     }
 
     var body: some View {
@@ -102,9 +105,8 @@ struct RedevelopView: View {
         ZStack {
             RoundedRectangle(cornerRadius: 14).fill(Color(white: 0.08))
             if let shown = hasChanges ? (preview ?? original) : (original ?? preview) {
-                Image(uiImage: shown)
-                    .resizable()
-                    .scaledToFit()
+                // Pinch to zoom, drag to pan, double tap for 2.5×: the grade stays on while looking closer.
+                ZoomableImage(image: shown, isZoomed: $zoomed)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             } else {
                 ProgressView()
@@ -182,19 +184,12 @@ struct RedevelopView: View {
             Text("Shadows")
                 .font(.system(size: 17))
                 .foregroundStyle(.white)
-            Slider(value: $shadowLift, in: -1 ... 1)
-                .tint(Theme.accent)
+            ResettableSlider(value: $shadowLift, range: -1 ... 1, reset: 0)
             Text(abs(shadowLift) < 0.005 ? "0" : String(format: "%+.0f", shadowLift * 100))
                 .font(.system(size: 17, design: .monospaced))
                 .foregroundStyle(abs(shadowLift) > 0.005 ? Theme.accent : Theme.secondaryText)
                 .frame(width: 52, alignment: .trailing)
         }
-        .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture(count: 2).onEnded {
-            guard shadowLift != 0 else { return }
-            withAnimation(.smooth(duration: 0.25)) { shadowLift = 0 }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        })
     }
 
     private var evControl: some View {
@@ -246,16 +241,19 @@ struct RedevelopView: View {
         guard loaded, let source, let record, let preset = model.preset(id: presetID) else { return }
 
         // Decoding is only needed when push/pull changed; wait a moment so a drag on the wheel decodes once.
-        if base == nil || baseEV != pushPull {
+        // Zoomed in, the base is as large as the photo comes out (up to about 4000 px), so detail is real.
+        let scale = zoomed ? detailScale : 0.35
+        if base == nil || baseEV != pushPull || baseScale != scale {
             if base != nil { try? await Task.sleep(for: .milliseconds(120)) }
             if Task.isCancelled { return }
             let value = pushPull, aspect = record.aspect, mirror = record.mirrored
             let decoded = await Task.detached(priority: .userInitiated) {
-                PhotoPipeline.previewBase(source: source, pushPull: value, aspect: aspect, mirror: mirror, scale: 0.35)
+                PhotoPipeline.previewBase(source: source, pushPull: value, aspect: aspect, mirror: mirror, scale: scale)
             }.value
             if Task.isCancelled { return }
             base = decoded
             baseEV = value
+            baseScale = scale
         }
         guard let base else { return }
 
@@ -272,6 +270,13 @@ struct RedevelopView: View {
         if Task.isCancelled { return }
         let image = await Task.detached(priority: .userInitiated) { PhotoPipeline.gradePreview(base, look: look, portrait: pass) }.value
         if !Task.isCancelled, let image { preview = image }
+    }
+
+    /// The preview scale at which the photo's long side is about 4000 px, capped at full size.
+    private var detailScale: Float {
+        guard let original else { return 1 }
+        let longSide = max(original.size.width, original.size.height) * original.scale
+        return Float(min(1, max(0.35, 4000 / max(longSide, 1))))
     }
 
     /// This photo, small, in every preset: the most honest way to compare looks.
