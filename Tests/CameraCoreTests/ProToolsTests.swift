@@ -103,6 +103,25 @@ final class MotionExposureTests: XCTestCase {
     }
 }
 
+final class CameraChoiceSettingsTests: XCTestCase {
+    func testSeparateCamerasAndAutoMacroStartOffAndSurviveARoundTrip() throws {
+        var settings = AppSettings()
+        XCTAssertFalse(settings.separateCameras)
+        XCTAssertFalse(settings.autoMacro)
+        settings.separateCameras = true
+        settings.autoMacro = true
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertTrue(decoded.separateCameras)
+        XCTAssertTrue(decoded.autoMacro)
+    }
+
+    func testOldSettingsFilesGetBothOff() throws {
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertFalse(decoded.separateCameras)
+        XCTAssertFalse(decoded.autoMacro)
+    }
+}
+
 final class MotionComfortTests: XCTestCase {
     private let limits = CineExposure.Limits(minISO: 50, maxISO: 6400, minDuration: 1.0 / 20000, maxDuration: 1.0 / 3)
 

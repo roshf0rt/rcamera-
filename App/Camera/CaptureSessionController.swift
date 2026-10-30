@@ -29,6 +29,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var portrait: Bool = false
         /// AutoMotion runs in video: it sets shutter and ISO itself, which the combined back camera does not take.
         var motion: Bool = false
+        /// The setting: every back lens runs as a camera of its own, never as the combined camera.
+        var separateCameras: Bool = false
+        /// The setting: the combined camera may switch to the ultra wide by itself for close subjects.
+        var autoMacro: Bool = false
     }
 
     struct DeviceInfo: Sendable {
@@ -238,6 +242,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let singleCamera = position == .back && (
             (config.mode == .photo && config.wantsRAW && config.rawFormat == .bayer && !config.portrait)
                 || (config.mode == .video && config.motion)
+                // Separate cameras by choice. Portrait photos keep the combined camera, which is where their depth comes from.
+                || (config.separateCameras && !(config.mode == .photo && config.portrait))
         )
         let wanted = self.device(for: position, highFrameRate: highFrameRate, physicalLens: singleCamera ? config.lens : nil)
         let needsInput = videoInput == nil || currentPosition != position || currentHighFrameRate != highFrameRate
@@ -309,6 +315,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         // (the recorder repeats the previous one).
         if hasRecordOutput { recordOutput.alwaysDiscardsLateVideoFrames = config.format.fps > FormatChooser.highFrameRate }
         configureDevice(config, device: device, rampZoom: !structural)
+        applyMacroBehavior(autoMacro: config.autoMacro, on: device)
         applyWhiteBalance(on: device)
         configureConnections(config)
         updateDepthOutput(enabled: config.portrait && config.mode == .photo && position == .back, device: device)
@@ -1008,6 +1015,21 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         } catch {
             // The device keeps its previous configuration.
         }
+    }
+
+    /// The combined back camera hops to the ultra wide by itself when the subject is close (macro). Unless the user
+    /// wants that, it is held to switching only when the zoom changes, which is what the lens chips and a pinch do.
+    private func applyMacroBehavior(autoMacro: Bool, on device: AVCaptureDevice) {
+        guard device.isVirtualDevice else { return }
+        let behavior: AVCaptureDevice.PrimaryConstituentDeviceSwitchingBehavior = autoMacro ? .auto : .restricted
+        let conditions: AVCaptureDevice.PrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions = autoMacro ? [] : [.videoZoomChanged]
+        guard device.supportedConstituentDeviceSwitchingBehaviors.contains(behavior),
+              device.primaryConstituentDeviceSwitchingBehavior != behavior
+                || (!autoMacro && device.primaryConstituentDeviceRestrictedSwitchingBehaviorConditions != conditions),
+              (try? device.lockForConfiguration()) != nil
+        else { return }
+        device.setPrimaryConstituentDeviceSwitchingBehavior(behavior, restrictedSwitchingBehaviorConditions: conditions)
+        device.unlockForConfiguration()
     }
 
     private func zoomFactor(lens: LensID, digital: Double) -> Double {

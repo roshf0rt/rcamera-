@@ -616,6 +616,8 @@ final class AppModel {
         if let thumbnail = await Self.videoThumbnail(url: captureStore.url(.processedVideo, for: id)) {
             try? captureStore.write(thumbnail, as: .thumbnail, for: id)
         }
+        // The render always goes to Photos as well, with no sheet to choose from.
+        try? await PhotoLibrarySaver.saveVideo(url: captureStore.url(.processedVideo, for: id))
         return true
     }
 

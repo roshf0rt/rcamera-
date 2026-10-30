@@ -657,11 +657,12 @@ struct ZoomableImage: View {
                 MagnifyGesture()
                     .onChanged { value in
                         scale = min(max(lastScale * value.magnification, 1), 5)
+                        // Known as soon as the pinch begins, so a larger preview can start to be made.
+                        if scale > 1.05, !isZoomed { isZoomed = true }
                     }
                     .onEnded { _ in
-                        lastScale = scale
-                        if scale <= 1 { reset() }
-                        isZoomed = scale > 1
+                        // A pinch is a look: with the fingers off, the picture settles back where it was.
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { reset() }
                     }
             )
             .simultaneousGesture(

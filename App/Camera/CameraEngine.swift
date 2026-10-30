@@ -81,7 +81,7 @@ final class CameraEngine {
 
     @ObservationIgnored private var settings: AppSettings
     @ObservationIgnored private var looks = Looks()
-    /// One back camera runs (Bayer RAW, or video with AutoMotion): lenses change by swapping cameras, so a pinch hands over itself.
+    /// One back camera runs (Bayer RAW, video with AutoMotion, or the Separate cameras setting): lenses change by swapping cameras, so a pinch hands over itself.
     @ObservationIgnored private var isSingleCamera = false
     @ObservationIgnored private var appleLogRequested = false
     /// The last note about Apple Log missing from a frame rate, so it is shown once and not on every change.
@@ -137,7 +137,7 @@ final class CameraEngine {
         } else if new.autoMotion != old.autoMotion, mode == .video, lens != .front, !isRecording {
             // AutoMotion needs one camera; the combined one returns when it is off.
             Task { await applyConfig() }
-        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.portrait != old.portrait || new.photoResolution != old.photoResolution), !isRecording {
+        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.portrait != old.portrait || new.photoResolution != old.photoResolution || new.separateCameras != old.separateCameras || new.autoMacro != old.autoMacro), !isRecording {
             Task { await applyConfig() }
         } else {
             reapplyIfAppleLogChanged()
@@ -410,7 +410,9 @@ final class CameraEngine {
             rawFormat: settings.rawFormat,
             photoResolution: settings.photoResolution,
             portrait: settings.portrait && machine.configuration.mode == .photo,
-            motion: settings.autoMotion && machine.configuration.mode == .video
+            motion: settings.autoMotion && machine.configuration.mode == .video,
+            separateCameras: settings.separateCameras,
+            autoMacro: settings.autoMacro
         )
         let info = await controller.apply(config)
         isSingleCamera = info.singleCamera

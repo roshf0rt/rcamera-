@@ -162,6 +162,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Video only: exposure held on the 180° shutter with ISO doing the work, handing over to the camera's
     /// own auto exposure when the light is out of reach (see `MotionExposure`). On by default.
     public var autoMotion = true
+    /// The back cameras run one at a time, each lens as a camera of its own, instead of as the combined camera that
+    /// switches lenses itself. Steadier (nothing switches behind the user's back), but lenses change by swapping
+    /// cameras, without the smooth zoom.
+    public var separateCameras = false
+    /// The combined back camera may hop to the ultra wide for close subjects (macro) by itself. Off by default:
+    /// lenses then change only when the zoom does.
+    public var autoMacro = false
 
     // Pro tools, under PRO in the options shade. Drawn on the viewfinder only.
     public var zebra = false
@@ -191,7 +198,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, rawFormat, savesLocation, digitalZoomStop
         case grainLevel, halationLevel, frame, volumeShutter, portrait, portraitFNumber, lensStyle, photoResolution
-        case videoResolution, videoFPS, videoStabilization, appleLogVideo, instantGrade, autoMotion, revision
+        case videoResolution, videoFPS, videoStabilization, appleLogVideo, instantGrade, autoMotion, separateCameras, autoMacro, revision
         case zebra, focusPeaking, falseColor, waveform, lockExposureWhileRecording, lockWhiteBalanceWhileRecording
         case whiteBalanceKelvin, whiteBalanceTint
     }
@@ -240,6 +247,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         instantGrade = (try? c.decode(Bool.self, forKey: .instantGrade)) ?? instantGrade
         // The earlier cine exposure switch is not carried over: AutoMotion replaces it and starts on.
         autoMotion = (try? c.decode(Bool.self, forKey: .autoMotion)) ?? autoMotion
+        separateCameras = (try? c.decode(Bool.self, forKey: .separateCameras)) ?? separateCameras
+        autoMacro = (try? c.decode(Bool.self, forKey: .autoMacro)) ?? autoMacro
         zebra = (try? c.decode(Bool.self, forKey: .zebra)) ?? zebra
         focusPeaking = (try? c.decode(Bool.self, forKey: .focusPeaking)) ?? focusPeaking
         falseColor = (try? c.decode(Bool.self, forKey: .falseColor)) ?? falseColor
