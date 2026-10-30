@@ -81,6 +81,8 @@ final class CameraEngine {
 
     @ObservationIgnored private var settings: AppSettings
     @ObservationIgnored private var looks = Looks()
+    /// One back camera runs (Bayer RAW, or video with AutoMotion): lenses change by swapping cameras, so a pinch hands over itself.
+    @ObservationIgnored private var isSingleCamera = false
     @ObservationIgnored private var appleLogRequested = false
     /// The last note about Apple Log missing from a frame rate, so it is shown once and not on every change.
     @ObservationIgnored private var lastLogNote: String?
@@ -132,6 +134,9 @@ final class CameraEngine {
         settings = new
         if new.videoFormat != old.videoFormat, !isRecording {
             send(.updateVideoConfiguration(new.videoFormat))
+        } else if new.autoMotion != old.autoMotion, mode == .video, lens != .front, !isRecording {
+            // AutoMotion needs one camera; the combined one returns when it is off.
+            Task { await applyConfig() }
         } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.portrait != old.portrait || new.photoResolution != old.photoResolution), !isRecording {
             Task { await applyConfig() }
         } else {
@@ -232,12 +237,36 @@ final class CameraEngine {
     /// A pinch sets the zoom in the chips' units. The digital zoom on the lens in use follows, and the
     /// camera switches lenses itself where the zoom passes them, so the chips show the value as it goes.
     func setContinuousZoom(_ zoom: Double) {
-        let lensFactor = ZoomStop(lens: lens, label: "").factor(focalLengths: focalLengths)
         let lowest = zoomStops.map { $0.factor(focalLengths: focalLengths) }.min() ?? 1
-        digitalZoom = min(max(zoom, lowest), Self.maxZoom) / lensFactor
+        let target = min(max(zoom, lowest), Self.maxZoom)
+        // On a single camera nothing hands the lenses over, so a pinch swaps to the lens the zoom has reached (not
+        // while recording: swapping cameras would stall the recording).
+        if isSingleCamera, !isRecording, lens != .front, let next = lensReached(by: target), next != lens {
+            digitalZoom = target / ZoomStop(lens: next, label: "").factor(focalLengths: focalLengths)
+            zoomFactor = digitalZoom
+            if send(.switchDevice(next)) {
+                controller.setZoom(lens: next, digital: digitalZoom, move: .jump)
+                updateZoomReading()
+                return
+            }
+        }
+        let lensFactor = ZoomStop(lens: lens, label: "").factor(focalLengths: focalLengths)
+        digitalZoom = target / lensFactor
         zoomFactor = digitalZoom
         controller.setZoom(lens: lens, digital: digitalZoom, move: .follow)
         updateZoomReading()
+    }
+
+    /// The lens a zoom has reached: the longest one at or under it, with a little give so a pinch that hovers on a
+    /// lens's own zoom does not swap back and forth. Nil when the current lens already fits.
+    private func lensReached(by zoom: Double) -> LensID? {
+        let lenses = focalLengths.keys.filter { $0 != .front }
+        let factor: (LensID) -> Double = { ZoomStop(lens: $0, label: "").factor(focalLengths: self.focalLengths) }
+        let current = factor(lens)
+        if zoom < current - 0.04 {
+            return lenses.filter { factor($0) <= zoom + 0.001 }.max { factor($0) < factor($1) } ?? lenses.min { factor($0) < factor($1) }
+        }
+        return lenses.filter { factor($0) > current + 0.001 && factor($0) <= zoom }.max { factor($0) < factor($1) }
     }
 
     /// The most the camera zooms to, the same cap the capture session puts on the device.
@@ -380,9 +409,11 @@ final class CameraEngine {
             wantsRAW: settings.capturesRAW,
             rawFormat: settings.rawFormat,
             photoResolution: settings.photoResolution,
-            portrait: settings.portrait && machine.configuration.mode == .photo
+            portrait: settings.portrait && machine.configuration.mode == .photo,
+            motion: settings.autoMotion && machine.configuration.mode == .video
         )
         let info = await controller.apply(config)
+        isSingleCamera = info.singleCamera
         focalLengths = info.focalLengths
         rawAvailable = info.rawAvailable
         appleLogActive = info.appleLogActive

@@ -97,9 +97,59 @@ final class MotionExposureTests: XCTestCase {
         let decision = step(.motion, iso: 6400, duration: 1.0 / 50, offset: -0.9)
         let setting = try XCTUnwrap(decision.setting)
         XCTAssertLessThanOrEqual(setting.duration, 1.0 / 24 + 1e-12)
-        XCTAssertEqual(setting.iso, 6400)
+        XCTAssertLessThanOrEqual(setting.iso, 6400)
         let night = step(.motion, iso: 6400, duration: 1.0 / 24, offset: -3)
         XCTAssertEqual(night.status, .handedOver(tooBright: false))
+    }
+}
+
+final class MotionComfortTests: XCTestCase {
+    private let limits = CineExposure.Limits(minISO: 50, maxISO: 6400, minDuration: 1.0 / 20000, maxDuration: 1.0 / 3)
+
+    private func step(iso: Double, duration: Double, fps: Int = 24) -> MotionExposure.Decision {
+        MotionExposure.step(mode: .motion, current: .init(iso: iso, duration: duration), offset: 0, fps: fps, limits: limits, mainsHz: nil)
+    }
+
+    func testComfortISOIsTwentyFiveTimesTheLowest() {
+        XCTAssertEqual(MotionExposure.comfortISO(limits: limits), 1250)
+        XCTAssertEqual(MotionExposure.comfortISO(limits: .init(minISO: 32, maxISO: 3000, minDuration: 0.0001, maxDuration: 0.3)), 800)
+        // Never past what the camera can do.
+        XCTAssertEqual(MotionExposure.comfortISO(limits: .init(minISO: 100, maxISO: 1000, minDuration: 0.0001, maxDuration: 0.3)), 1000)
+    }
+
+    func testComfortableISOKeepsTheShutterOn180() throws {
+        let decision = step(iso: 800, duration: 1.0 / 48)
+        let setting = try XCTUnwrap(decision.setting)
+        XCTAssertEqual(setting.duration, 1.0 / 48, accuracy: 1e-12)
+        XCTAssertEqual(setting.iso, 800, accuracy: 1e-6)
+        XCTAssertEqual(decision.status, .cinematic)
+    }
+
+    func testDimLightSlowsTheShutterBeforeTheISOClimbs() throws {
+        // ISO 1600 at 1/48 would be 800 at 1/24 (a stop slower); the ISO stops at 1250 and the shutter makes up the rest.
+        let decision = step(iso: 1600, duration: 1.0 / 48)
+        let setting = try XCTUnwrap(decision.setting)
+        XCTAssertEqual(setting.iso, 1250, accuracy: 1e-6)
+        XCTAssertEqual(setting.iso * setting.duration, 1600.0 / 48, accuracy: 1e-9)
+        XCTAssertGreaterThan(setting.duration, 1.0 / 48)
+        guard case .bent(let stops) = decision.status else { return XCTFail("expected bent, got \(decision.status)") }
+        XCTAssertLessThan(stops, 0)
+    }
+
+    func testTheShutterNeverGoesPastAStopOrAFrame() throws {
+        let decision = step(iso: 5000, duration: 1.0 / 48)
+        let setting = try XCTUnwrap(decision.setting)
+        XCTAssertEqual(setting.duration, 1.0 / 24, accuracy: 1e-12)
+        XCTAssertEqual(setting.iso, 2500, accuracy: 1e-6)
+        // At 30 fps a frame is 1/30, which is under a stop past 1/60: the frame time is the limit.
+        let thirty = step(iso: 5000, duration: 1.0 / 60, fps: 30)
+        XCTAssertEqual(try XCTUnwrap(thirty.setting).duration, 1.0 / 30, accuracy: 1e-12)
+    }
+
+    func testThereIsNoJumpWhereTheComfortLimitIsCrossed() throws {
+        let below = try XCTUnwrap(step(iso: 1249, duration: 1.0 / 48).setting)
+        let above = try XCTUnwrap(step(iso: 1251, duration: 1.0 / 48).setting)
+        XCTAssertEqual(below.duration, above.duration, accuracy: 1e-4)
     }
 }
 

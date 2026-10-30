@@ -5,8 +5,9 @@ import Foundation
 /// (`CineExposure.referenceShutter`) and ISO doing the work, moving a fifth of the way per step so the
 /// picture ramps instead of jumping.
 ///
-/// When ISO alone cannot reach the brightness, the shutter gives up to one stop (faster in bright light,
-/// slower in the dark, never longer than a frame). Past that, for `patience` steps in a row, the light is
+/// The ISO is kept comfortable first (`comfortISO`): in dim light the shutter slows up to a stop past 180° before
+/// the ISO climbs. When ISO alone cannot reach the brightness at all, the shutter gives up to one stop (faster in
+/// bright light, slower in the dark, never longer than a frame). Past that, for `patience` steps in a row, the light is
 /// out of reach of 180° and the iPhone's own auto exposure takes over, until the light has been back within
 /// 0.7 stops for as long. The wait keeps a brief flash or a noisy meter from throwing the camera between
 /// the two every frame.
@@ -138,13 +139,31 @@ public enum MotionExposure {
         }
     }
 
-    /// Shutter and ISO for `exposure`: 180° when ISO can carry it, otherwise the shutter bends.
+    /// The ISO the loop would rather not pass: 25 times the camera's lowest (about ISO 800 on a main camera, where
+    /// pictures are still clean). Past it the shutter lengthens before the ISO climbs any further.
+    public static func comfortISO(limits: CineExposure.Limits) -> Double {
+        min(limits.maxISO, max(limits.minISO * 25, 640))
+    }
+
+    /// Shutter and ISO for `exposure`: 180° while the ISO stays comfortable; in dimmer light the shutter slows
+    /// (at most a stop past 180°, never longer than a frame) to keep the ISO down; at the ends of the ISO range
+    /// the shutter bends the other way as well.
     private static func place(exposure: Double, reference: Double, longest: Double, limits: CineExposure.Limits, offset: Double) -> Decision {
         let iso = exposure / reference
-        if iso >= limits.minISO, iso <= limits.maxISO {
+        let comfort = comfortISO(limits: limits)
+        if iso >= limits.minISO, iso <= comfort {
             // The shutter is already on 180°; the status goes green once the picture has ramped near its target.
             let status: Status = abs(offset) < 0.5 ? .cinematic : .settling
             return Decision(mode: .motion, setting: .init(iso: iso, duration: reference), status: status)
+        }
+        if iso > comfort {
+            let slowest = min(longest, reference * 2)
+            let duration = min(slowest, exposure / comfort)
+            let finalISO = exposure / duration
+            if finalISO <= limits.maxISO {
+                let status: Status = duration > reference * 1.02 ? .bent(stops: log2(reference / duration)) : (abs(offset) < 0.5 ? .cinematic : .settling)
+                return Decision(mode: .motion, setting: .init(iso: finalISO, duration: duration), status: status)
+            }
         }
         let edgeISO = iso < limits.minISO ? limits.minISO : limits.maxISO
         let duration = min(max(exposure / edgeISO, limits.minDuration), longest)

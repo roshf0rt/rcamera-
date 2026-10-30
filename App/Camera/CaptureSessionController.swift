@@ -27,6 +27,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var photoResolution: PhotoResolution
         /// Portrait photo mode: stream depth for the live background blur.
         var portrait: Bool = false
+        /// AutoMotion runs in video: it sets shutter and ISO itself, which the combined back camera does not take.
+        var motion: Bool = false
     }
 
     struct DeviceInfo: Sendable {
@@ -43,6 +45,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var budgetFallback: VideoFormat?
         /// What the session's `hardwareCost` read when the format asked for was over budget (1 is the limit).
         var budgetCost: Double?
+        /// A single back camera runs, not the combined one: lenses change by swapping cameras.
+        var singleCamera = false
     }
 
     struct PhotoOutcome: @unchecked Sendable {
@@ -228,8 +232,13 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         // 4K at 120 fps takes nearly all of the camera's budget: the photo output asks for as little as it can, and
         // the recording takes the viewfinder's own stream instead of a second one at full size.
         let leanPhotoOutput = config.mode == .video && config.format.fps > FormatChooser.highFrameRate
-        // Bayer RAW photos come from one camera at a time: the lens asked for, on its own.
-        let singleCamera = config.mode == .photo && config.wantsRAW && config.rawFormat == .bayer && !config.portrait && position == .back
+        // Bayer RAW photos come from one camera at a time: the lens asked for, on its own. So does video with AutoMotion:
+        // the combined back camera takes no custom exposure (Apple's documentation says so for the triple camera), so
+        // shutter and ISO can only be set on a single camera.
+        let singleCamera = position == .back && (
+            (config.mode == .photo && config.wantsRAW && config.rawFormat == .bayer && !config.portrait)
+                || (config.mode == .video && config.motion)
+        )
         let wanted = self.device(for: position, highFrameRate: highFrameRate, physicalLens: singleCamera ? config.lens : nil)
         let needsInput = videoInput == nil || currentPosition != position || currentHighFrameRate != highFrameRate
             || (wanted != nil && videoInput?.device.uniqueID != wanted?.uniqueID)
@@ -318,7 +327,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             appleLogActive: formatPlan.appleLog,
             didReconfigure: structural && wasRunning,
             frameRates: [1920: FormatChooser.frameRates(described, width: 1920), 3840: FormatChooser.frameRates(described, width: 3840)],
-            deviceID: device.uniqueID
+            deviceID: device.uniqueID,
+            singleCamera: position == .back && !device.isVirtualDevice
         )
     }
 
@@ -504,6 +514,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let ratio = current.duration / reference
         if ratio > 1.15 { return .bent(stops: log2(reference / current.duration)) }
         if ratio >= 0.85 { return .cinematic }
+        // A shorter shutter at an ISO well above the lowest is the camera's own choice, not bright light: it is its
+        // auto exposure that splits the light, and here it cannot be told to do otherwise. Say so, not ND.
+        if current.iso > limits.minISO * 3 { return .handedOver(tooBright: false) }
         if ratio >= 0.7 { return .settling }
         return .bent(stops: log2(reference / current.duration))
     }
