@@ -81,6 +81,7 @@ struct PresetEditorView: View {
         .task(id: presetID) { await reloadLUT() }
         .task(id: source) { await loadBase() }
         .task(id: renderKey) { await render() }
+        .task(id: adjustments.crossover) { await reloadCrossover() }
         .onChange(of: picked) { _, item in
             guard let item else { return }
             Task {
@@ -159,6 +160,7 @@ struct PresetEditorView: View {
                 grid {
                     continuousTile("LUT strength", value: $adjustments.filmStrength, range: 0 ... 1, reset: LookAdjustments.neutral.filmStrength) { String(format: "%.0f%%", $0 * 100) }
                     continuousTile("Saturation", value: $adjustments.saturation, range: 0 ... 2, reset: LookAdjustments.neutral.saturation) { String(format: "%.2f×", $0) }
+                    if presetID == ArriLook.presetID { crossoverTile }
                 }
                 cardSection
                     .padding(.top, 6)
@@ -296,6 +298,23 @@ struct PresetEditorView: View {
         let resolved = await model.baseLook(for: preset)
         lut = resolved.lut
         look = resolved
+    }
+
+    /// ARRI mixes two LUTs by the Crossover slider, so the preview needs the LUT for the slider's current value.
+    private func reloadCrossover() async {
+        guard presetID == ArriLook.presetID, loaded, var preset = model.preset(id: presetID) else { return }
+        try? await Task.sleep(for: .milliseconds(60))
+        guard !Task.isCancelled else { return }
+        preset.adjustments.crossover = adjustments.crossover
+        let resolved = await model.baseLook(for: preset)
+        guard !Task.isCancelled else { return }
+        lut = resolved.lut
+        look = resolved
+    }
+
+    /// Warm highlights and cool shadows to the right, the reverse to the left, neutral in the middle.
+    private var crossoverTile: some View {
+        continuousTile("Crossover", value: $adjustments.crossover, range: ArriLook.crossoverRange, reset: 0) { String(format: "%+.2f", $0) }
     }
 
     /// The newest photo's untouched camera image, or the built-in scene when there is none.

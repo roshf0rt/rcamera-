@@ -18,7 +18,7 @@ struct PresetCardStyle {
         LinearGradient(colors: colors, startPoint: .bottomLeading, endPoint: .topTrailing)
     }
 
-    /// In the order of the built-in presets: JaneSu, Carbon, Clear, Drift, Mosaic, Rise, Sienna, Silver, Solstice, Velvet.
+    /// In the order of the built-in presets: JaneSu, Carbon, Clear, Drift, Mosaic, Rise, Sienna, Silver, Solstice, Velvet, ARRI.
     static let all: [PresetCardStyle] = [
         PresetCardStyle(subtitle: "Film • Color", colors: hex(0x218DFD, 0x7066D8, 0xF13722), light: true, selectedFill: hex(0xE9E9DF)[0]),
         PresetCardStyle(subtitle: "Mono • Contrast", colors: hex(0x33383C, 0x9DA1A0, 0xE0DED5)),
@@ -30,6 +30,7 @@ struct PresetCardStyle {
         PresetCardStyle(subtitle: "Mono • Soft", colors: hex(0x676B6E, 0xC5C7C4, 0xECECE3)),
         PresetCardStyle(subtitle: "Grain • Halation", colors: hex(0x1E5C61, 0x2D5256, 0xEBB0AE)),
         PresetCardStyle(subtitle: "Grain • Cool green", colors: hex(0x008873, 0x85A764, 0xEDBD53)),
+        PresetCardStyle(subtitle: "Cine • Crossover", colors: hex(0x1B4F5C, 0x2F8F9D, 0xE3A257)),
     ]
 
     static func of(_ preset: Preset) -> PresetCardStyle {

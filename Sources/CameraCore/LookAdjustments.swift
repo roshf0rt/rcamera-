@@ -34,6 +34,9 @@ public struct LookAdjustments: Codable, Equatable, Sendable {
     public var chromaticAberration: Double = 0
     /// Glow around bright areas, 0...1.
     public var bloom: Double = 0
+    /// Mix of a LUT pair, -1...1: warm highlights and cool shadows at +1, the reverse at -1, neutral at 0.
+    /// Only the ARRI preset has a pair (`ArriLook`); it is a LUT choice, so the shader never sees it.
+    public var crossover: Double = 0
     /// The contrast curve last applied, if any. Only used to show its name.
     public var curve: ContrastCurve?
 
@@ -63,6 +66,7 @@ public struct LookAdjustments: Codable, Equatable, Sendable {
         sharpness = Self.clamp(sharpness, -0.5, 0.5)
         chromaticAberration = Self.clamp(chromaticAberration, 0, 4)
         bloom = Self.clamp(bloom, 0, 1)
+        crossover = Self.clamp(crossover, -1, 1)
     }
 
     static func clamp(_ value: Double, _ low: Double, _ high: Double) -> Double {
@@ -71,7 +75,7 @@ public struct LookAdjustments: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case postExposure, contrast, saturation, temp, tint, hue, shadows, midpoint, highlights
-        case fade, mute, filmStrength, dynamicRange, grainSize, sharpness, chromaticAberration, bloom, curve
+        case fade, mute, filmStrength, dynamicRange, grainSize, sharpness, chromaticAberration, bloom, crossover, curve
     }
 
     /// Missing keys keep their neutral values, so files written before a regulator existed still load.
@@ -98,6 +102,7 @@ public struct LookAdjustments: Codable, Equatable, Sendable {
         sharpness = value(.sharpness, sharpness)
         chromaticAberration = value(.chromaticAberration, chromaticAberration)
         bloom = value(.bloom, bloom)
+        crossover = value(.crossover, crossover)
         curve = try? c.decodeIfPresent(ContrastCurve.self, forKey: .curve)
         clamp()
     }

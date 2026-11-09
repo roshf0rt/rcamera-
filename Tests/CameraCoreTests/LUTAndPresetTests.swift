@@ -88,10 +88,10 @@ final class PresetLibraryTests: XCTestCase {
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    func testDefaultsHaveTenNamedPresets() throws {
+    func testDefaultsHaveElevenNamedPresets() throws {
         let library = try PresetLibrary(storageDirectory: makeTempDirectory())
-        XCTAssertEqual(library.presets.count, 10)
-        XCTAssertEqual(library.presets.map(\.name), ["JaneSu", "Solstice", "Velvet", "Rise", "Carbon", "Clear", "Mosaic", "Silver", "Sienna", "Drift"])
+        XCTAssertEqual(library.presets.count, 11)
+        XCTAssertEqual(library.presets.map(\.name), ["JaneSu", "ARRI", "Solstice", "Velvet", "Rise", "Carbon", "Clear", "Mosaic", "Silver", "Sienna", "Drift"])
         XCTAssertEqual(library.presets.last?.id, "preset-4")
         XCTAssertFalse(library.presets.contains(where: \.isHidden))
         XCTAssertTrue(library.presets.allSatisfy { $0.grain > 0 }, "presets start with film grain")
@@ -427,7 +427,8 @@ final class CustomPresetTests: XCTestCase {
         try library.reorder([added.id, "preset-3", "preset-1"])
         let ids = library.presets.map(\.id)
         XCTAssertEqual(Array(ids.prefix(3)), [added.id, "preset-3", "preset-1"])
-        XCTAssertEqual(ids[3], "preset-9", "unlisted presets follow in their old order")
+        XCTAssertEqual(ids[3], ArriLook.presetID, "unlisted presets follow in their old order")
+        XCTAssertEqual(ids[4], "preset-9")
         XCTAssertEqual(Set(ids).count, PresetCatalog.defaultCount + 1)
         let reopened = try PresetLibrary(storageDirectory: directory)
         XCTAssertEqual(reopened.presets.map(\.id), ids)
@@ -445,9 +446,9 @@ final class CustomPresetTests: XCTestCase {
         try "4".write(to: directory.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
 
         let reopened = try PresetLibrary(storageDirectory: directory)
-        XCTAssertEqual(Array(reopened.presets.map(\.id).prefix(10)), PresetCatalog.displayOrder)
+        XCTAssertEqual(Array(reopened.presets.map(\.id).prefix(11)), PresetCatalog.displayOrder)
         XCTAssertEqual(reopened.preset(id: mine.id)?.isHidden, true)
-        XCTAssertEqual(reopened.presets.filter { !$0.isHidden }.count, 10)
+        XCTAssertEqual(reopened.presets.filter { !$0.isHidden }.count, 11)
 
         try reopened.setHidden(false, id: mine.id)
         XCTAssertEqual(try PresetLibrary(storageDirectory: directory).preset(id: mine.id)?.isHidden, false, "the order is adopted once")

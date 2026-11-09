@@ -27,6 +27,7 @@ final class AppModel {
     @ObservationIgnored private let captureStore: CaptureStore
     @ObservationIgnored private let settingsStore: SettingsStore
     @ObservationIgnored private var lookCache: [String: FilmLook] = [:]
+    @ObservationIgnored private var arriPairTasks: [LUTSlot: Task<ArriLook.Pair?, Never>] = [:]
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -327,12 +328,17 @@ final class AppModel {
     /// Apple Log → Rec.709 conversion followed by the video LUT, so the camera can stay in Apple Log for
     /// every preset (as Lampa does with its `neutral_appleLog`).
     func baseLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
-        let key = "\(preset.id)|\(slot.rawValue)"
+        // ARRI mixes two bundled LUTs, so its look depends on the Crossover slider as well.
+        let usesArriPair = preset.id == ArriLook.presetID && !presetLibrary.hasAnyLUT(for: preset.id)
+        let crossover = preset.adjustments.crossover
+        let key = usesArriPair ? "\(preset.id)|\(slot.rawValue)|\(crossover)" : "\(preset.id)|\(slot.rawValue)"
         if let cached = lookCache[key] { return cached }
         let photoURL = presetLibrary.lutURL(for: preset.id, slot: .photo)
         let videoURL = presetLibrary.lutURL(for: preset.id, slot: .video)
         let logURL = presetLibrary.lutURL(for: preset.id, slot: .appleLog)
+        let pair = usesArriPair ? await arriPair(for: slot) : nil
         let lut: LUT3D? = await Task.detached(priority: .userInitiated) {
+            if let pair { return pair.mixed(crossover: crossover) }
             switch slot {
             case .photo:
                 return Self.parseLUT(photoURL ?? videoURL)
@@ -351,8 +357,26 @@ final class AppModel {
         // LUT strength is a photo setting; video and Apple Log always take the whole LUT.
         if slot != .photo { adjustments.filmStrength = 1 }
         let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation, adjustments: adjustments)
+        // Every slider step makes a new 65^3 LUT (4 MB), so only the newest ARRI mix of each kind is kept.
+        if usesArriPair { lookCache = lookCache.filter { !$0.key.hasPrefix("\(preset.id)|\(slot.rawValue)|") } }
         lookCache[key] = look
         return look
+    }
+
+    /// The two ARRI LUTs baked for one kind of input. The first request for a kind does the work (a fraction
+    /// of a second); everything after, including requests made while it runs, shares the result.
+    private func arriPair(for slot: LUTSlot) async -> ArriLook.Pair? {
+        if let task = arriPairTasks[slot] { return await task.value }
+        let directory = Bundle.main.url(forResource: "LUTs", withExtension: nil)
+        let task = Task.detached(priority: .userInitiated) { () -> ArriLook.Pair? in
+            guard let directory,
+                  let a = Self.parseLUT(directory.appendingPathComponent("arri-a.lut")),
+                  let b = Self.parseLUT(directory.appendingPathComponent("arri-b.lut"))
+            else { return nil }
+            return ArriLook.Pair(a: a, b: b, slot: slot)
+        }
+        arriPairTasks[slot] = task
+        return await task.value
     }
 
     nonisolated static let neutralAppleLog = AppleLog.neutralRec709LUT()

@@ -77,7 +77,7 @@ public enum LUTSlot: String, CaseIterable, Codable, Sendable {
 }
 
 public enum PresetCatalog {
-    public static let defaultCount = 10
+    public static let defaultCount = 11
     /// Presets the user adds start with this, so they can be told apart from the built-in ten.
     public static let customPrefix = "custom-"
     /// Bumped whenever default names or looks change, so older installs can adopt them.
@@ -89,14 +89,15 @@ public enum PresetCatalog {
 
     /// The order the camera shows the built-in presets in: JaneSu, Solstice, Velvet, Rise, Carbon,
     /// Clear, Mosaic, Silver, Sienna, Drift.
-    public static let displayOrder = ["preset-1", "preset-9", "preset-10", "preset-6", "preset-2", "preset-3", "preset-5", "preset-8", "preset-7", "preset-4"]
+    /// ARRI comes second, next to JaneSu.
+    public static let displayOrder = ["preset-1", ArriLook.presetID, "preset-9", "preset-10", "preset-6", "preset-2", "preset-3", "preset-5", "preset-8", "preset-7", "preset-4"]
 
-    /// JaneSu first, then the Roshfort collection.
-    static let names = ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet"]
+    /// JaneSu first, then the Roshfort collection, then ARRI (`ArriLook`).
+    static let names = ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet", "ARRI"]
     /// Film grain amount each preset starts with (see `FilmMath.grainIntensity`).
-    static let grain = [0.5, 0.45, 0.35, 0.45, 0.55, 0.45, 0.45, 0.5, 0.45, 0.45]
+    static let grain = [0.5, 0.45, 0.35, 0.45, 0.55, 0.45, 0.45, 0.5, 0.45, 0.45, 0.3]
     /// Halation strength each preset starts with (see `FilmMath.halationStrength`).
-    static let halation = [0.6, 0.55, 0.5, 0.6, 0.6, 0.6, 0.65, 0.55, 0.65, 0.6]
+    static let halation = [0.6, 0.55, 0.5, 0.6, 0.6, 0.6, 0.65, 0.55, 0.65, 0.6, 0.35]
     /// Revision 3 changed how grain and halation are rendered, so earlier amounts are replaced.
     static let filmRevision = 3
 
@@ -180,6 +181,13 @@ public final class PresetLibrary {
                 }
                 try? JSONEncoder().encode(saved).write(to: presetsFile, options: .atomic)
             }
+            // Built-in presets added after this install was made (ARRI) join it, next to JaneSu.
+            let missing = defaults.filter { fresh in !saved.contains { $0.id == fresh.id } }
+            if !missing.isEmpty {
+                let after = (saved.firstIndex { $0.id == "preset-1" } ?? -1) + 1
+                saved.insert(contentsOf: missing, at: after)
+                try? JSONEncoder().encode(saved).write(to: presetsFile, options: .atomic)
+            }
             presets = saved
         } else {
             presets = defaults
@@ -249,6 +257,7 @@ public final class PresetLibrary {
         look.filmStrength = wanted.filmStrength
         look.curve = wanted.curve
         look.dynamicRange = wanted.dynamicRange
+        look.crossover = wanted.crossover
         result.adjustments = look
         return result
     }
