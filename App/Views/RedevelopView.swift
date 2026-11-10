@@ -14,8 +14,12 @@ struct RedevelopView: View {
 
     @State private var presetID = ""
     @State private var pushPull = 0.0
-    @State private var grainLevel = GrainLevel.medium
-    @State private var halationLevel = EffectLevel.medium
+    /// Grain and halation of this photo, set finely (after yCam's Texture panel).
+    @State private var texture = PhotoTexture()
+    /// Which of Grain and Halation has its controls open; nil keeps the panel closed.
+    @State private var textureTab: TextureTab?
+    /// ARRI only: the mix of its two LUTs for this photo.
+    @State private var crossover = 0.0
     /// Shadows moved afterwards, -1 (down) ... 1 (up).
     @State private var shadowLift = 0.0
     /// Portrait photos: the aperture and lens the background is drawn with, and the depth it is drawn from.
@@ -30,6 +34,8 @@ struct RedevelopView: View {
     @State private var isSaving = false
     @State private var loaded = false
     @State private var original: UIImage?
+    /// The saved photo's real long side; `original` is decoded smaller for a 48 MP photo.
+    @State private var originalLongSide: Int?
     /// The picture is pinched in: the preview is then made larger, so details can be checked before Render.
     @State private var zoomed = false
     @State private var baseScale: Float = 0.35
@@ -40,14 +46,14 @@ struct RedevelopView: View {
         guard let record else { return false }
         return presetID != record.presetID
             || abs(pushPull - record.evPushPull) > 0.01
-            || grainLevel != record.grainLevel
-            || halationLevel != record.halationLevel
+            || texture != record.resolvedTexture
+            || (presetID == ArriLook.presetID && abs(crossover - recordCrossover(record)) > 0.005)
             || abs(shadowLift - record.shadowLift) > 0.01
             || (record.lensStyle != nil && (fNumber != record.portraitFNumber || lens != record.lensStyle))
     }
 
     private var renderKey: String {
-        "\(presetID)|\(pushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(source != nil)|\(fNumber)|\(lens)|\(depth != nil)|\(zoomed)"
+        "\(presetID)|\(pushPull)|\(texture)|\(presetID == ArriLook.presetID ? crossover : 0)|\(shadowLift)|\(source != nil)|\(fNumber)|\(lens)|\(depth != nil)|\(zoomed)"
     }
 
     var body: some View {
@@ -59,6 +65,7 @@ struct RedevelopView: View {
             presetRow.padding(.top, 10)
             shadowsControl.padding(.top, 12)
             evControl.padding(.top, 14)
+            if presetID == ArriLook.presetID { crossoverControl.padding(.top, 12) }
             footer
         }
         .padding(.horizontal, 16)
@@ -117,12 +124,109 @@ struct RedevelopView: View {
         .padding(.top, 6)
     }
 
+    enum TextureTab: String, CaseIterable {
+        case grain = "Grain"
+        case halation = "Halation"
+    }
+
+    /// Grain and Halation chips; the chosen one opens its controls under them, a second tap closes them.
     private var effects: some View {
-        HStack(spacing: 10) {
-            LevelToggle(title: "GRAIN", level: grainLevel) { grainLevel = grainLevel.next }
-            LevelToggle(title: "HALATION", level: halationLevel) { halationLevel = halationLevel.next }
-            Spacer()
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ForEach(TextureTab.allCases, id: \.self) { tab in
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { textureTab = textureTab == tab ? nil : tab }
+                    } label: {
+                        Text(tab.rawValue)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(textureTab == tab ? Color.black : .white)
+                            .padding(.horizontal, 16)
+                            .frame(height: 36)
+                            .background(Capsule().fill(textureTab == tab ? Color.white : Theme.chrome))
+                            .overlay(alignment: .topTrailing) {
+                                // A dot when the effect is off, so a closed panel still says so.
+                                if isOff(tab) { Circle().fill(Theme.secondaryText).frame(width: 6, height: 6).offset(x: -6, y: 6) }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            switch textureTab {
+            case .grain: grainControls.transition(.opacity.combined(with: .move(edge: .top)))
+            case .halation: halationControls.transition(.opacity.combined(with: .move(edge: .top)))
+            case nil: EmptyView()
+            }
         }
+    }
+
+    private func isOff(_ tab: TextureTab) -> Bool {
+        switch tab {
+        case .grain: texture.grainAmount < 0.005
+        case .halation: !texture.halationOn || texture.halationAmount < 0.005
+        }
+    }
+
+    /// The preset's own grain size, where the size slider starts and returns on a double tap.
+    private var presetGrainSize: Double { model.preset(id: presetID)?.adjustments.grainSize ?? 1 }
+
+    private var grainControls: some View {
+        VStack(spacing: 8) {
+            sliderRow("Amount", value: $texture.grainAmount, range: PhotoTexture.amountRange, reset: 1) { String(format: "%.2f", $0) }
+            sliderRow(
+                "Size",
+                value: Binding(
+                    get: { texture.grainSize ?? presetGrainSize },
+                    // The preset's own size is stored as nil, so it follows the preset.
+                    set: { texture.grainSize = abs($0 - presetGrainSize) < 0.01 ? nil : $0 }
+                ),
+                range: PhotoTexture.sizeRange,
+                reset: presetGrainSize
+            ) { String(format: "%.2f", $0) }
+        }
+    }
+
+    private var halationControls: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Toggle("Halation", isOn: $texture.halationOn)
+                    .labelsHidden()
+                    .tint(Theme.accent)
+                Picker("Kind", selection: $texture.halation) {
+                    ForEach(PhotoTexture.Halation.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .disabled(!texture.halationOn)
+            }
+            sliderRow("Amount", value: $texture.halationAmount, range: PhotoTexture.amountRange, reset: 1) { String(format: "%.2f", $0) }
+                .disabled(!texture.halationOn)
+                .opacity(texture.halationOn ? 1 : 0.4)
+        }
+    }
+
+    /// One labelled slider; a double tap puts it back on `reset`.
+    private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, reset: Double, format: @escaping (Double) -> String) -> some View {
+        HStack(spacing: 14) {
+            Text(title)
+                .font(.system(size: 17))
+                .foregroundStyle(.white)
+                .frame(width: 78, alignment: .leading)
+            ResettableSlider(value: value, range: range, reset: reset)
+            Text(format(value.wrappedValue))
+                .font(.system(size: 17, design: .monospaced))
+                .foregroundStyle(abs(value.wrappedValue - reset) > 0.005 ? Theme.accent : Theme.secondaryText)
+                .frame(width: 52, alignment: .trailing)
+        }
+    }
+
+    /// The Crossover mix a record stands for: its own, or the ARRI preset's when it has none.
+    private func recordCrossover(_ record: CaptureRecord) -> Double {
+        record.crossover ?? model.preset(id: ArriLook.presetID)?.adjustments.crossover ?? 0
+    }
+
+    /// ARRI's two LUTs mixed for this photo: warm highlights and cool shadows to the right, the reverse to the left.
+    private var crossoverControl: some View {
+        sliderRow("Crossover", value: $crossover, range: ArriLook.crossoverRange, reset: 0) { String(format: "%+.2f", $0) }
     }
 
     /// The aperture and lens of a portrait photo's background. Changing them draws the background again.
@@ -223,15 +327,19 @@ struct RedevelopView: View {
         guard !loaded, let record else { return }
         presetID = record.presetID
         pushPull = record.evPushPull
-        grainLevel = record.grainLevel
-        halationLevel = record.halationLevel
+        texture = record.resolvedTexture
+        crossover = recordCrossover(record)
         shadowLift = record.shadowLift
         fNumber = record.portraitFNumber ?? PortraitAperture.standard
         lens = record.lensStyle ?? .solis
         loaded = true
         let url = model.url(.processed, for: record)
         Task {
-            original = await Task.detached { UIImage(contentsOfFile: url.path) }.value
+            let decoded = await Task.detached(priority: .userInitiated) {
+                (ImageDecoding.image(at: url, maxPixels: ImageDecoding.viewerPixels), ImageDecoding.pixelLongSide(at: url))
+            }.value
+            original = decoded.0
+            originalLongSide = decoded.1
             source = await model.redevelopSource(for: record)
             depth = await model.depthMap(for: record)
         }
@@ -257,7 +365,12 @@ struct RedevelopView: View {
         }
         guard let base else { return }
 
-        var look = await model.leveledLook(for: preset, grain: grainLevel, halation: halationLevel, shadowLift: shadowLift)
+        var look = await model.photoLook(
+            for: preset,
+            texture: texture,
+            crossover: presetID == ArriLook.presetID ? crossover : nil,
+            shadowLift: shadowLift
+        )
         let pass = depth.flatMap {
             PhotoPipeline.portraitPass(
                 PhotoPipeline.PortraitDepth(map: $0, fNumber: fNumber, lens: lens),
@@ -274,8 +387,9 @@ struct RedevelopView: View {
 
     /// The preview scale at which the photo's long side is about 4000 px, capped at full size.
     private var detailScale: Float {
-        guard let original else { return 1 }
-        let longSide = max(original.size.width, original.size.height) * original.scale
+        guard let longSide = originalLongSide.map(CGFloat.init)
+            ?? original.map({ max($0.size.width, $0.size.height) * $0.scale })
+        else { return 1 }
         return Float(min(1, max(0.35, 4000 / max(longSide, 1))))
     }
 
@@ -303,8 +417,8 @@ struct RedevelopView: View {
             record,
             presetID: presetID,
             pushPull: pushPull,
-            grain: grainLevel,
-            halation: halationLevel,
+            texture: texture,
+            crossover: crossover,
             portraitFNumber: fNumber,
             lens: lens,
             shadowLift: shadowLift

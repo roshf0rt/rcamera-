@@ -109,20 +109,57 @@ public enum ArriLook {
 
     /// `lut` seen through the input transform of `slot`: a LUT that takes that kind of input directly.
     public static func baked(_ lut: LUT3D, for slot: LUTSlot, size: Int = 65) -> LUT3D {
-        var values: [Float] = []
-        values.reserveCapacity(size * size * size * 4)
+        bakedAll([lut], for: slot, size: size)[0]
+    }
+
+    /// Scene-linear value of each lattice step of a `size` cube, for one kind of input. The input curve is per
+    /// channel, so it is worked out once per step instead of once per lattice point.
+    static func linearSteps(for slot: LUTSlot, size: Int) -> [Float] {
         let scale = Float(size - 1)
+        return (0 ..< size).map { step in
+            let x = Float(step) / scale
+            switch slot {
+            case .photo: return srgbToLinear(x)
+            case .video: return rec709ToLinear(x)
+            case .appleLog: return AppleLog.decode(x)
+            }
+        }
+    }
+
+    /// Several LUTs baked through one input transform in a single pass: the LogC code of each lattice point is
+    /// computed once and looked up in every LUT.
+    static func bakedAll(_ luts: [LUT3D], for slot: LUTSlot, size: Int) -> [LUT3D] {
+        let steps = linearSteps(for: slot, size: size)
+        let m = slot == .appleLog ? rec2020ToAWG : rec709ToAWG
+        let (m00, m10, m20) = (m[0][0], m[1][0], m[2][0])
+        let count = size * size * size * 4
+        var outputs = [[Float]](repeating: [Float](repeating: 1, count: count), count: luts.count)
+        var index = 0
         for b in 0 ..< size {
+            let lb = steps[b]
             for g in 0 ..< size {
+                let lg = steps[g]
+                // The green and blue parts of the matrix product are the same along the whole red row.
+                let partR = m[0][1] * lg + m[0][2] * lb
+                let partG = m[1][1] * lg + m[1][2] * lb
+                let partB = m[2][1] * lg + m[2][2] * lb
                 for r in 0 ..< size {
-                    let code = logCCode(for: slot, r: Float(r) / scale, g: Float(g) / scale, b: Float(b) / scale)
-                    let out = lut.apply(r: code.0, g: code.1, b: code.2)
-                    values += [out.r, out.g, out.b, 1]
+                    let lr = steps[r]
+                    let cr = logC3(m00 * lr + partR)
+                    let cg = logC3(m10 * lr + partG)
+                    let cb = logC3(m20 * lr + partB)
+                    for which in luts.indices {
+                        let out = luts[which].apply(r: cr, g: cg, b: cb)
+                        outputs[which][index] = out.r
+                        outputs[which][index + 1] = out.g
+                        outputs[which][index + 2] = out.b
+                    }
+                    index += 4
                 }
             }
         }
-        // The size is in range and the count matches, so this cannot fail.
-        return try! LUT3D(size: size, rgba: values)
+        // The size is in range and the counts match, so this cannot fail.
+        return outputs.map { try! LUT3D(size: size, rgba: $0) }
     }
 
     /// Both LUTs baked for one kind of input, ready to be mixed.
@@ -131,8 +168,9 @@ public enum ArriLook {
         public let b: LUT3D
 
         public init(a: LUT3D, b: LUT3D, slot: LUTSlot, size: Int = 65) {
-            self.a = ArriLook.baked(a, for: slot, size: size)
-            self.b = ArriLook.baked(b, for: slot, size: size)
+            let baked = ArriLook.bakedAll([a, b], for: slot, size: size)
+            self.a = baked[0]
+            self.b = baked[1]
         }
 
         /// The mix for a slider value. Mixing baked LUTs equals baking the mix, because the input transform comes first.
@@ -140,11 +178,12 @@ public enum ArriLook {
             let wa = ArriLook.weight(forCrossover: crossover)
             if wa >= 1 { return a }
             if wa <= 0 { return b }
-            let wb = 1 - wa
             var values = a.rgba
-            let other = b.rgba
-            for index in values.indices {
-                values[index] = values[index] * wa + other[index] * wb
+            b.rgba.withUnsafeBufferPointer { other in
+                values.withUnsafeMutableBufferPointer { out in
+                    // b + (a - b) * wa: one multiply per value.
+                    for index in out.indices { out[index] = other[index] + (out[index] - other[index]) * wa }
+                }
             }
             return try! LUT3D(size: a.size, rgba: values)
         }

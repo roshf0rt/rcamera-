@@ -400,6 +400,19 @@ final class AppModel {
         return look.with { $0.dynamicRange = ShadowLift.dynamicRange(for: shadowLift) }
     }
 
+    /// A photo's look in Redevelop: the preset (with the photo's own Crossover mix for ARRI), its fine grain and
+    /// halation, and the shadows moved.
+    func photoLook(for preset: Preset, texture: PhotoTexture, crossover: Double?, shadowLift: Double = 0) async -> FilmLook {
+        var preset = preset
+        if let crossover { preset.adjustments.crossover = crossover }
+        let base = await baseLook(for: preset)
+        var adjustments = base.adjustments
+        let strength = texture.resolve(grain: base.grain, halation: base.halation, adjustments: &adjustments)
+        let look = base.with(grain: strength.grain, halation: strength.halation, adjustments: adjustments)
+        guard shadowLift != 0 else { return look }
+        return look.with { $0.dynamicRange = ShadowLift.dynamicRange(for: shadowLift) }
+    }
+
     /// The preset's look with the camera-screen grain and halation toggles applied.
     func cameraLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
         let base = await baseLook(for: preset, slot: slot)
@@ -527,7 +540,8 @@ final class AppModel {
                 halationLevel: halationLevel,
                 orientation: photo.orientation,
                 portraitFNumber: photo.depth == nil ? nil : portraitFNumber,
-                lensStyle: photo.depth == nil ? nil : lens
+                lensStyle: photo.depth == nil ? nil : lens,
+                crossover: preset.id == ArriLook.presetID ? preset.adjustments.crossover : nil
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
@@ -693,8 +707,8 @@ final class AppModel {
         _ record: CaptureRecord,
         presetID: String,
         pushPull: Double,
-        grain: GrainLevel,
-        halation: EffectLevel,
+        texture: PhotoTexture,
+        crossover: Double?,
         portraitFNumber: Double,
         lens: LensStyle,
         shadowLift: Double = 0
@@ -705,7 +719,8 @@ final class AppModel {
         let portrait = await depthMap(for: record).map {
             PhotoPipeline.PortraitDepth(map: $0, fNumber: portraitFNumber, lens: lens)
         }
-        var look = await leveledLook(for: preset, grain: grain, halation: halation, shadowLift: shadowLift)
+        let crossover = presetID == ArriLook.presetID ? crossover : nil
+        var look = await photoLook(for: preset, texture: texture, crossover: crossover, shadowLift: shadowLift)
         if portrait != nil { look = look.with { lens.apply(to: &$0) } }
         let aspect = record.aspect
         let mirror = record.mirrored
@@ -733,8 +748,10 @@ final class AppModel {
             var updated = record
             updated.presetID = presetID
             updated.evPushPull = pushPull
-            updated.grainLevel = grain
-            updated.halationLevel = halation
+            updated.grainLevel = texture.nearestGrainLevel
+            updated.halationLevel = texture.nearestHalationLevel
+            updated.texture = texture == PhotoTexture(grain: updated.grainLevel, halation: updated.halationLevel) ? nil : texture
+            updated.crossover = crossover
             updated.shadowLift = shadowLift
             if portrait != nil {
                 updated.portraitFNumber = portraitFNumber

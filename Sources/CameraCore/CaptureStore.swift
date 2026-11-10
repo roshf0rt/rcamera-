@@ -50,6 +50,13 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var logVideo: Bool
     /// Shadows moved in Redevelop, -1 (down) to 1 (up), 0 for none; see `ShadowLift`.
     public var shadowLift: Double
+    /// Grain and halation set finely in Redevelop. Nil: `grainLevel` and `halationLevel` decide.
+    public var texture: PhotoTexture?
+    /// ARRI photos: the Crossover mix they were shot or redeveloped with (`ArriLook`). Nil: the preset's.
+    public var crossover: Double?
+
+    /// The fine texture, or the one the levels stand for.
+    public var resolvedTexture: PhotoTexture { texture ?? PhotoTexture(grain: grainLevel, halation: halationLevel) }
 
     public init(
         id: UUID = UUID(),
@@ -70,7 +77,9 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         portraitFNumber: Double? = nil,
         lensStyle: LensStyle? = nil,
         shadowLift: Double = 0,
-        logVideo: Bool = false
+        logVideo: Bool = false,
+        texture: PhotoTexture? = nil,
+        crossover: Double? = nil
     ) {
         self.id = id
         self.date = date
@@ -91,11 +100,14 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.lensStyle = lensStyle
         self.shadowLift = shadowLift
         self.logVideo = logVideo
+        self.texture = texture
+        self.crossover = crossover
     }
 
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
         case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, portraitFNumber, lensStyle, shadowLift, logVideo
+        case texture, crossover
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -119,6 +131,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         try c.encodeIfPresent(lensStyle, forKey: .lensStyle)
         try c.encode(shadowLift, forKey: .shadowLift)
         try c.encode(logVideo, forKey: .logVideo)
+        try c.encodeIfPresent(texture, forKey: .texture)
+        try c.encodeIfPresent(crossover, forKey: .crossover)
     }
 
     /// Index files from earlier releases lack newer keys; they keep their captures.
@@ -146,6 +160,88 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         lensStyle = try? c.decodeIfPresent(LensStyle.self, forKey: .lensStyle)
         shadowLift = (try? c.decode(Double.self, forKey: .shadowLift)) ?? 0
         logVideo = (try? c.decode(Bool.self, forKey: .logVideo)) ?? false
+        texture = try? c.decodeIfPresent(PhotoTexture.self, forKey: .texture)
+        crossover = try? c.decodeIfPresent(Double.self, forKey: .crossover)
+    }
+}
+
+/// A photo's grain and halation as Redevelop sets them, after yCam's Texture panel: grain amount and size,
+/// halation on or off, how strong, and of which kind.
+///
+/// Photochemical halation is the film's own: red light scattered back through the emulsion (the preset's
+/// halation). Optical is a lens glow: neutral, around every bright area (the bloom regulator).
+public struct PhotoTexture: Codable, Equatable, Hashable, Sendable {
+    public enum Halation: String, Codable, CaseIterable, Sendable {
+        case photochemical
+        case optical
+
+        public var label: String {
+            switch self {
+            case .photochemical: "Photochemical"
+            case .optical: "Optical"
+            }
+        }
+    }
+
+    /// Range of the amounts: times the preset's own grain or halation.
+    public static let amountRange: ClosedRange<Double> = 0 ... 2
+    /// Range of the grain size, as the film speeds set it (`LookAdjustments.grainSize`).
+    public static let sizeRange: ClosedRange<Double> = 1 ... 4
+
+    /// Times the preset's grain.
+    public var grainAmount: Double
+    /// Grain size; nil keeps the preset's.
+    public var grainSize: Double?
+    public var halationOn: Bool
+    /// Times the preset's halation.
+    public var halationAmount: Double
+    public var halation: Halation
+
+    public init(grainAmount: Double = 1, grainSize: Double? = nil, halationOn: Bool = true, halationAmount: Double = 1, halation: Halation = .photochemical) {
+        self.grainAmount = grainAmount
+        self.grainSize = grainSize
+        self.halationOn = halationOn
+        self.halationAmount = halationAmount
+        self.halation = halation
+    }
+
+    /// The texture the camera-screen levels stand for.
+    public init(grain: GrainLevel, halation: EffectLevel) {
+        self.init(
+            grainAmount: grain.multiplier,
+            halationOn: halation != .off,
+            halationAmount: halation == .off ? 1 : halation.multiplier
+        )
+    }
+
+    /// Grain and halation strength for a look whose preset has `grain` and `halation`, with `adjustments`
+    /// taking the grain size and, for optical halation, the glow.
+    public func resolve(grain: Double, halation: Double, adjustments: inout LookAdjustments) -> (grain: Double, halation: Double) {
+        let amount = min(max(grainAmount, Self.amountRange.lowerBound), Self.amountRange.upperBound)
+        if let grainSize {
+            adjustments.grainSize = min(max(grainSize, Self.sizeRange.lowerBound), Self.sizeRange.upperBound)
+        }
+        let resolvedGrain = min(1, grain * amount)
+        guard halationOn else { return (resolvedGrain, 0) }
+        let strength = halation * min(max(halationAmount, Self.amountRange.lowerBound), Self.amountRange.upperBound)
+        switch self.halation {
+        case .photochemical:
+            return (resolvedGrain, strength)
+        case .optical:
+            adjustments.bloom = min(1, max(adjustments.bloom, strength))
+            return (resolvedGrain, 0)
+        }
+    }
+
+    /// The camera-screen level closest to this grain, kept on the record for what reads the levels.
+    public var nearestGrainLevel: GrainLevel {
+        GrainLevel.allCases.min { abs($0.multiplier - grainAmount) < abs($1.multiplier - grainAmount) } ?? .medium
+    }
+
+    public var nearestHalationLevel: EffectLevel {
+        guard halationOn else { return .off }
+        let levels = EffectLevel.allCases.filter { $0 != .off }
+        return levels.min { abs($0.multiplier - halationAmount) < abs($1.multiplier - halationAmount) } ?? .medium
     }
 }
 

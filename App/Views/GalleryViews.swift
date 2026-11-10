@@ -6,17 +6,25 @@ extension CaptureRecord {
     /// Everything Redevelop can change about a capture's picture. Views reload the picture when it changes, so a
     /// new grain, halation, shadows or portrait setting shows at once, not only a new preset or push/pull.
     var lookKey: String {
-        "\(presetID)|\(evPushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(portraitFNumber ?? 0)|\(lensStyle?.rawValue ?? "")"
+        "\(presetID)|\(evPushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(portraitFNumber ?? 0)|\(lensStyle?.rawValue ?? "")|\(texture.map { "\($0)" } ?? "")|\(crossover ?? 0)"
     }
 }
 
 enum ThumbnailCache {
-    private static let cache = NSCache<NSString, UIImage>()
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        // About 600 px thumbnails at 1.4 MB each decoded: a few hundred, then the oldest go.
+        cache.countLimit = 300
+        return cache
+    }()
 
     static func load(url: URL, version: String) async -> UIImage? {
         let key = "\(url.path)|\(version)" as NSString
         if let cached = cache.object(forKey: key) { return cached }
-        let image = await Task.detached(priority: .utility) { UIImage(contentsOfFile: url.path) }.value
+        // Decoded here, off the main thread, so scrolling never waits for a JPEG.
+        let image = await Task.detached(priority: .userInitiated) {
+            ImageDecoding.image(at: url, maxPixels: ImageDecoding.thumbnailPixels)
+        }.value
         if let image { cache.setObject(image, forKey: key) }
         return image
     }
@@ -28,18 +36,22 @@ struct CaptureThumbnail: View {
     @State private var image: UIImage?
 
     var body: some View {
-        ZStack {
-            Color(white: 0.12)
-            if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+        // Filled, the picture overflows a square cell; clipping only hides the overflow, it still takes touches,
+        // and a tap low on one cell opened the photo under it. The cell's own rectangle is the only touch area.
+        Color(white: 0.12)
+            .overlay {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                }
             }
-        }
-        .task(id: "\(record.id)-\(record.lookKey)") {
-            image = await ThumbnailCache.load(
-                url: model.url(.thumbnail, for: record),
-                version: record.lookKey
-            )
-        }
+            .clipped()
+            .contentShape(Rectangle())
+            .task(id: "\(record.id)-\(record.lookKey)") {
+                image = await ThumbnailCache.load(
+                    url: model.url(.thumbnail, for: record),
+                    version: record.lookKey
+                )
+            }
     }
 }
 
@@ -150,6 +162,8 @@ struct GalleryView: View {
                                         .overlay(alignment: .bottomLeading) { badges(for: record) }
                                         .overlay(alignment: .topTrailing) { if isSelecting { pickMark(picked.contains(record.id)) } }
                                         .clipped()
+                                        .contentShape(Rectangle())
+                                        .contentShape(.contextMenuPreview, Rectangle())
                                 }
                                 .buttonStyle(PressableStyle(scale: 0.96))
                                 .contextMenu {
@@ -591,7 +605,9 @@ private struct CapturePage: View {
                 await loadVideo()
             } else {
                 let url = model.url(.processed, for: record)
-                let loaded = await Task.detached { UIImage(contentsOfFile: url.path) }.value
+                let loaded = await Task.detached(priority: .userInitiated) {
+                    ImageDecoding.image(at: url, maxPixels: ImageDecoding.viewerPixels)
+                }.value
                 withAnimation(.easeOut(duration: 0.2)) { image = loaded }
             }
         }
