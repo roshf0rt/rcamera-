@@ -583,7 +583,8 @@ final class AppModel {
                 placeName: place,
                 grainLevel: grain,
                 halationLevel: halation,
-                logVideo: keepsLog
+                logVideo: keepsLog,
+                crossover: preset.id == ArriLook.presetID ? preset.adjustments.crossover : nil
             )
             do {
                 let destination = captureStore.url(.video, for: record.id)
@@ -613,8 +614,9 @@ final class AppModel {
     }
 
     /// The look a Log video is graded with: the preset's Apple Log look, with grain and halation at the given levels.
-    func videoDevelopLook(presetID: String, grain: GrainLevel, halation: EffectLevel) async -> FilmLook? {
-        guard let preset = preset(id: presetID) else { return nil }
+    func videoDevelopLook(presetID: String, grain: GrainLevel, halation: EffectLevel, crossover: Double? = nil) async -> FilmLook? {
+        guard var preset = preset(id: presetID) else { return nil }
+        if presetID == ArriLook.presetID, let crossover { preset.adjustments.crossover = crossover }
         let base = await baseLook(for: preset, slot: .appleLog)
         return base.with(
             grain: min(1, base.grain * grain.multiplier),
@@ -626,8 +628,9 @@ final class AppModel {
     /// Grades a recorded Log video with a preset and the given grain and halation, into `processedVideo`.
     /// Frame by frame, so it takes about as long as the clip; the gallery card shows its progress.
     @discardableResult
-    func redevelopVideo(_ record: CaptureRecord, presetID: String, grain: GrainLevel, halation: EffectLevel) async -> Bool {
-        guard let look = await videoDevelopLook(presetID: presetID, grain: grain, halation: halation) else { return false }
+    func redevelopVideo(_ record: CaptureRecord, presetID: String, grain: GrainLevel, halation: EffectLevel, crossover: Double? = nil) async -> Bool {
+        let crossover = presetID == ArriLook.presetID ? crossover : nil
+        guard let look = await videoDevelopLook(presetID: presetID, grain: grain, halation: halation, crossover: crossover) else { return false }
         let id = record.id
         let source = captureStore.url(.video, for: id)
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("redevelop-\(UUID().uuidString).mov")
@@ -649,6 +652,7 @@ final class AppModel {
         updated.presetID = presetID
         updated.grainLevel = grain
         updated.halationLevel = halation
+        updated.crossover = crossover
         try? captureStore.update(updated)
         captures = captureStore.records
         if let thumbnail = await Self.videoThumbnail(url: captureStore.url(.processedVideo, for: id)) {

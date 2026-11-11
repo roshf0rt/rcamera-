@@ -16,8 +16,9 @@ struct RedevelopView: View {
     @State private var pushPull = 0.0
     /// Grain and halation of this photo, set finely (after yCam's Texture panel).
     @State private var texture = PhotoTexture()
-    /// Which of Grain and Halation has its controls open; nil keeps the panel closed.
-    @State private var textureTab: TextureTab?
+    /// The panel shown under the photo, and in Texture, whether Grain or Halation.
+    @State private var tab = Tab.look
+    @State private var textureTab = TextureTab.grain
     /// ARRI only: the mix of its two LUTs for this photo.
     @State private var crossover = 0.0
     /// Shadows moved afterwards, -1 (down) ... 1 (up).
@@ -58,17 +59,15 @@ struct RedevelopView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
-            previewArea
-            effects.padding(.top, 12)
-            if record?.lensStyle != nil { portraitControls.padding(.top, 10) }
-            presetRow.padding(.top, 10)
-            shadowsControl.padding(.top, 12)
-            evControl.padding(.top, 14)
-            if presetID == ArriLook.presetID { crossoverControl.padding(.top, 12) }
-            footer
+            topBar.padding(.horizontal, 16)
+            previewArea.padding(.horizontal, 16)
+            // One panel at a time, always the same height, so the photo does not jump when the tab changes.
+            panel
+                .frame(height: 150, alignment: .top)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+            tabBar
         }
-        .padding(.horizontal, 16)
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .onAppear(perform: load)
@@ -124,28 +123,91 @@ struct RedevelopView: View {
         .padding(.top, 6)
     }
 
+    /// The four panels, after yCam's bottom bar: one shows at a time instead of every control at once.
+    enum Tab: String, CaseIterable {
+        case look = "Look"
+        case light = "Light"
+        case texture = "Texture"
+        case lens = "Lens"
+
+        var symbol: String {
+            switch self {
+            case .look: "camera.filters"
+            case .light: "sun.max"
+            case .texture: "aqi.medium"
+            case .lens: "camera.aperture"
+            }
+        }
+    }
+
     enum TextureTab: String, CaseIterable {
         case grain = "Grain"
         case halation = "Halation"
     }
 
-    /// Grain and Halation chips; the chosen one opens its controls under them, a second tap closes them.
-    private var effects: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    /// Lens only for portrait photos, which have a background to draw again.
+    private var tabs: [Tab] { record?.lensStyle != nil ? Tab.allCases : [.look, .light, .texture] }
+
+    @ViewBuilder private var panel: some View {
+        switch tab {
+        case .look:
+            VStack(spacing: 12) {
+                presetRow
+                if presetID == ArriLook.presetID { crossoverControl }
+            }
+        case .light:
+            VStack(spacing: 14) {
+                evControl
+                LabeledSlider(title: "Shadows", value: $shadowLift, range: -1 ... 1, reset: 0, format: {
+                    abs($0) < 0.005 ? "0" : String(format: "%+.0f", $0 * 100)
+                })
+            }
+        case .texture:
+            textureControls
+        case .lens:
+            portraitControls
+        }
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(tabs, id: \.self) { item in
+                Button {
+                    withAnimation(.smooth(duration: 0.2)) { tab = item }
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: item.symbol).font(.system(size: 20))
+                        Text(item.rawValue).font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(tab == item ? Theme.accent : .white.opacity(0.75))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 54)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+    }
+
+    /// Grain or Halation, picked by the chips; the chosen one's controls sit under them.
+    private var textureControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                ForEach(TextureTab.allCases, id: \.self) { tab in
+                ForEach(TextureTab.allCases, id: \.self) { item in
                     Button {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { textureTab = textureTab == tab ? nil : tab }
+                        withAnimation(.smooth(duration: 0.2)) { textureTab = item }
                     } label: {
-                        Text(tab.rawValue)
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(textureTab == tab ? Color.black : .white)
+                        Text(item.rawValue)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(textureTab == item ? Color.black : .white)
                             .padding(.horizontal, 16)
-                            .frame(height: 36)
-                            .background(Capsule().fill(textureTab == tab ? Color.white : Theme.chrome))
+                            .frame(height: 34)
+                            .background(Capsule().fill(textureTab == item ? Color.white : Theme.chrome))
                             .overlay(alignment: .topTrailing) {
-                                // A dot when the effect is off, so a closed panel still says so.
-                                if isOff(tab) { Circle().fill(Theme.secondaryText).frame(width: 6, height: 6).offset(x: -6, y: 6) }
+                                // A dot when the effect is off, so the other chip still says so.
+                                if isOff(item) { Circle().fill(Theme.secondaryText).frame(width: 6, height: 6).offset(x: -6, y: 6) }
                             }
                     }
                     .buttonStyle(.plain)
@@ -153,9 +215,8 @@ struct RedevelopView: View {
                 Spacer()
             }
             switch textureTab {
-            case .grain: grainControls.transition(.opacity.combined(with: .move(edge: .top)))
-            case .halation: halationControls.transition(.opacity.combined(with: .move(edge: .top)))
-            case nil: EmptyView()
+            case .grain: grainControls
+            case .halation: halationControls
             }
         }
     }
@@ -171,10 +232,10 @@ struct RedevelopView: View {
     private var presetGrainSize: Double { model.preset(id: presetID)?.adjustments.grainSize ?? 1 }
 
     private var grainControls: some View {
-        VStack(spacing: 8) {
-            sliderRow("Amount", value: $texture.grainAmount, range: PhotoTexture.amountRange, reset: 1) { String(format: "%.2f", $0) }
-            sliderRow(
-                "Size",
+        VStack(spacing: 10) {
+            LabeledSlider(title: "Amount", value: $texture.grainAmount, range: PhotoTexture.amountRange, reset: 1)
+            LabeledSlider(
+                title: "Size",
                 value: Binding(
                     get: { texture.grainSize ?? presetGrainSize },
                     // The preset's own size is stored as nil, so it follows the preset.
@@ -182,7 +243,7 @@ struct RedevelopView: View {
                 ),
                 range: PhotoTexture.sizeRange,
                 reset: presetGrainSize
-            ) { String(format: "%.2f", $0) }
+            )
         }
     }
 
@@ -198,24 +259,9 @@ struct RedevelopView: View {
                 .pickerStyle(.segmented)
                 .disabled(!texture.halationOn)
             }
-            sliderRow("Amount", value: $texture.halationAmount, range: PhotoTexture.amountRange, reset: 1) { String(format: "%.2f", $0) }
+            LabeledSlider(title: "Amount", value: $texture.halationAmount, range: PhotoTexture.amountRange, reset: 1)
                 .disabled(!texture.halationOn)
                 .opacity(texture.halationOn ? 1 : 0.4)
-        }
-    }
-
-    /// One labelled slider; a double tap puts it back on `reset`.
-    private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, reset: Double, format: @escaping (Double) -> String) -> some View {
-        HStack(spacing: 14) {
-            Text(title)
-                .font(.system(size: 17))
-                .foregroundStyle(.white)
-                .frame(width: 78, alignment: .leading)
-            ResettableSlider(value: value, range: range, reset: reset)
-            Text(format(value.wrappedValue))
-                .font(.system(size: 17, design: .monospaced))
-                .foregroundStyle(abs(value.wrappedValue - reset) > 0.005 ? Theme.accent : Theme.secondaryText)
-                .frame(width: 52, alignment: .trailing)
         }
     }
 
@@ -226,13 +272,13 @@ struct RedevelopView: View {
 
     /// ARRI's two LUTs mixed for this photo: warm highlights and cool shadows to the right, the reverse to the left.
     private var crossoverControl: some View {
-        sliderRow("Crossover", value: $crossover, range: ArriLook.crossoverRange, reset: 0) { String(format: "%+.2f", $0) }
+        LabeledSlider(title: "Crossover", value: $crossover, range: ArriLook.crossoverRange, reset: 0, format: { String(format: "%+.2f", $0) })
     }
 
     /// The aperture and lens of a portrait photo's background. Changing them draws the background again.
     private var portraitControls: some View {
         let lenses = LensStyle.allCases.sorted { $0.order < $1.order }
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 10) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(PortraitAperture.stops, id: \.self) { stop in
@@ -276,51 +322,25 @@ struct RedevelopView: View {
                 }
                 .padding(.vertical, 4)
             }
+            .onAppear { proxy.scrollTo(presetID, anchor: .center) }
             .onChange(of: loaded) { _, _ in proxy.scrollTo(presetID, anchor: .center) }
         }
         .frame(height: 96)
     }
 
-    /// Moves the shadows up or down. The camera has no such control: it is for the photo whose shadows came out
-    /// too dark or too milky. A double tap on the control puts it back to zero.
-    private var shadowsControl: some View {
-        HStack(spacing: 14) {
-            Text("Shadows")
-                .font(.system(size: 17))
-                .foregroundStyle(.white)
-            ResettableSlider(value: $shadowLift, range: -1 ... 1, reset: 0)
-            Text(abs(shadowLift) < 0.005 ? "0" : String(format: "%+.0f", shadowLift * 100))
-                .font(.system(size: 17, design: .monospaced))
-                .foregroundStyle(abs(shadowLift) > 0.005 ? Theme.accent : Theme.secondaryText)
-                .frame(width: 52, alignment: .trailing)
-        }
-    }
-
     private var evControl: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             HStack {
-                Text("EV (Push/Pull)").font(.system(size: 17)).foregroundStyle(.white)
+                Text("Exposure").font(.system(size: 16)).foregroundStyle(.white)
                 Spacer()
                 Text(EVScale.format(pushPull))
-                    .font(.system(size: 17, design: .monospaced))
-                    .foregroundStyle(Theme.accent)
+                    .font(.system(size: 15, weight: .medium, design: .monospaced))
+                    .foregroundStyle(abs(pushPull) > 0.01 ? Theme.accent : Theme.secondaryText)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             EVWheel(value: $pushPull, isActive: .constant(true), pinnedOpen: true)
         }
-    }
-
-    private var footer: some View {
-        Group {
-            if let record, record.hasRAW {
-                Text("RAW data will be deleted in \(max(model.daysUntilRAWExpires(record), 0)) days")
-            } else if record != nil {
-                Text("No RAW for this photo: it is redeveloped from the camera image.")
-            }
-        }
-        .font(.system(size: 14))
-        .foregroundStyle(Theme.secondaryText)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 14)
     }
 
     private func load() {

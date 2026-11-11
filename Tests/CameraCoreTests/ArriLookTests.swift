@@ -40,7 +40,7 @@ final class ArriLookTests: XCTestCase {
             case .appleLog: grey = AppleLog.encode(0.18)
             }
             let code = ArriLook.logCCode(for: slot, r: grey, g: grey, b: grey)
-            XCTAssertEqual(code.0, 0.391, accuracy: 0.004, "\(slot)")
+            XCTAssertEqual(code.0, ArriLook.logC3(0.18 * ArriLook.exposureGain), accuracy: 0.004, "\(slot)")
             XCTAssertEqual(code.0, code.1, accuracy: 0.003, "\(slot)")
             XCTAssertEqual(code.1, code.2, accuracy: 0.003, "\(slot)")
         }
@@ -97,6 +97,20 @@ final class ArriLookTests: XCTestCase {
         let darkB = b.apply(r: 0.3, g: 0.3, b: 0.3)
         XCTAssertLessThan(darkA.r, darkA.b + 0.01)
         XCTAssertGreaterThan(darkB.r, darkB.b - 0.01)
+    }
+
+    func testTheMixKeepsMiddleGreyWhereItWas() throws {
+        // A sRGB photo's 18% grey (0.461) must not come out much darker: the preset used to be a stop dark.
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("App/Resources/LUTs")
+        let a = try LUT3D.parse(data: Data(contentsOf: directory.appendingPathComponent("arri-a.lut")), fileExtension: "lut")
+        let b = try LUT3D.parse(data: Data(contentsOf: directory.appendingPathComponent("arri-b.lut")), fileExtension: "lut")
+        let pair = ArriLook.Pair(a: a, b: b, slot: .photo, size: 33)
+        let grey = pair.mixed(crossover: 0).apply(r: 0.461, g: 0.461, b: 0.461)
+        XCTAssertEqual((grey.r + grey.g + grey.b) / 3, 0.461, accuracy: 0.04)
+        let white = pair.mixed(crossover: 0).apply(r: 1, g: 1, b: 1)
+        XCTAssertGreaterThan((white.r + white.g + white.b) / 3, 0.8)
     }
 
     func testARRIPresetIsBuiltInAndOlderInstallsGetIt() throws {

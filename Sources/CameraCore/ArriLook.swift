@@ -78,6 +78,11 @@ public enum ArriLook {
 
     // MARK: Input transforms
 
+    /// Linear gain before the LogC encode, about +0.6 stop. The pair is a dark print look: yCam feeds it RAW
+    /// lifted by its own baseline exposure. Without it 18% grey came out at 0.34 instead of 0.46 and the whole
+    /// picture a stop dark; with it grey stays where it was (0.45) and white reaches 0.83.
+    public static let exposureGain: Float = 1.5
+
     static func srgbToLinear(_ x: Float) -> Float {
         x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4)
     }
@@ -88,19 +93,19 @@ public enum ArriLook {
 
     /// The LogC3 AWG code values (0...1) an input pixel of the given kind stands for.
     /// Photos are taken as sRGB, standard video as Rec.709, and Apple Log through its published curve.
-    /// Display-referred input keeps its middle grey: 18% grey lands at LogC 0.39, like ARRI's own workflow.
+    /// The input is lifted by `exposureGain`, so 18% grey lands at LogC 0.43 and comes out of the pair at its own brightness.
     public static func logCCode(for slot: LUTSlot, r: Float, g: Float, b: Float) -> (Float, Float, Float) {
         let linear: [Float]
         let matrix: [[Float]]
         switch slot {
         case .photo:
-            linear = [srgbToLinear(r), srgbToLinear(g), srgbToLinear(b)]
+            linear = [srgbToLinear(r), srgbToLinear(g), srgbToLinear(b)].map { $0 * exposureGain }
             matrix = rec709ToAWG
         case .video:
-            linear = [rec709ToLinear(r), rec709ToLinear(g), rec709ToLinear(b)]
+            linear = [rec709ToLinear(r), rec709ToLinear(g), rec709ToLinear(b)].map { $0 * exposureGain }
             matrix = rec709ToAWG
         case .appleLog:
-            linear = [AppleLog.decode(r), AppleLog.decode(g), AppleLog.decode(b)]
+            linear = [AppleLog.decode(r), AppleLog.decode(g), AppleLog.decode(b)].map { $0 * exposureGain }
             matrix = rec2020ToAWG
         }
         let awg = apply(matrix, linear)
@@ -119,9 +124,9 @@ public enum ArriLook {
         return (0 ..< size).map { step in
             let x = Float(step) / scale
             switch slot {
-            case .photo: return srgbToLinear(x)
-            case .video: return rec709ToLinear(x)
-            case .appleLog: return AppleLog.decode(x)
+            case .photo: return srgbToLinear(x) * exposureGain
+            case .video: return rec709ToLinear(x) * exposureGain
+            case .appleLog: return AppleLog.decode(x) * exposureGain
             }
         }
     }

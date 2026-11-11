@@ -563,7 +563,7 @@ private struct CapturePage: View {
     @State private var localZoom = false
 
     private var gradeKey: String {
-        grade.map { "\($0.presetID)|\($0.grain)|\($0.halation)" } ?? "plain"
+        grade.map { "\($0.presetID)|\($0.grain)|\($0.halation)|\($0.crossover)" } ?? "plain"
     }
 
     var body: some View {
@@ -576,7 +576,7 @@ private struct CapturePage: View {
                     GeometryReader { geo in
                         let turned = turn != 0
                         let top: CGFloat = 52
-                        let bottom: CGFloat = grade == nil ? 72 : VideoGradePanel.height
+                        let bottom: CGFloat = grade.map(VideoGradePanel.height(for:)) ?? 72
                         let fitted = CGSize(width: geo.size.width, height: max(geo.size.height - top - bottom, 0))
                         VideoPlayer(player: player)
                             .frame(width: turned ? geo.size.height : fitted.width, height: turned ? geo.size.width : fitted.height)
@@ -627,7 +627,7 @@ private struct CapturePage: View {
             // A quick run of changes only builds the last one.
             try? await Task.sleep(for: .milliseconds(200))
             if Task.isCancelled { return }
-            if let look = await model.videoDevelopLook(presetID: grade.presetID, grain: grade.grain, halation: grade.halation) {
+            if let look = await model.videoDevelopLook(presetID: grade.presetID, grain: grade.grain, halation: grade.halation, crossover: grade.crossover) {
                 graded = try? await LogGradePreview.playerItem(url: model.url(.video, for: record), look: look)
             }
         }

@@ -65,3 +65,33 @@ struct ResettableSlider: View {
         return min(range.lowerBound + ((clamped - range.lowerBound) / step).rounded() * step, range.upperBound)
     }
 }
+
+/// A labelled slider with its value on the right, the way the editors show one setting. The value never wraps:
+/// "+0.83" stays on one line however narrow the screen, and lights up once it leaves where it starts.
+struct LabeledSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    /// Where a double tap puts it, and the value shown as unchanged.
+    let reset: Double
+    var format: (Double) -> String = { String(format: "%.2f", $0) }
+    var step: Double?
+    var onEditingChanged: (Bool) -> Void = { _ in }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.system(size: 16))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .frame(width: 84, alignment: .leading)
+            ResettableSlider(value: $value, range: range, reset: reset, step: step, onEditingChanged: onEditingChanged)
+            Text(format(value))
+                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .foregroundStyle(abs(value - reset) > 0.005 ? Theme.accent : Theme.secondaryText)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(minWidth: 58, alignment: .trailing)
+        }
+    }
+}

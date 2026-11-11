@@ -6,11 +6,14 @@ struct VideoGrade: Equatable {
     var presetID: String
     var grain: GrainLevel
     var halation: EffectLevel
+    /// ARRI only: the mix of its two LUTs (`ArriLook`).
+    var crossover: Double
 
     init(_ record: CaptureRecord) {
         presetID = record.presetID
         grain = record.grainLevel
         halation = record.halationLevel
+        crossover = record.crossover ?? 0
     }
 }
 
@@ -25,8 +28,10 @@ struct VideoGradePanel: View {
 
     @State private var isRendering = false
 
-    /// Room the viewer leaves for the panel under the clip.
-    static let height: CGFloat = 276
+    /// Room the viewer leaves for the panel under the clip; ARRI's Crossover row takes a little more.
+    static func height(for grade: VideoGrade) -> CGFloat {
+        grade.presetID == ArriLook.presetID ? 322 : 276
+    }
 
     private var progress: Double? { model.videoProgress[record.id] }
 
@@ -54,6 +59,11 @@ struct VideoGradePanel: View {
                 .padding(.vertical, 4)
             }
             .frame(height: 96)
+
+            if grade.presetID == ArriLook.presetID {
+                LabeledSlider(title: "Crossover", value: $grade.crossover, range: ArriLook.crossoverRange, reset: 0, format: { String(format: "%+.2f", $0) })
+                    .transition(.opacity)
+            }
 
             if let progress {
                 VStack(spacing: 4) {
@@ -93,6 +103,7 @@ struct VideoGradePanel: View {
         .padding(.bottom, 8)
         .background(Color.black.opacity(0.88).ignoresSafeArea(edges: .bottom))
         .animation(.smooth(duration: 0.2), value: hasChanges)
+        .animation(.smooth(duration: 0.2), value: grade.presetID == ArriLook.presetID)
     }
 
     private func render() {
@@ -100,7 +111,7 @@ struct VideoGradePanel: View {
         isRendering = true
         let chosen = grade
         Task {
-            let ok = await model.redevelopVideo(record, presetID: chosen.presetID, grain: chosen.grain, halation: chosen.halation)
+            let ok = await model.redevelopVideo(record, presetID: chosen.presetID, grain: chosen.grain, halation: chosen.halation, crossover: chosen.crossover)
             isRendering = false
             if ok { close() }
         }
