@@ -484,14 +484,21 @@ struct CameraView: View {
 
     /// A swipe along the user's horizontal anywhere on the picture moves the exposure, as the ruler does, so there is
     /// no reaching for it. Its direction is settled by the first stretch of the swipe and kept to the end. Not while a
-    /// pinch zooms or a panel is open.
+    /// pinch zooms; with a panel open the swipe steps the panels instead.
     private func exposureSwipe(_ value: DragGesture.Value, engine: CameraEngine) {
-        guard pinchStart == nil, !showOptions, !showPro, !showPresets else { return }
+        guard pinchStart == nil else { return }
+        // With a panel open every swipe steps the panels: down again opens PRO, up closes.
+        if showOptions || showPro || showPresets {
+            swipeAxis = .panels
+            return
+        }
         let held = model.orientation.current
         let dx = Double(value.translation.width), dy = Double(value.translation.height)
         let right = held.rightwardTravel(dx: dx, dy: dy)
         if swipeAxis == nil {
-            swipeAxis = abs(right) > abs(held.upwardTravel(dx: dx, dy: dy)) * 1.2 ? .exposure : .panels
+            // Wait for a clear stretch before choosing, so a vertical swipe that starts a little askew still opens a panel.
+            guard hypot(dx, dy) >= 26 else { return }
+            swipeAxis = abs(right) > abs(held.upwardTravel(dx: dx, dy: dy)) * 1.3 ? .exposure : .panels
         }
         guard swipeAxis == .exposure else { return }
         let start = evSwipeStart ?? engine.evBias
@@ -501,12 +508,12 @@ struct CameraView: View {
 
     /// Swipes on the viewfinder along the user's vertical: up opens the filters, down pulls the options shade from the
     /// top and a second swipe down goes on into PRO. Up undoes down one step at a time. Only clearly vertical swipes
-    /// count; photo and video switch with their buttons.
+    /// count; photo and video switch with their buttons or a swipe along the bottom bar.
     private func swipe(_ value: DragGesture.Value) {
         let held = model.orientation.current
         let dx = Double(value.translation.width), dy = Double(value.translation.height)
         let up = held.upwardTravel(dx: dx, dy: dy), right = held.rightwardTravel(dx: dx, dy: dy)
-        guard abs(up) > abs(right) * 1.4, abs(up) > 60 else { return }
+        guard abs(up) > abs(right), abs(up) > 50 else { return }
         Haptics.impact(.soft)
         if up > 0 {
             if showPro {
@@ -574,6 +581,18 @@ struct CameraView: View {
                 .frame(height: 40)
             Spacer(minLength: 0)
         }
+        .contentShape(Rectangle())
+        // A swipe along the bottom bar switches photo and video, as on the stock camera: the finger to the left brings
+        // up VIDEO, to the right PHOTO. The picture keeps sideways swipes for exposure.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    let dx = value.translation.width, dy = value.translation.height
+                    guard abs(dx) > 40, abs(dx) > abs(dy) * 1.5, !engine.isRecording, !engine.isSwitchingMode else { return }
+                    let next: CaptureMode = dx < 0 ? .video : .photo
+                    if next != engine.mode { engine.selectMode(next) }
+                }
+        )
     }
 
     private func recordingBadge(engine: CameraEngine) -> some View {
@@ -690,8 +709,8 @@ struct CameraView: View {
                 .font(.system(size: 14, weight: .semibold))
                 .tracking(0.6)
                 .foregroundStyle(engine.mode == mode ? Color.black : Theme.secondaryText)
-                .padding(.horizontal, 16)
-                .frame(height: 30)
+                .padding(.horizontal, 19)
+                .frame(height: 34)
                 .background {
                     // One pill that slides under the mode in use.
                     if engine.mode == mode {
