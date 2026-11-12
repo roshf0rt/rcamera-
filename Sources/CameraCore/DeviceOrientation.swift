@@ -48,4 +48,13 @@ public enum DeviceOrientation: String, Codable, Sendable {
         default: dx
         }
     }
+
+    /// The same drag measured towards the top of the picture as the user sees it.
+    public func upwardTravel(dx: Double, dy: Double) -> Double {
+        switch quarterTurns {
+        case 1: dx
+        case -1: -dx
+        default: -dy
+        }
+    }
 }

@@ -102,6 +102,15 @@ public enum EVScale {
         return (clamped / step).rounded() * step
     }
 
+    /// Screen points a finger travels for one EV, on the ruler and on a swipe anywhere on the picture.
+    public static let pointsPerEV = 180.0
+
+    /// The exposure a swipe of `travel` points to the right of the picture reaches from `start`, not yet snapped.
+    /// The ticks follow the finger, so the value under the centre mark falls as the finger goes right.
+    public static func dragged(from start: Double, travel: Double) -> Double {
+        min(max(start - travel / pointsPerEV, range.lowerBound), range.upperBound)
+    }
+
     public static func format(_ value: Double) -> String {
         let snapped = snapped(value)
         let text = String(format: "%.1f", abs(snapped))

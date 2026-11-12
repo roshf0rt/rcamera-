@@ -276,6 +276,8 @@ struct EVWheel: View {
 struct ExposureRuler: View {
     @Binding var value: Double
     let orientation: DeviceOrientation
+    /// A swipe elsewhere on the picture is moving the exposure: the ruler lights as if touched.
+    var highlighted = false
 
     @State private var dragStart: Double?
     @State private var rawValue: Double?
@@ -283,7 +285,7 @@ struct ExposureRuler: View {
     @State private var active = false
     @State private var fadeTask: Task<Void, Never>?
 
-    private let pointsPerEV: CGFloat = 180
+    private let pointsPerEV = CGFloat(EVScale.pointsPerEV)
 
     var body: some View {
         VStack(spacing: 3) {
@@ -309,6 +311,14 @@ struct ExposureRuler: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { reset() })
         .sensoryFeedback(.selection, trigger: value)
         .animation(.easeOut(duration: 0.2), value: active)
+        .onChange(of: highlighted) { _, on in
+            if on {
+                fadeTask?.cancel()
+                active = true
+            } else {
+                dim()
+            }
+        }
         .accessibilityElement()
         .accessibilityLabel("Exposure")
         .accessibilityValue(EVScale.format(value))
@@ -352,8 +362,7 @@ struct ExposureRuler: View {
                     active = true
                 }
                 let travel = orientation.rightwardTravel(dx: Double(gesture.translation.width), dy: Double(gesture.translation.height))
-                // Ticks follow the finger, so the value under the centre mark falls as the finger goes right.
-                let raw = min(max((dragStart ?? value) - travel / Double(pointsPerEV), EVScale.range.lowerBound), EVScale.range.upperBound)
+                let raw = EVScale.dragged(from: dragStart ?? value, travel: travel)
                 rawValue = raw
                 value = EVScale.snapped(raw)
             }

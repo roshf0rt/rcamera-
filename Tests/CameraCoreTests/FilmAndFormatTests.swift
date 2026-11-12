@@ -307,6 +307,15 @@ final class DeviceOrientationTests: XCTestCase {
         XCTAssertEqual(DeviceOrientation.portrait.rightwardTravel(dx: 30, dy: 5), 30)
         XCTAssertEqual(DeviceOrientation.landscapeLeft.rightwardTravel(dx: 5, dy: 30), 30)
         XCTAssertEqual(DeviceOrientation.landscapeRight.rightwardTravel(dx: 5, dy: 30), -30)
+        // And towards its top: up the screen held upright, to the screen's right held top-left, to its left held top-right.
+        XCTAssertEqual(DeviceOrientation.portrait.upwardTravel(dx: 5, dy: -30), 30)
+        XCTAssertEqual(DeviceOrientation.landscapeLeft.upwardTravel(dx: 30, dy: 5), 30)
+        XCTAssertEqual(DeviceOrientation.landscapeRight.upwardTravel(dx: 30, dy: 5), -30)
+        // An exposure swipe: the value falls as the finger goes right, and stops at the ends of the scale.
+        XCTAssertEqual(EVScale.dragged(from: 0, travel: 90), -0.5, accuracy: 1e-9)
+        XCTAssertEqual(EVScale.dragged(from: 0.4, travel: -36), 0.6, accuracy: 1e-9)
+        XCTAssertEqual(EVScale.dragged(from: 1.5, travel: -1000), 2)
+        XCTAssertEqual(EVScale.dragged(from: -1.5, travel: 1000), -2)
         XCTAssertEqual(DeviceOrientation.portrait.quarterTurns, 0)
         XCTAssertEqual(DeviceOrientation.landscapeLeft.quarterTurns, 1)
     }

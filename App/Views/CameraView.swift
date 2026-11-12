@@ -29,6 +29,10 @@ struct CameraView: View {
     @State private var showGallery = false
     @State private var focusMarker: FocusPoint?
     @State private var pinchStart: Double?
+    /// A swipe on the picture, once its direction is known: along the user's horizontal it moves the exposure.
+    private enum SwipeAxis { case exposure, panels }
+    @State private var swipeAxis: SwipeAxis?
+    @State private var evSwipeStart: Double?
     /// Where the zoom stood when a finger began to slide along the lens chips.
     @State private var scrubStart: Double?
 
@@ -65,7 +69,7 @@ struct CameraView: View {
                         .allowsHitTesting(false)
                 }
 
-                exposureRuler(engine: engine, in: layout.preview)
+                exposureRuler(engine: engine, in: layout.preview, floor: geo.size.height - controlsHeight - zoomLineHeight - (engine.mode == .video ? 48 : 6))
 
                 if engine.mode == .video, !engine.isSwitchingMode, !showPresets {
                     ExposureHUD(
@@ -318,24 +322,31 @@ struct CameraView: View {
     /// The ruler lies along the top of the picture as the user sees it: across the top held upright, along the
     /// right edge of the portrait layout held top-left, along the left edge held top-right. It turns with the phone,
     /// and glides to its new place when the phone is turned.
-    private func exposureRuler(engine: CameraEngine, in preview: CGRect) -> some View {
+    private func exposureRuler(engine: CameraEngine, in preview: CGRect, floor: CGFloat) -> some View {
         let held = model.orientation.current
         let turns = held.quarterTurns
-        let length = (turns == 0 ? preview.width : preview.height) - 24
+        // Along a side edge the ruler stops above the zoom chips, the flip button and the video readout, which sit
+        // at the foot of the picture; across the top there is nothing in its way.
+        let along = turns == 0 ? preview.width - 24 : max(120, min(preview.maxY, floor) - preview.minY - 16)
+        let middle = turns == 0 ? preview.midX : preview.minY + 8 + along / 2
         let centre: CGPoint = switch turns {
-        case 1: CGPoint(x: preview.maxX - rulerInset - rulerThickness / 2, y: preview.midY)
-        case -1: CGPoint(x: preview.minX + rulerInset + rulerThickness / 2, y: preview.midY)
-        default: CGPoint(x: preview.midX, y: preview.minY + rulerInset + rulerThickness / 2)
+        case 1: CGPoint(x: preview.maxX - rulerInset - rulerThickness / 2, y: middle)
+        case -1: CGPoint(x: preview.minX + rulerInset + rulerThickness / 2, y: middle)
+        default: CGPoint(x: middle, y: preview.minY + rulerInset + rulerThickness / 2)
         }
-        return ExposureRuler(value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }), orientation: held)
-            .frame(width: length, height: rulerThickness)
-            .rotationEffect(.degrees(held.iconRotation))
-            .offset(x: centre.x - length / 2, y: centre.y - rulerThickness / 2)
-            .animation(.spring(response: 0.45, dampingFraction: 0.82), value: held)
-            .animation(.spring(response: 0.45, dampingFraction: 0.82), value: preview)
-            .opacity(engine.isSwitchingMode || showOptions || showPro ? 0 : 1)
-            .allowsHitTesting(!showOptions && !showPro && !showPresets)
-            .animation(.easeOut(duration: 0.18), value: showOptions || showPro)
+        return ExposureRuler(
+            value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
+            orientation: held,
+            highlighted: evSwipeStart != nil
+        )
+        .frame(width: along, height: rulerThickness)
+        .rotationEffect(.degrees(held.iconRotation))
+        .offset(x: centre.x - along / 2, y: centre.y - rulerThickness / 2)
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: held)
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: preview)
+        .opacity(engine.isSwitchingMode || showOptions || showPro ? 0 : 1)
+        .allowsHitTesting(!showOptions && !showPro && !showPresets)
+        .animation(.easeOut(duration: 0.18), value: showOptions || showPro)
     }
 
     /// Room the ruler takes at the picture's corners, so the scopes and the legend keep clear of it.
@@ -451,8 +462,14 @@ struct CameraView: View {
                 .onEnded { _ in pinchStart = nil }
         )
         .simultaneousGesture(
-            DragGesture(minimumDistance: 24)
-                .onEnded { value in swipe(value, engine: engine) }
+            DragGesture(minimumDistance: 16, coordinateSpace: .global)
+                .onChanged { value in exposureSwipe(value, engine: engine) }
+                .onEnded { value in
+                    let axis = swipeAxis
+                    swipeAxis = nil
+                    evSwipeStart = nil
+                    if axis == .panels { swipe(value) }
+                }
         )
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.5)
@@ -464,29 +481,45 @@ struct CameraView: View {
         )
     }
 
-    /// Swipes on the viewfinder: up opens the filters, down pulls the options shade from the top and a second
-    /// swipe down goes on into PRO, left and right switch between photo and video. Up undoes down one step at a
-    /// time. Only clearly directional drags count.
-    private func swipe(_ value: DragGesture.Value, engine: CameraEngine) {
-        let dx = value.translation.width, dy = value.translation.height
-        if abs(dy) > abs(dx) * 1.4, abs(dy) > 60 {
-            if dy < 0 {
-                if showPro {
-                    withAnimation(Self.panelSpring) { showPro = false; showOptions = true }
-                } else if showOptions {
-                    withAnimation(Self.panelSpring) { showOptions = false }
-                } else if !showPresets {
-                    withAnimation(Self.panelSpring) { showPresets = true }
-                }
-            } else if showPresets {
-                withAnimation(Self.panelSpring) { showPresets = false }
+    /// A swipe along the user's horizontal anywhere on the picture moves the exposure, as the ruler does, so there is
+    /// no reaching for it. Its direction is settled by the first stretch of the swipe and kept to the end. Not while a
+    /// pinch zooms or a panel is open.
+    private func exposureSwipe(_ value: DragGesture.Value, engine: CameraEngine) {
+        guard pinchStart == nil, !showOptions, !showPro, !showPresets else { return }
+        let held = model.orientation.current
+        let dx = Double(value.translation.width), dy = Double(value.translation.height)
+        let right = held.rightwardTravel(dx: dx, dy: dy)
+        if swipeAxis == nil {
+            swipeAxis = abs(right) > abs(held.upwardTravel(dx: dx, dy: dy)) * 1.2 ? .exposure : .panels
+        }
+        guard swipeAxis == .exposure else { return }
+        let start = evSwipeStart ?? engine.evBias
+        if evSwipeStart == nil { evSwipeStart = start }
+        engine.setEV(EVScale.dragged(from: start, travel: right))
+    }
+
+    /// Swipes on the viewfinder along the user's vertical: up opens the filters, down pulls the options shade from the
+    /// top and a second swipe down goes on into PRO. Up undoes down one step at a time. Only clearly vertical swipes
+    /// count; photo and video switch with their buttons.
+    private func swipe(_ value: DragGesture.Value) {
+        let held = model.orientation.current
+        let dx = Double(value.translation.width), dy = Double(value.translation.height)
+        let up = held.upwardTravel(dx: dx, dy: dy), right = held.rightwardTravel(dx: dx, dy: dy)
+        guard abs(up) > abs(right) * 1.4, abs(up) > 60 else { return }
+        if up > 0 {
+            if showPro {
+                withAnimation(Self.panelSpring) { showPro = false; showOptions = true }
             } else if showOptions {
-                withAnimation(Self.panelSpring) { showOptions = false; showPro = true }
-            } else if !showPro {
-                withAnimation(Self.panelSpring) { showOptions = true }
+                withAnimation(Self.panelSpring) { showOptions = false }
+            } else if !showPresets {
+                withAnimation(Self.panelSpring) { showPresets = true }
             }
-        } else if abs(dx) > abs(dy) * 1.4, abs(dx) > 70, !engine.isRecording, !engine.isSwitchingMode {
-            engine.selectMode(engine.mode == .photo ? .video : .photo)
+        } else if showPresets {
+            withAnimation(Self.panelSpring) { showPresets = false }
+        } else if showOptions {
+            withAnimation(Self.panelSpring) { showOptions = false; showPro = true }
+        } else if !showPro {
+            withAnimation(Self.panelSpring) { showOptions = true }
         }
     }
 
