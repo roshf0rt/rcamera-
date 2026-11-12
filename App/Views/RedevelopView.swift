@@ -201,7 +201,7 @@ struct RedevelopView: View {
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
-        .sensoryFeedback(.selection, trigger: tab)
+        .haptic(.selection, trigger: tab)
     }
 
     /// Grain or Halation, picked by the chips; the chosen one's controls sit under them.

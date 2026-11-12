@@ -50,13 +50,13 @@ struct ResettableSlider: View {
                 TapGesture(count: 2).onEnded {
                     guard value != reset else { return }
                     withAnimation(.smooth(duration: 0.25)) { value = reset }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Haptics.impact(.light)
                     onEditingChanged(false)
                 }
             )
         }
         .frame(height: 32)
-        .sensoryFeedback(.selection, trigger: step == nil ? nil : value)
+        .haptic(.selection, trigger: step == nil ? nil : value)
     }
 
     private func snapped(_ raw: Double) -> Double {

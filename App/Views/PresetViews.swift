@@ -159,7 +159,7 @@ struct PresetCard: View {
             .animation(.easeInOut(duration: 0.16), value: isSelected)
         }
         .buttonStyle(.plain)
-        .sensoryFeedback(.selection, trigger: isSelected)
+        .haptic(.selection, trigger: isSelected)
         .accessibilityLabel("\(preset.name), \(PresetCardStyle.subtitle(of: preset))")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -413,7 +413,7 @@ struct WheelPicker: View {
                 .onEnded { _ in dragStart = nil }
         )
         .onTapGesture { turn(to: ((index ?? -1) + 1) % labels.count) }
-        .sensoryFeedback(.selection, trigger: index)
+        .haptic(.selection, trigger: index)
     }
 
     private func neighbour(_ offset: Int) -> some View {

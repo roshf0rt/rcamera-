@@ -64,6 +64,7 @@ struct LevelOverlay: View {
             .frame(width: 120, height: 2)
             .rotationEffect(.radians(-roll))
             .animation(.easeOut(duration: 0.1), value: roll)
+            .hapticOnArrival(.impact(weight: .light), when: isLevel)
             .allowsHitTesting(false)
     }
 }
@@ -116,7 +117,7 @@ struct ZoomChips: View {
         }
         .animation(.smooth(duration: 0.22), value: reading.stop)
         // A tick as the zoom passes a lens or a stop.
-        .sensoryFeedback(.selection, trigger: reading.stop)
+        .haptic(.selection, trigger: reading.stop)
     }
 
     /// `live` is the zoom while it sits between stops: one decimal on photo, the focal length on video.
@@ -182,7 +183,7 @@ struct EVWheel: View {
             .gesture(drag)
             .simultaneousGesture(TapGesture(count: 2).onEnded { reset() })
             .animation(.easeOut(duration: 0.2), value: open)
-            .sensoryFeedback(.selection, trigger: value)
+            .haptic(.selection, trigger: value)
         }
         .frame(height: 46)
     }
@@ -309,7 +310,10 @@ struct ExposureRuler: View {
         .contentShape(Rectangle())
         .gesture(drag)
         .simultaneousGesture(TapGesture(count: 2).onEnded { reset() })
-        .sensoryFeedback(.selection, trigger: value)
+        .haptic(.selection, trigger: value)
+        // A firmer tick on 0, and at the ends of the scale.
+        .hapticOnArrival(.impact(weight: .medium), when: abs(value) < 0.05)
+        .hapticOnArrival(.impact(weight: .heavy), when: abs(value) >= EVScale.range.upperBound - 0.001)
         .animation(.easeOut(duration: 0.2), value: active)
         .onChange(of: highlighted) { _, on in
             if on {
@@ -500,7 +504,7 @@ struct OptionsPanel: View {
 
     private func option<Icon: View>(title: String, active: Bool, action: @escaping () -> Void, @ViewBuilder icon: () -> Icon) -> some View {
         Button {
-            UISelectionFeedbackGenerator().selectionChanged()
+            Haptics.selection()
             action()
         } label: {
             VStack(spacing: 2) {

@@ -368,7 +368,7 @@ struct CaptureViewer: View {
         .onChange(of: model.captures.map(\.id)) { _, ids in
             if ids.isEmpty { close() }
         }
-        .sensoryFeedback(.selection, trigger: current)
+        .haptic(.selection, trigger: current)
         .fullScreenCover(isPresented: $showRedevelop) {
             if let record { RedevelopView(recordID: record.id) }
         }
@@ -419,7 +419,7 @@ struct CaptureViewer: View {
                 defer { closingDrag = nil }
                 guard closingDrag == true else { return }
                 if value.translation.height > 110 || value.predictedEndTranslation.height > 420 {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Haptics.impact(.light)
                     close()
                 } else {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) { dragY = 0 }
@@ -502,7 +502,7 @@ struct CaptureViewer: View {
             }
             .foregroundStyle(record.isFavorite ? Theme.accent : .white)
             .buttonStyle(PressableStyle())
-            .sensoryFeedback(.impact(weight: .light), trigger: record.isFavorite)
+            .haptic(.impact(weight: .light), trigger: record.isFavorite)
             Spacer()
             if model.canRedevelop(record) {
                 Button {
@@ -591,7 +591,7 @@ private struct CapturePage: View {
             } else if let image {
                 ZoomableImage(image: image, isZoomed: $localZoom)
                     .onLongPressGesture(minimumDuration: 0.6) {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        Haptics.impact(.medium)
                         askDelete()
                     }
                     .transition(.opacity)

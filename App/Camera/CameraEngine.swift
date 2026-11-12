@@ -530,7 +530,7 @@ final class CameraEngine {
             while remaining > 0 {
                 guard let self else { return }
                 self.countdown = remaining
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Haptics.impact(.light)
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled {
                     self.countdown = nil
@@ -545,7 +545,7 @@ final class CameraEngine {
 
     private func performCapture() {
         isCapturing = true
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Haptics.impact(.medium)
         let mirror = mirrorsOutput
         let aspect = settings.aspect
         let heldAs = deviceOrientation

@@ -164,7 +164,7 @@ struct ProPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .sensoryFeedback(.selection, trigger: on)
+        .haptic(.selection, trigger: on)
     }
 
     private func chips(_ titles: [String], selected: String, pick: @escaping (String) -> Void) -> some View {

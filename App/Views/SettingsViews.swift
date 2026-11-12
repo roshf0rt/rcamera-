@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var showNewPreset = false
+    @AppStorage(Haptics.key) private var haptics = true
 
     private func presetRow(_ preset: Preset) -> some View {
         NavigationLink {
@@ -97,6 +98,7 @@ struct SettingsView: View {
                     }
                     NavigationLink("RAW storage") { RAWStorageView() }
                     Toggle("Save location", isOn: model.binding(\.savesLocation))
+                    Toggle("Haptic feedback", isOn: $haptics)
                     Toggle("Volume buttons take photos", isOn: model.binding(\.volumeShutter))
                         .onChange(of: model.settings.volumeShutter) { _, on in
                             model.syncVolumeShutter(active: on)

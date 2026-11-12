@@ -529,6 +529,8 @@ final class AppModel {
                 if let original = photo.processed { try captureStore.write(original, as: .original, for: record.id) }
                 try captureStore.add(record)
                 captures = captureStore.records
+                // The photo is developed and kept.
+                Haptics.notify(.success)
             } catch {
                 alert = error.localizedDescription
                 return

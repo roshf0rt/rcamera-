@@ -262,7 +262,7 @@ struct PresetEditorView: View {
         .contentShape(Rectangle())
         .onLongPressGesture(minimumDuration: 0.12, maximumDistance: 40, perform: {}, onPressingChanged: { pressing in
             showOriginal = pressing
-            if pressing { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+            if pressing { Haptics.impact(.light) }
         })
         .padding(.horizontal, 16)
     }
@@ -405,7 +405,7 @@ struct PresetEditorView: View {
         HStack(spacing: 4) {
             ForEach(Tab.allCases, id: \.self) { item in
                 Button {
-                    UISelectionFeedbackGenerator().selectionChanged()
+                    Haptics.selection()
                     tab = item
                 } label: {
                     Text(item.rawValue)
@@ -591,7 +591,7 @@ struct PresetEditorView: View {
                 ForEach(titles.indices, id: \.self) { index in
                     let isOn = index == selected
                     Button {
-                        UISelectionFeedbackGenerator().selectionChanged()
+                        Haptics.selection()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { action(index) }
                     } label: {
                         Text(titles[index])
@@ -720,7 +720,7 @@ struct DialTile<Control: View>: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded {
             guard let reset else { return }
             withAnimation(.smooth(duration: 0.25)) { reset() }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            Haptics.impact(.light)
         })
     }
 }

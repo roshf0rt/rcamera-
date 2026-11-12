@@ -297,7 +297,7 @@ struct CameraView: View {
             Spacer(minLength: 0)
 
             Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Haptics.impact(.light)
                 withAnimation(Self.panelSpring) {
                     showOptions = !(showOptions || showPro)
                     showPro = false
@@ -448,6 +448,7 @@ struct CameraView: View {
                     withAnimation(Self.panelSpring) { showOptions = false; showPresets = false; showPro = false }
                     return
                 }
+                Haptics.impact(.light)
                 focusMarker = FocusPoint(location: value.location)
                 engine.focus(atNormalized: CGPoint(x: value.location.x / size.width, y: value.location.y / size.height))
             }
@@ -476,7 +477,7 @@ struct CameraView: View {
                 .onEnded { _ in
                     // Holding the viewfinder locks exposure and focus, as on the stock camera.
                     engine.toggleLock()
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    Haptics.impact(.medium)
                 }
         )
     }
@@ -506,6 +507,7 @@ struct CameraView: View {
         let dx = Double(value.translation.width), dy = Double(value.translation.height)
         let up = held.upwardTravel(dx: dx, dy: dy), right = held.rightwardTravel(dx: dx, dy: dy)
         guard abs(up) > abs(right) * 1.4, abs(up) > 60 else { return }
+        Haptics.impact(.soft)
         if up > 0 {
             if showPro {
                 withAnimation(Self.panelSpring) { showPro = false; showOptions = true }
@@ -661,7 +663,7 @@ struct CameraView: View {
             .padding(3)
             .background(Capsule().fill(Theme.chromeDark))
             .animation(Self.panelSpring, value: engine.mode)
-            .sensoryFeedback(.selection, trigger: engine.mode)
+            .haptic(.selection, trigger: engine.mode)
             HStack {
                 Spacer()
                 Button { engine.toggleLock() } label: {
@@ -676,7 +678,7 @@ struct CameraView: View {
                     .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(PressableStyle())
-                .sensoryFeedback(.impact(weight: .light), trigger: engine.isAELocked)
+                .haptic(.impact(weight: .light), trigger: engine.isAELocked)
             }
             .padding(.horizontal, 16)
         }
@@ -805,7 +807,7 @@ struct ExposureHUD: View {
             .animation(.easeOut(duration: 0.25), value: color)
         }
         .buttonStyle(PressableStyle())
-        .sensoryFeedback(.selection, trigger: autoMotion)
+        .haptic(.selection, trigger: autoMotion)
         .accessibilityLabel("Exposure \(state?.shutter ?? ""), ISO \(state?.iso ?? 0). AutoMotion \(autoMotion ? "on" : "off")")
     }
 
@@ -861,7 +863,7 @@ struct LevelToggle: View {
             .animation(.spring(response: 0.25, dampingFraction: 0.8), value: level)
         }
         .buttonStyle(PressableStyle())
-        .sensoryFeedback(.selection, trigger: level)
+        .haptic(.selection, trigger: level)
         .accessibilityLabel("\(title.capitalized), \(level.label.lowercased())")
     }
 
@@ -908,7 +910,7 @@ private struct ShutterButton: View {
             .animation(.easeOut(duration: 0.1), value: isCapturing)
         }
         .buttonStyle(PressableStyle(scale: 0.92))
-        .sensoryFeedback(.impact(weight: .medium), trigger: isRecording)
+        .haptic(.impact(weight: .medium), trigger: isRecording)
     }
 }
 
