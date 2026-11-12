@@ -267,6 +267,87 @@ final class WaveformTests: XCTestCase {
     }
 }
 
+final class HistogramTests: XCTestCase {
+    /// `width` × `height` BGRA pixels of one colour.
+    private func solid(width: Int, height: Int, red: UInt8, green: UInt8, blue: UInt8) -> [UInt8] {
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            pixels[i] = blue
+            pixels[i + 1] = green
+            pixels[i + 2] = red
+        }
+        return pixels
+    }
+
+    func testEachChannelIsCountedInItsOwnBins() {
+        let pixels = solid(width: 16, height: 16, red: 255, green: 128, blue: 0)
+        let histogram = pixels.withUnsafeBytes {
+            Histogram.measure(pixels: $0, width: 16, height: 16, bytesPerRow: 64, bins: 16)
+        }
+        XCTAssertEqual(histogram.samples, 256)
+        XCTAssertEqual(histogram.count(.red, bin: 15), 256)
+        XCTAssertEqual(histogram.count(.green, bin: 8), 256)
+        XCTAssertEqual(histogram.count(.blue, bin: 0), 256)
+        // Luma of (1, 0.5, 0) is 0.59.
+        XCTAssertEqual(histogram.count(.luma, bin: histogram.bin(of: 0.299 + 0.587 * 128 / 255)), 256)
+        // The same bytes read as RGBA swap red and blue.
+        let swapped = pixels.withUnsafeBytes {
+            Histogram.measure(pixels: $0, width: 16, height: 16, bytesPerRow: 64, redFirst: true, bins: 16)
+        }
+        XCTAssertEqual(swapped.count(.blue, bin: 15), 256)
+        XCTAssertEqual(swapped.count(.red, bin: 0), 256)
+    }
+
+    func testLargePicturesAreSampledNotCountedWhole() {
+        let pixels = solid(width: 400, height: 300, red: 90, green: 90, blue: 90)
+        let histogram = pixels.withUnsafeBytes {
+            Histogram.measure(pixels: $0, width: 400, height: 300, bytesPerRow: 1600, maxSamples: 3000)
+        }
+        XCTAssertLessThanOrEqual(histogram.samples, 3000)
+        XCTAssertGreaterThan(histogram.samples, 1500)
+    }
+
+    func testHeightsAreAgainstTheTallestInnerBin() {
+        // 100 samples at mid grey, 50 a little brighter, 400 clipped white.
+        var flat = [UInt32](repeating: 0, count: 64)
+        for channel in 0 ..< 4 {
+            flat[channel * 16 + 8] = 100
+            flat[channel * 16 + 10] = 50
+            flat[channel * 16 + 15] = 400
+        }
+        let histogram = Histogram(bins: 16, flat: flat)
+        XCTAssertEqual(histogram.samples, 550)
+        XCTAssertEqual(histogram.peak, 100, "the clipped end does not set the scale")
+        let heights = histogram.heights(.luma)
+        XCTAssertEqual(heights[8], 1)
+        XCTAssertEqual(heights[10], 0.5)
+        XCTAssertEqual(heights[15], 1, "and stops at the top")
+        XCTAssertEqual(heights[3], 0)
+    }
+
+    func testClippedAndCrushedSharesReadTheEnds() {
+        var flat = [UInt32](repeating: 0, count: 128 * 4)
+        for channel in 0 ..< 4 { flat[channel * 128 + 60] = 900 }
+        flat[3 * 128 + 60] = 800
+        flat[3 * 128 + 0] = 100 // a tenth of the luma is black
+        flat[0 * 128 + 60] = 700
+        flat[0 * 128 + 127] = 200 // red clips in a fifth of the picture
+        let histogram = Histogram(bins: 128, flat: flat)
+        XCTAssertEqual(histogram.samples, 900)
+        XCTAssertEqual(histogram.crushedShare, 100.0 / 900, accuracy: 1e-9)
+        XCTAssertEqual(histogram.clippedShare, 200.0 / 900, accuracy: 1e-9)
+    }
+
+    func testNothingMeasuredDrawsNothing() {
+        let empty = [UInt8]().withUnsafeBytes { Histogram.measure(pixels: $0, width: 0, height: 0, bytesPerRow: 0) }
+        XCTAssertEqual(empty.samples, 0)
+        XCTAssertEqual(empty.peak, 0)
+        XCTAssertEqual(empty.heights(.red).max(), 0)
+        XCTAssertEqual(empty.clippedShare, 0)
+        XCTAssertEqual(Histogram(bins: 8, flat: [1, 2]).samples, 0, "too few counts are ignored")
+    }
+}
+
 final class HardwareBudgetTests: XCTestCase {
     func testLighterFormatsStepDownFrameRateFirst() throws {
         let uhd120 = VideoFormat(width: 3840, height: 2160, fps: 120)
@@ -282,7 +363,7 @@ final class ProSettingsTests: XCTestCase {
         let old = #"{"cineExposure": false, "videoFPS": 24}"#.data(using: .utf8)!
         let settings = try JSONDecoder().decode(AppSettings.self, from: old)
         XCTAssertTrue(settings.autoMotion)
-        XCTAssertFalse(settings.zebra || settings.focusPeaking || settings.falseColor || settings.waveform)
+        XCTAssertFalse(settings.zebra || settings.focusPeaking || settings.falseColor || settings.histogram || settings.waveform)
         XCTAssertNil(settings.whiteBalanceKelvin)
         XCTAssertEqual(settings.videoFPS, 24)
     }
@@ -290,6 +371,7 @@ final class ProSettingsTests: XCTestCase {
     func testProSettingsRoundTrip() throws {
         var settings = AppSettings()
         settings.zebra = true
+        settings.histogram = true
         settings.waveform = true
         settings.lockWhiteBalanceWhileRecording = true
         settings.whiteBalanceKelvin = 5600

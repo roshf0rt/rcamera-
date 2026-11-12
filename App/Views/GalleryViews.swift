@@ -4,9 +4,9 @@ import SwiftUI
 
 extension CaptureRecord {
     /// Everything Redevelop can change about a capture's picture. Views reload the picture when it changes, so a
-    /// new grain, halation, shadows or portrait setting shows at once, not only a new preset or push/pull.
+    /// new grain, halation or shadows setting shows at once, not only a new preset or push/pull.
     var lookKey: String {
-        "\(presetID)|\(evPushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(portraitFNumber ?? 0)|\(lensStyle?.rawValue ?? "")|\(texture.map { "\($0)" } ?? "")|\(crossover ?? 0)"
+        "\(presetID)|\(evPushPull)|\(grainLevel)|\(halationLevel)|\(shadowLift)|\(texture.map { "\($0)" } ?? "")|\(crossover ?? 0)"
     }
 }
 

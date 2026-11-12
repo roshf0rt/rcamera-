@@ -14,13 +14,9 @@ struct CameraView: View {
     @State private var showOptions = false
     /// The pro tools, opened from the PRO row of the options shade.
     @State private var showPro = false
-    /// The aperture or lens dial over the picture in portrait mode.
-    @State private var dial: Dial?
-    /// The dial is being turned (pill held or dial dragged), so it must not close by itself.
-    @State private var dialHeld = false
-    /// Bumped on every dial change, restarting the timer that closes an idle dial.
-    @State private var dialTouch = 0
-    @State private var dialDragStart: Int?
+    /// The viewfinder goes dark for a blink when a photo is taken, as a shutter does.
+    @State private var shutterBlink = false
+    @Namespace private var modeSpace
     /// The preset name shown over the picture for a moment after a switch.
     @State private var presetToast: String?
     /// The version, shown for a few seconds at launch so an installed build can be told apart.
@@ -64,28 +60,6 @@ struct CameraView: View {
                         .frame(width: geo.size.width, height: controlsHeight + 24)
                         .offset(y: geo.size.height - controlsHeight - 24)
                         .allowsHitTesting(false)
-                }
-
-                if model.settings.portrait, engine.mode == .photo {
-                    portraitControls
-                        .frame(width: geo.size.width, height: 44)
-                        .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50)
-                        .transition(.opacity)
-                }
-
-                if let dial, model.settings.portrait, engine.mode == .photo {
-                    // Anything outside the dial closes it; the viewfinder's own gestures wait meanwhile.
-                    Color.black.opacity(0.001)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .onTapGesture { closeDial() }
-                        .gesture(DragGesture(minimumDistance: 0).onEnded { _ in closeDial() })
-                    dialView(dial)
-                        .frame(width: geo.size.width, height: 290)
-                        .contentShape(Rectangle())
-                        .gesture(dialDrag(dial))
-                        .simultaneousGesture(TapGesture(count: 2).onEnded { resetDial(dial) })
-                        .offset(y: geo.size.height - controlsHeight - zoomLineHeight - 50 - 300)
-                        .transition(.blurFade)
                 }
 
                 if engine.mode == .video, !engine.isSwitchingMode, !showPresets {
@@ -238,12 +212,11 @@ struct CameraView: View {
         .onChange(of: model.settings.isLevelEnabled) { _, enabled in
             enabled ? model.level.start() : model.level.stop()
         }
-        .onChange(of: engine.mode) { _, _ in showOptions = false; closeDial() }
-        .onChange(of: model.settings.portrait) { _, on in if !on { closeDial() } }
-        .task(id: dialTouch) {
-            guard dial != nil else { return }
-            try? await Task.sleep(for: .seconds(2.5))
-            if !Task.isCancelled, !dialHeld { closeDial() }
+        .onChange(of: engine.mode) { _, _ in showOptions = false; showPro = false }
+        .onChange(of: engine.isCapturing) { _, capturing in
+            guard capturing else { return }
+            shutterBlink = true
+            withAnimation(.easeOut(duration: 0.28).delay(0.06)) { shutterBlink = false }
         }
     }
 
@@ -315,6 +288,7 @@ struct CameraView: View {
             Spacer(minLength: 0)
 
             Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 withAnimation(Self.panelSpring) {
                     showOptions = !(showOptions || showPro)
                     showPro = false
@@ -331,146 +305,7 @@ struct CameraView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
-    }
-
-    // MARK: Portrait
-
-    enum Dial: Equatable {
-        case aperture
-        case lens
-    }
-
-    /// The f-number and lens pills. Tap one to open its dial and slide on the dial; or hold the pill and
-    /// slide without lifting, and the dial closes on release, as in mood. A tap outside closes it, and so
-    /// does leaving it alone for a moment.
-    private var portraitControls: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 7) {
-                ApertureShape(roundness: 0.3, rotation: .zero)
-                    .stroke(.white, lineWidth: 1.8)
-                    .frame(width: 16, height: 16)
-                Text("ƒ" + ApertureOverlay.format(model.settings.portraitFNumber))
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                    .contentTransition(.numericText())
-            }
-            .foregroundStyle(dial == .aperture ? Theme.accent : .white)
-            .padding(.horizontal, 14)
-            .frame(height: 38)
-            .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
-            .scaleEffect(dial == .aperture ? 1.08 : 1)
-            .contentShape(Capsule())
-            .modifier(pillScrub(.aperture))
-
-            HStack(spacing: 8) {
-                Image(systemName: "circle.hexagongrid")
-                    .font(.system(size: 15, weight: .semibold))
-                Text(model.settings.lensStyle.label)
-                    .font(.system(size: 14, weight: .semibold))
-                    .tracking(0.6)
-                    .contentTransition(.interpolate)
-            }
-            .foregroundStyle(dial == .lens ? Theme.accent : .white)
-            .padding(.horizontal, 14)
-            .frame(height: 38)
-            .background(Capsule().fill(Color.black.opacity(0.45)).background(.ultraThinMaterial, in: Capsule()))
-            .scaleEffect(dial == .lens ? 1.08 : 1)
-            .contentShape(Capsule())
-            .modifier(pillScrub(.lens))
-        }
-        .animation(Self.panelSpring, value: dial)
-        .animation(.smooth(duration: 0.3), value: model.settings.lensStyle)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: model.settings.portraitFNumber)
-    }
-
-    private var sortedLenses: [LensStyle] { LensStyle.allCases.sorted { $0.order < $1.order } }
-
-    private func dialCount(_ dial: Dial) -> Int {
-        dial == .aperture ? PortraitAperture.stops.count : sortedLenses.count
-    }
-
-    private func dialIndex(_ dial: Dial) -> Int {
-        switch dial {
-        case .aperture: PortraitAperture.stops.firstIndex(of: model.settings.portraitFNumber) ?? 0
-        case .lens: sortedLenses.firstIndex(of: model.settings.lensStyle) ?? 0
-        }
-    }
-
-    private func setDial(_ dial: Dial, to index: Int) {
-        switch dial {
-        case .aperture: model.updateSettings { $0.portraitFNumber = PortraitAperture.stops[index] }
-        case .lens: model.updateSettings { $0.lensStyle = sortedLenses[index] }
-        }
-        dialTouch += 1
-    }
-
-    /// A double tap on an open dial puts it back to where it starts: f/4, and the first lens.
-    private func resetDial(_ which: Dial) {
-        switch which {
-        case .aperture: model.updateSettings { $0.portraitFNumber = PortraitAperture.standard }
-        case .lens: model.updateSettings { $0.lensStyle = AppSettings().lensStyle }
-        }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        dialTouch += 1
-    }
-
-    private func openDial(_ which: Dial) {
-        withAnimation(Self.panelSpring) {
-            dial = which
-            showPresets = false
-            showOptions = false
-            showPro = false
-        }
-        dialTouch += 1
-    }
-
-    private func closeDial() {
-        guard dial != nil else { return }
-        dialHeld = false
-        dialDragStart = nil
-        withAnimation(Self.panelSpring) { dial = nil }
-    }
-
-    private func pillScrub(_ which: Dial) -> HoldScrub {
-        HoldScrub(
-            count: dialCount(which),
-            index: dialIndex(which),
-            step: which == .aperture ? 34 : 40,
-            began: { dialHeld = true; openDial(which) },
-            changed: { setDial(which, to: $0) },
-            ended: { dialHeld = false; closeDial() },
-            tapped: { dial == which ? closeDial() : openDial(which) }
-        )
-    }
-
-    @ViewBuilder
-    private func dialView(_ dial: Dial) -> some View {
-        switch dial {
-        case .aperture: ApertureOverlay(fNumber: model.settings.portraitFNumber)
-        case .lens: LensOverlay(lens: model.settings.lensStyle)
-        }
-    }
-
-    /// Sliding on the open dial turns it; the scale follows the finger.
-    private func dialDrag(_ which: Dial) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                let start = dialDragStart ?? dialIndex(which)
-                if dialDragStart == nil {
-                    dialDragStart = start
-                    dialHeld = true
-                }
-                let step: CGFloat = which == .aperture ? 40 : 56
-                let target = min(max(start - Int((value.translation.width / step).rounded()), 0), dialCount(which) - 1)
-                if target != dialIndex(which) {
-                    UISelectionFeedbackGenerator().selectionChanged()
-                    setDial(which, to: target)
-                }
-            }
-            .onEnded { _ in
-                dialDragStart = nil
-                dialHeld = false
-                dialTouch += 1
-            }
+        .animation(Self.panelSpring, value: engine.isRecording)
     }
 
     // MARK: Viewfinder
@@ -484,10 +319,16 @@ struct CameraView: View {
                     }
                 }
             if model.settings.isGridEnabled { GridOverlay() }
-            if model.settings.waveform {
-                WaveformPanel(engine: engine)
+            if model.settings.waveform || model.settings.histogram {
+                ScopesPanel(engine: engine, showsHistogram: model.settings.histogram, showsWaveform: model.settings.waveform)
                     .padding(10)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .transition(.opacity)
+            }
+            if model.settings.falseColor {
+                FalseColorLegend()
+                    .padding(10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .transition(.opacity)
             }
             if model.settings.isLevelEnabled { LevelOverlay(roll: model.level.roll) }
@@ -503,9 +344,18 @@ struct CameraView: View {
             if let countdown = engine.countdown {
                 Text("\(countdown)")
                     .font(.system(size: 120, weight: .thin))
+                    .monospacedDigit()
                     .foregroundStyle(.white)
                     .shadow(radius: 8)
+                    .contentTransition(.numericText(countsDown: true))
+                    .followsDevice()
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    .allowsHitTesting(false)
             }
+            // The shutter's blink: instant dark, quick return.
+            Color.black
+                .opacity(shutterBlink ? 0.75 : 0)
+                .allowsHitTesting(false)
             if engine.showsSwitchBlur {
                 Rectangle().fill(.ultraThinMaterial).transition(.opacity)
             }
@@ -528,6 +378,10 @@ struct CameraView: View {
             }
         }
         .animation(Self.panelSpring, value: presetToast)
+        .animation(Self.panelSpring, value: model.settings.histogram)
+        .animation(Self.panelSpring, value: model.settings.waveform)
+        .animation(.easeOut(duration: 0.2), value: model.settings.falseColor)
+        .animation(.snappy(duration: 0.3), value: engine.countdown)
         .onChange(of: model.selectedPreset.id) { _, _ in
             presetToast = model.selectedPreset.name
         }
@@ -657,7 +511,7 @@ struct CameraView: View {
 
     private func recordingBadge(engine: CameraEngine) -> some View {
         HStack(spacing: 6) {
-            Circle().fill(.red).frame(width: 8, height: 8)
+            PulsingDot()
             Text(Self.format(engine.recordingSeconds))
                 .font(.system(size: 15, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white)
@@ -665,6 +519,7 @@ struct CameraView: View {
         .padding(.horizontal, 12)
         .frame(height: 32)
         .background(Capsule().fill(Color.red.opacity(0.25)))
+        .transition(.opacity.combined(with: .scale(scale: 0.85)))
     }
 
     private static func format(_ seconds: Double) -> String {
@@ -680,6 +535,8 @@ struct CameraView: View {
                 ZStack {
                     if let latest = model.captures.first {
                         CaptureThumbnail(record: latest)
+                            .id(latest.id)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
                     } else {
                         RoundedRectangle(cornerRadius: 14).fill(Theme.chrome)
                     }
@@ -689,8 +546,9 @@ struct CameraView: View {
                 .frame(width: 58, height: 58)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.15), lineWidth: 1))
+                .animation(.spring(response: 0.35, dampingFraction: 0.6), value: model.captures.first?.id)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableStyle())
             .frame(width: 72, alignment: .leading)
 
             Spacer()
@@ -725,16 +583,20 @@ struct CameraView: View {
             .scaleEffect(showPresets ? 1.06 : 1)
             .frame(width: 64, height: 64)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .accessibilityLabel("Presets, \(preset.name)")
     }
 
     private func modeRow(engine: CameraEngine) -> some View {
         ZStack {
-            HStack(spacing: 36) {
+            HStack(spacing: 4) {
                 modeButton("PHOTO", mode: .photo, engine: engine)
                 modeButton("VIDEO", mode: .video, engine: engine)
             }
+            .padding(3)
+            .background(Capsule().fill(Theme.chromeDark))
+            .animation(Self.panelSpring, value: engine.mode)
+            .sensoryFeedback(.selection, trigger: engine.mode)
             HStack {
                 Spacer()
                 Button { engine.toggleLock() } label: {
@@ -746,8 +608,10 @@ struct CameraView: View {
                     .padding(.horizontal, 11)
                     .frame(height: 34)
                     .background(Capsule().fill(Theme.chrome))
+                    .contentTransition(.symbolEffect(.replace))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableStyle())
+                .sensoryFeedback(.impact(weight: .light), trigger: engine.isAELocked)
             }
             .padding(.horizontal, 16)
         }
@@ -756,9 +620,18 @@ struct CameraView: View {
     private func modeButton(_ title: String, mode: CaptureMode, engine: CameraEngine) -> some View {
         Button { engine.selectMode(mode) } label: {
             Text(title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(engine.mode == mode ? Theme.accent : Theme.secondaryText)
-                .padding(.vertical, 8)
+                .font(.system(size: 14, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(engine.mode == mode ? Color.black : Theme.secondaryText)
+                .padding(.horizontal, 16)
+                .frame(height: 30)
+                .background {
+                    // One pill that slides under the mode in use.
+                    if engine.mode == mode {
+                        Capsule().fill(Theme.accent).matchedGeometryEffect(id: "mode", in: modeSpace)
+                    }
+                }
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(engine.isRecording || engine.isSwitchingMode)
@@ -783,30 +656,18 @@ struct CameraView: View {
     }
 }
 
-/// A small on/off switch in the top bar, like Lampa's grain and halation switches: a dot and a label,
-/// lit in the accent color when on.
-struct EffectToggle: View {
-    let title: String
-    let isOn: Bool
-    let action: () -> Void
+/// The red dot of a running recording, breathing.
+private struct PulsingDot: View {
+    @State private var dim = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(isOn ? Theme.accent : Color(white: 0.35))
-                    .frame(width: 6, height: 6)
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(0.6)
+        Circle()
+            .fill(.red)
+            .frame(width: 8, height: 8)
+            .opacity(dim ? 0.35 : 1)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { dim = true }
             }
-            .foregroundStyle(isOn ? .white : Theme.secondaryText)
-            .padding(.horizontal, 12)
-            .frame(height: 30)
-            .background(Capsule().fill(Theme.chrome))
-        }
-        .buttonStyle(.plain)
-        .sensoryFeedback(.selection, trigger: isOn)
     }
 }
 
@@ -978,10 +839,11 @@ private struct ShutterButton: View {
             }
             .frame(width: ring, height: ring)
             .contentShape(Circle())
-            .animation(.easeOut(duration: 0.2), value: isRecording)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isRecording)
             .animation(.easeOut(duration: 0.1), value: isCapturing)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle(scale: 0.92))
+        .sensoryFeedback(.impact(weight: .medium), trigger: isRecording)
     }
 }
 

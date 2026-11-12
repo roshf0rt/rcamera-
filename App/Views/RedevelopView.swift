@@ -23,10 +23,9 @@ struct RedevelopView: View {
     @State private var crossover = 0.0
     /// Shadows moved afterwards, -1 (down) ... 1 (up).
     @State private var shadowLift = 0.0
-    /// Portrait photos: the aperture and lens the background is drawn with, and the depth it is drawn from.
-    @State private var fNumber = PortraitAperture.standard
-    @State private var lens = LensStyle.solis
-    @State private var depth: DepthMap?
+    /// The histogram of the preview, shown while Light is open.
+    @State private var histogram: Histogram?
+    @Namespace private var tabSpace
     @State private var source: PhotoPipeline.Source?
     @State private var base: CVPixelBuffer?
     @State private var baseEV: Double?
@@ -50,11 +49,10 @@ struct RedevelopView: View {
             || texture != record.resolvedTexture
             || (presetID == ArriLook.presetID && abs(crossover - recordCrossover(record)) > 0.005)
             || abs(shadowLift - record.shadowLift) > 0.01
-            || (record.lensStyle != nil && (fNumber != record.portraitFNumber || lens != record.lensStyle))
     }
 
     private var renderKey: String {
-        "\(presetID)|\(pushPull)|\(texture)|\(presetID == ArriLook.presetID ? crossover : 0)|\(shadowLift)|\(source != nil)|\(fNumber)|\(lens)|\(depth != nil)|\(zoomed)"
+        "\(presetID)|\(pushPull)|\(texture)|\(presetID == ArriLook.presetID ? crossover : 0)|\(shadowLift)|\(source != nil)|\(zoomed)"
     }
 
     var body: some View {
@@ -117,25 +115,36 @@ struct RedevelopView: View {
             } else {
                 ProgressView()
             }
+            if tab == .light, let histogram {
+                // Where the exposure sits, while it is being moved.
+                HistogramView(histogram: histogram)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 6)
+                    .frame(width: 124, height: 58)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.6)))
+                    .padding(10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
             if isSaving { ProgressView().controlSize(.large) }
         }
         .frame(maxHeight: .infinity)
         .padding(.top, 6)
+        .animation(.easeOut(duration: 0.2), value: tab)
     }
 
-    /// The four panels, after yCam's bottom bar: one shows at a time instead of every control at once.
+    /// The three panels, after yCam's bottom bar: one shows at a time instead of every control at once.
     enum Tab: String, CaseIterable {
         case look = "Look"
         case light = "Light"
         case texture = "Texture"
-        case lens = "Lens"
 
         var symbol: String {
             switch self {
             case .look: "camera.filters"
             case .light: "sun.max"
             case .texture: "aqi.medium"
-            case .lens: "camera.aperture"
             }
         }
     }
@@ -144,9 +153,6 @@ struct RedevelopView: View {
         case grain = "Grain"
         case halation = "Halation"
     }
-
-    /// Lens only for portrait photos, which have a background to draw again.
-    private var tabs: [Tab] { record?.lensStyle != nil ? Tab.allCases : [.look, .light, .texture] }
 
     @ViewBuilder private var panel: some View {
         switch tab {
@@ -164,16 +170,14 @@ struct RedevelopView: View {
             }
         case .texture:
             textureControls
-        case .lens:
-            portraitControls
         }
     }
 
     private var tabBar: some View {
         HStack(spacing: 0) {
-            ForEach(tabs, id: \.self) { item in
+            ForEach(Tab.allCases, id: \.self) { item in
                 Button {
-                    withAnimation(.smooth(duration: 0.2)) { tab = item }
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) { tab = item }
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: item.symbol).font(.system(size: 20))
@@ -182,13 +186,22 @@ struct RedevelopView: View {
                     .foregroundStyle(tab == item ? Theme.accent : .white.opacity(0.75))
                     .frame(maxWidth: .infinity)
                     .frame(height: 54)
+                    .background {
+                        // One soft plate that slides under the open tab.
+                        if tab == item {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.white.opacity(0.08))
+                                .matchedGeometryEffect(id: "tab", in: tabSpace)
+                        }
+                    }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 12)
         .padding(.top, 6)
+        .sensoryFeedback(.selection, trigger: tab)
     }
 
     /// Grain or Halation, picked by the chips; the chosen one's controls sit under them.
@@ -275,40 +288,6 @@ struct RedevelopView: View {
         LabeledSlider(title: "Crossover", value: $crossover, range: ArriLook.crossoverRange, reset: 0, format: { String(format: "%+.2f", $0) })
     }
 
-    /// The aperture and lens of a portrait photo's background. Changing them draws the background again.
-    private var portraitControls: some View {
-        let lenses = LensStyle.allCases.sorted { $0.order < $1.order }
-        return VStack(alignment: .leading, spacing: 10) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(PortraitAperture.stops, id: \.self) { stop in
-                        choice("ƒ" + ApertureTitle.format(stop), selected: stop == fNumber) { fNumber = stop }
-                    }
-                }
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(lenses, id: \.self) { style in
-                        choice(style.label, selected: style == lens) { lens = style }
-                    }
-                }
-            }
-        }
-    }
-
-    private func choice(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .lineLimit(1)
-                .foregroundStyle(selected ? Theme.accent : .white.opacity(0.8))
-                .padding(.horizontal, 12)
-                .frame(height: 34)
-                .background(Capsule().fill(selected ? Color.white.opacity(0.14) : Color.white.opacity(0.06)))
-        }
-        .buttonStyle(.plain)
-    }
-
     private var presetRow: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -350,8 +329,6 @@ struct RedevelopView: View {
         texture = record.resolvedTexture
         crossover = recordCrossover(record)
         shadowLift = record.shadowLift
-        fNumber = record.portraitFNumber ?? PortraitAperture.standard
-        lens = record.lensStyle ?? .solis
         loaded = true
         let url = model.url(.processed, for: record)
         Task {
@@ -361,7 +338,6 @@ struct RedevelopView: View {
             original = decoded.0
             originalLongSide = decoded.1
             source = await model.redevelopSource(for: record)
-            depth = await model.depthMap(for: record)
         }
     }
 
@@ -385,24 +361,42 @@ struct RedevelopView: View {
         }
         guard let base else { return }
 
-        var look = await model.photoLook(
+        let look = await model.photoLook(
             for: preset,
             texture: texture,
             crossover: presetID == ArriLook.presetID ? crossover : nil,
             shadowLift: shadowLift
         )
-        let pass = depth.flatMap {
-            PhotoPipeline.portraitPass(
-                PhotoPipeline.PortraitDepth(map: $0, fNumber: fNumber, lens: lens),
-                aspect: record.aspect,
-                width: CVPixelBufferGetWidth(base),
-                height: CVPixelBufferGetHeight(base)
+        if Task.isCancelled { return }
+        let rendered = await Task.detached(priority: .userInitiated) { () -> (UIImage, Histogram?)? in
+            guard let image = PhotoPipeline.gradePreview(base, look: look) else { return nil }
+            return (image, RedevelopView.measure(image))
+        }.value
+        if !Task.isCancelled, let rendered {
+            preview = rendered.0
+            if let measured = rendered.1 { histogram = measured }
+        }
+    }
+
+    /// The histogram of a rendered preview, from its pixels.
+    private nonisolated static func measure(_ image: UIImage) -> Histogram? {
+        // A zoomed-in render is the same picture at many times the bytes: its histogram is the one already shown.
+        guard let cgImage = image.cgImage, cgImage.bitsPerPixel == 32, cgImage.bitsPerComponent == 8,
+              cgImage.width * cgImage.height <= 6_000_000,
+              let data = cgImage.dataProvider?.data, let bytes = CFDataGetBytePtr(data)
+        else { return nil }
+        // Little-endian 32-bit pixels are stored blue first; the preview's own format is red first.
+        let blueFirst = cgImage.bitmapInfo.contains(.byteOrder32Little)
+        // The bytes belong to `data`, which must outlive the count.
+        return withExtendedLifetime(data) {
+            Histogram.measure(
+                pixels: UnsafeRawBufferPointer(start: bytes, count: CFDataGetLength(data)),
+                width: cgImage.width,
+                height: cgImage.height,
+                bytesPerRow: cgImage.bytesPerRow,
+                redFirst: !blueFirst
             )
         }
-        if pass != nil { look = look.with { lens.apply(to: &$0) } }
-        if Task.isCancelled { return }
-        let image = await Task.detached(priority: .userInitiated) { PhotoPipeline.gradePreview(base, look: look, portrait: pass) }.value
-        if !Task.isCancelled, let image { preview = image }
     }
 
     /// The preview scale at which the photo's long side is about 4000 px, capped at full size.
@@ -439,8 +433,6 @@ struct RedevelopView: View {
             pushPull: pushPull,
             texture: texture,
             crossover: crossover,
-            portraitFNumber: fNumber,
-            lens: lens,
             shadowLift: shadowLift
         )
         isSaving = false

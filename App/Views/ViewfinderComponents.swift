@@ -68,33 +68,32 @@ struct LevelOverlay: View {
     }
 }
 
+/// The square where a tap focused: it closes in on the spot, holds, then dims before it goes.
 struct FocusMarker: View {
     @State private var settled = false
+    @State private var dimmed = false
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 4)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
             .strokeBorder(Theme.accent, lineWidth: 1.5)
             .frame(width: 72, height: 72)
-            .scaleEffect(settled ? 1 : 1.35)
-            .onAppear { withAnimation(.easeOut(duration: 0.2)) { settled = true } }
+            .overlay {
+                // Ticks on the four sides, as on a camera's focus frame.
+                ForEach(0 ..< 4, id: \.self) { side in
+                    Rectangle()
+                        .fill(Theme.accent)
+                        .frame(width: 1.5, height: 6)
+                        .offset(y: -32)
+                        .rotationEffect(.degrees(Double(side) * 90))
+                }
+            }
+            .scaleEffect(settled ? 1 : 1.4)
+            .opacity(settled ? (dimmed ? 0.45 : 1) : 0)
+            .onAppear {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.62)) { settled = true }
+                withAnimation(.easeInOut(duration: 0.35).delay(0.7)) { dimmed = true }
+            }
             .allowsHitTesting(false)
-    }
-}
-
-struct CircleIconButton: View {
-    let systemName: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 19, weight: .medium))
-                .foregroundStyle(.white)
-                .frame(width: 46, height: 46)
-                .background(Circle().fill(Color.black.opacity(0.38)))
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -290,7 +289,7 @@ struct EVBubble: View {
 
 /// The panel under the "..." button, a grid of fixed-width cells so labels never wrap, and below it the
 /// PRO row that opens the tools for those who want them (`ProPanel`).
-/// Photo: Flash, Timer, Aspect, Frame, Portrait. Video: FPS, Resolution, Stabilization.
+/// Photo: Flash, Timer, Aspect, Frame. Video: FPS, Resolution, Stabilization.
 struct OptionsPanel: View {
     let mode: CaptureMode
     let settings: AppSettings
@@ -299,9 +298,9 @@ struct OptionsPanel: View {
     /// Frame rates the camera runs, by video width; 120 appears only where the camera has it.
     var frameRates: [Int: [Int]] = [:]
 
-    /// Photo options sit three to a row, the three video options in one row.
+    /// One row either way: four photo options, three video options.
     private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 4), count: 3)
+        Array(repeating: GridItem(.flexible(), spacing: 4), count: mode == .photo ? 4 : 3)
     }
 
     var body: some View {
@@ -335,9 +334,6 @@ struct OptionsPanel: View {
         }
         option(title: settings.frame == .off ? "Frame" : settings.frame.label, active: settings.frame != .off, action: { update { $0.frame = $0.frame.next } }) {
             Image(systemName: "rectangle.inset.filled").font(.system(size: 22))
-        }
-        option(title: "Portrait", active: settings.portrait, action: { update { $0.portrait.toggle() } }) {
-            Image(systemName: "person.crop.circle").font(.system(size: 22))
         }
     }
 
@@ -402,7 +398,10 @@ struct OptionsPanel: View {
     }
 
     private func option<Icon: View>(title: String, active: Bool, action: @escaping () -> Void, @ViewBuilder icon: () -> Icon) -> some View {
-        Button(action: action) {
+        Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            action()
+        } label: {
             VStack(spacing: 2) {
                 // A square slot, and content no wider than it: turned with the phone it still fits, as
                 // rotation does not re-lay out ("1080p" sideways would otherwise run into the title).
@@ -421,251 +420,6 @@ struct OptionsPanel: View {
             .frame(maxWidth: .infinity, minHeight: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-    }
-}
-
-/// Hold, then slide sideways to pick from a list, as mood's aperture and lens controls work: the control
-/// opens when the press is held, follows the finger while it stays down, and closes on release. A quick
-/// tap runs `tapped` instead.
-struct HoldScrub: ViewModifier {
-    let count: Int
-    let index: Int
-    var step: CGFloat = 34
-    let began: () -> Void
-    let changed: (Int) -> Void
-    let ended: () -> Void
-    let tapped: () -> Void
-
-    @State private var start: Int?
-    /// True while the hold lasts. A gesture the system cancels never reaches `onEnded`, but this resets,
-    /// so the control never stays open after the finger is gone.
-    @GestureState private var holding = false
-
-    func body(content: Content) -> some View {
-        content.gesture(
-            LongPressGesture(minimumDuration: 0.18)
-                .sequenced(before: DragGesture(minimumDistance: 0))
-                .updating($holding) { value, state, _ in
-                    switch value {
-                    case .first(true), .second(true, _): state = true
-                    default: break
-                    }
-                }
-                .onChanged { value in
-                    switch value {
-                    case .first(true):
-                        begin()
-                    case .second(true, let drag):
-                        begin()
-                        guard let drag, let start else { return }
-                        // The scale follows the finger: sliding right brings the lower values in.
-                        let moved = Int((drag.translation.width / step).rounded())
-                        let target = min(max(start - moved, 0), count - 1)
-                        if target != index {
-                            UISelectionFeedbackGenerator().selectionChanged()
-                            changed(target)
-                        }
-                    default:
-                        break
-                    }
-                }
-                .onEnded { _ in
-                    start = nil
-                    ended()
-                }
-                .exclusively(before: TapGesture().onEnded { tapped() })
-        )
-        .onChange(of: holding) { _, now in
-            if !now, start != nil {
-                start = nil
-                ended()
-            }
-        }
-    }
-
-    private func begin() {
-        guard start == nil else { return }
-        start = index
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        began()
-    }
-}
-
-/// A sideways scale of values centred on the current one, the neighbours fading out, as under mood's
-/// aperture dial. Each value keeps one size and one weight and moves, scales and blurs between its states,
-/// so the strip glides to the next value instead of swapping text.
-struct ScaleStrip: View {
-    let labels: [String]
-    let index: Int
-    var spacing: CGFloat = 64
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                ForEach(labels.indices, id: \.self) { item in
-                    let distance = abs(item - index)
-                    let isCurrent = distance == 0
-                    Text(labels[item])
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(isCurrent ? Theme.accent : .white.opacity(distance == 1 ? 0.75 : 0.3))
-                        .fixedSize()
-                        .scaleEffect(isCurrent ? 1.1 : 0.88)
-                        .blur(radius: isCurrent ? 0 : min(CGFloat(distance), 3) * 0.9)
-                        .position(x: geo.size.width / 2 + CGFloat(item - index) * spacing, y: geo.size.height / 2)
-                }
-            }
-            .animation(.smooth(duration: 0.3), value: index)
-        }
-        .frame(height: 36)
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.25),
-                                     .init(color: .black, location: 0.75), .init(color: .clear, location: 1)],
-                             startPoint: .leading, endPoint: .trailing))
-    }
-}
-
-/// Fades a view in and out through a blur, so one icon or name melts into the next.
-private struct BlurFade: ViewModifier {
-    let blur: CGFloat
-    let opacity: Double
-    let scale: CGFloat
-
-    func body(content: Content) -> some View {
-        content.blur(radius: blur).opacity(opacity).scaleEffect(scale)
-    }
-}
-
-extension AnyTransition {
-    /// Comes in out of a blur and leaves into one, a little smaller than it rests.
-    static var blurFade: AnyTransition {
-        .modifier(active: BlurFade(blur: 14, opacity: 0, scale: 0.9), identity: BlurFade(blur: 0, opacity: 1, scale: 1))
-    }
-}
-
-/// A polygon with rounded corners: the aperture blades. Roundness 0 is sharp, 1 nearly a circle.
-struct ApertureShape: Shape {
-    var sides = 6
-    var roundness: CGFloat
-    var rotation: Angle
-
-    var animatableData: AnimatablePair<CGFloat, Double> {
-        get { AnimatablePair(roundness, rotation.radians) }
-        set { roundness = newValue.first; rotation = .radians(newValue.second) }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        let centre = CGPoint(x: rect.midX, y: rect.midY)
-        let radius = min(rect.width, rect.height) / 2
-        let count = Double(sides)
-        let points = (0 ..< sides).map { side -> CGPoint in
-            let angle: Double = rotation.radians + Double(side) * 2 * Double.pi / count - Double.pi / 2
-            let x: CGFloat = centre.x + radius * CGFloat(cos(angle))
-            let y: CGFloat = centre.y + radius * CGFloat(sin(angle))
-            return CGPoint(x: x, y: y)
-        }
-        let edge = 2 * radius * sin(.pi / CGFloat(sides))
-        let corner = max(0.5, roundness * edge * 0.5)
-        var path = Path()
-        let last = points[sides - 1], first = points[0]
-        path.move(to: CGPoint(x: (last.x + first.x) / 2, y: (last.y + first.y) / 2))
-        for side in 0 ..< sides {
-            let point = points[side], next = points[(side + 1) % sides]
-            path.addArc(tangent1End: point, tangent2End: CGPoint(x: (point.x + next.x) / 2, y: (point.y + next.y) / 2), radius: corner)
-        }
-        path.closeSubpath()
-        return path
-    }
-}
-
-/// The big aperture shown while the f-number is being dragged: a glowing out-of-focus light seen through
-/// six blades that close as the number goes up, a dotted ring, and the scale of stops.
-struct ApertureOverlay: View {
-    let fNumber: Double
-
-    private var index: Int { PortraitAperture.stops.firstIndex(of: fNumber) ?? 0 }
-    /// 1 wide open, 0.3 at f/16: the opening shrinks like real blades closing.
-    private var openness: CGFloat {
-        let t = log(fNumber / 1.4) / log(16 / 1.4)
-        return CGFloat(1 - 0.7 * t)
-    }
-
-    var body: some View {
-        VStack(spacing: 18) {
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [0.1, 10]))
-                    .frame(width: 150, height: 150)
-                let shape = ApertureShape(roundness: openness * 0.9, rotation: .degrees(Double(openness) * 30))
-                ZStack {
-                    Circle().fill(Color(red: 1, green: 0.62, blue: 0.2)).frame(width: 70).offset(x: 6, y: -24)
-                    Circle().fill(Color(red: 0.5, green: 0.15, blue: 0.95)).frame(width: 80).offset(x: -18, y: 14)
-                    Circle().fill(Color(red: 0.95, green: 0.3, blue: 0.15)).frame(width: 64).offset(x: 24, y: 16)
-                }
-                .blur(radius: 14)
-                .frame(width: 120, height: 120)
-                .clipShape(shape)
-                .overlay(shape.stroke(.white, lineWidth: 4 / max(openness, 0.3)))
-                .scaleEffect(openness)
-                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: fNumber)
-            }
-            .frame(height: 160)
-            ScaleStrip(labels: PortraitAperture.stops.map(Self.format), index: index)
-                .frame(width: 300)
-            Text("APERTURE")
-                .font(.system(size: 13, weight: .semibold))
-                .tracking(1)
-                .foregroundStyle(.white.opacity(0.85))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(Color.black.opacity(0.55)))
-        }
-        .shadow(color: .black.opacity(0.35), radius: 12)
-    }
-
-    static func format(_ value: Double) -> String { ApertureTitle.format(value) }
-}
-
-/// The big lens shown while the lens is being dragged: its name in a ring, the scale of lenses and its character.
-struct LensOverlay: View {
-    let lens: LensStyle
-
-    private var lenses: [LensStyle] { LensStyle.allCases.sorted { $0.order < $1.order } }
-
-    var body: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                // The lens's own bokeh, in the ring it is named in.
-                LensPreview(lens: lens)
-                    .id(lens)
-                    .frame(width: 150, height: 150)
-                    .clipShape(Circle())
-                    .transition(.blurFade)
-                Circle()
-                    .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [0.1, 10]))
-                    .frame(width: 150, height: 150)
-                Text(lens.label)
-                    .font(.system(size: 30, weight: .semibold))
-                    .tracking(1.5)
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.8), radius: 6)
-                    .id(lens)
-                    .transition(.blurFade)
-            }
-            .frame(height: 160)
-            .animation(.smooth(duration: 0.32), value: lens)
-            ScaleStrip(labels: lenses.map(\.label), index: lenses.firstIndex(of: lens) ?? 0, spacing: 76)
-                .frame(width: 320)
-            Text(lens.summary.uppercased())
-                .font(.system(size: 12, weight: .semibold))
-                .tracking(0.8)
-                .foregroundStyle(.white.opacity(0.85))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(Color.black.opacity(0.55)))
-                .id(lens)
-                .transition(.blurFade)
-                .animation(.smooth(duration: 0.32), value: lens)
-        }
-        .shadow(color: .black.opacity(0.35), radius: 12)
+        .buttonStyle(PressableStyle(scale: 0.9))
     }
 }

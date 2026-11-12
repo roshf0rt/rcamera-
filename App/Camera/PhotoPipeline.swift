@@ -103,7 +103,7 @@ enum PhotoPipeline {
 
     /// Builds the saved photo at capture time. With a RAW it develops the RAW, as Lampa does, so the picture
     /// skips the camera's local tone mapping and keeps the sensor's range; the processed image only sets the
-    /// exposure. Without one (flash, portrait, RAW off) it grades the processed image.
+    /// exposure. Without one (flash, RAW off) it grades the processed image.
     static func develop(
         raw: Data?,
         processed: Data?,
@@ -113,9 +113,6 @@ enum PhotoPipeline {
         frame: FrameStyle = .off,
         label: String = "",
         accentIndex: Int = 0,
-        depth: AVDepthData? = nil,
-        fNumber: Double = PortraitAperture.standard,
-        lens: LensStyle = .solis,
         orientation: DeviceOrientation = .portrait
     ) -> Developed? {
         let offset = (raw != nil && processed != nil) ? rawExposureOffset(raw: raw!, processed: processed!) : 0
@@ -128,9 +125,7 @@ enum PhotoPipeline {
             base = nil
         }
         guard let base else { return nil }
-        let blurred = depth.flatMap { portraitBlur(base, depth: $0, fNumber: fNumber, lens: lens) } ?? base
-        let subject = depth == nil ? base : lensLook(blurred, lens: lens)
-        let finished = turned(finish(subject, look: look, aspect: aspect, mirror: mirror), orientation)
+        let finished = turned(finish(base, look: look, aspect: aspect, mirror: mirror), orientation)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
     }
 
@@ -178,105 +173,13 @@ enum PhotoPipeline {
         frame: FrameStyle = .off,
         label: String = "",
         accentIndex: Int = 0,
-        portrait: PortraitDepth? = nil,
         orientation: DeviceOrientation = .portrait
     ) -> Developed? {
         guard let base = baseImage(source, pushPull: pushPull, scale: 1) else { return nil }
         let offset: Double
         if case let .raw(_, value) = source { offset = value } else { offset = 0 }
-        let subject = portrait.map { portraitSubject($0, of: base) } ?? base
-        let finished = turned(finish(subject, look: look, aspect: aspect, mirror: mirror), orientation)
+        let finished = turned(finish(base, look: look, aspect: aspect, mirror: mirror), orientation)
         return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
-    }
-
-    /// The lens's vignette on a portrait photo, the same fall-off as the viewfinder's: untouched inside 30% of
-    /// the half diagonal, darkening to the corners. The lens's colour fringing and glow come through the look,
-    /// through `LensStyle.apply(to:)`.
-    static func lensLook(_ image: CIImage, lens: LensStyle) -> CIImage {
-        guard lens.vignette > 0.001 else { return image }
-        let extent = image.extent
-        let halfDiagonal = CGFloat(hypot(extent.width, extent.height)) * 0.5
-        let edge = CGFloat(1 - lens.vignette * 0.9)
-        let filter = CIFilter(name: "CIRadialGradient")
-        filter?.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: "inputCenter")
-        filter?.setValue(halfDiagonal * 0.3, forKey: "inputRadius0")
-        filter?.setValue(halfDiagonal * 0.95, forKey: "inputRadius1")
-        filter?.setValue(CIColor(red: 1, green: 1, blue: 1), forKey: "inputColor0")
-        filter?.setValue(CIColor(red: edge, green: edge, blue: edge), forKey: "inputColor1")
-        guard let gradient = filter?.outputImage else { return image }
-        return image
-            .applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: gradient.cropped(to: extent)])
-            .cropped(to: extent)
-    }
-
-    /// Portrait background blur drawn by the lens: the background (by the depth map) goes through the same
-    /// Metal gather as the viewfinder, in the lens's own shape (blades, rim, cat's eye, ovality, swirl), and is
-    /// laid back under the sharp subject. Strength follows the f-number.
-    ///
-    /// The depth map comes from the sensor's landscape orientation, so it is turned to match the photo.
-    /// Strengths and orientation were written without a device to check them against.
-    static func portraitBlur(_ image: CIImage, depth: AVDepthData, fNumber: Double, lens: LensStyle) -> CIImage? {
-        let disparity = depth.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32).depthDataMap
-        return portraitBlur(image, disparity: disparity, fNumber: fNumber, lens: lens)
-    }
-
-    /// The same, from a disparity map in the sensor's landscape orientation (a kept depth map, or one just captured).
-    static func portraitBlur(_ image: CIImage, disparity: CVPixelBuffer, fNumber: Double, lens: LensStyle) -> CIImage? {
-        let extent = image.extent
-        guard let mask = backgroundMask(disparity: disparity, extent: extent) else { return nil }
-        let strength = PortraitAperture.blurStrength(fNumber: fNumber)
-        guard let background = MetalGrader.shared?.portraitBackground(image: image, mask: mask, lens: lens, strength: strength, context: context),
-              let blend = CIFilter(name: "CIBlendWithMask")
-        else { return nil }
-        blend.setValue(background, forKey: kCIInputImageKey)
-        blend.setValue(image, forKey: kCIInputBackgroundImageKey)
-        blend.setValue(mask, forKey: kCIInputMaskImageKey)
-        return blend.outputImage?.cropped(to: extent)
-    }
-
-    /// White where the scene is behind the subject, black on the subject, with a soft edge. The subject is
-    /// whatever is in the middle of the frame, as the portrait focus usually is.
-    private static func backgroundMask(disparity: CVPixelBuffer, extent: CGRect) -> CIImage? {
-        let map = CIImage(cvPixelBuffer: disparity).oriented(.right)
-        let fitted = map
-            .transformed(by: CGAffineTransform(translationX: -map.extent.minX, y: -map.extent.minY))
-            .transformed(by: CGAffineTransform(scaleX: extent.width / map.extent.width, y: extent.height / map.extent.height))
-            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
-        let centre = CGRect(x: extent.midX - extent.width * 0.15, y: extent.midY - extent.height * 0.15,
-                            width: extent.width * 0.3, height: extent.height * 0.3)
-        guard let focus = averageRed(fitted, in: centre), focus > 0.0001 else { return nil }
-        // Disparity falls with distance: at 85% of the subject's it starts to blur, at 55% fully.
-        let near = focus * 0.85, far = focus * 0.55
-        let gain = 1 / (near - far)
-        guard let matrix = CIFilter(name: "CIColorMatrix") else { return nil }
-        matrix.setValue(fitted, forKey: kCIInputImageKey)
-        let row = CIVector(x: CGFloat(-gain), y: 0, z: 0, w: 0)
-        matrix.setValue(row, forKey: "inputRVector")
-        matrix.setValue(row, forKey: "inputGVector")
-        matrix.setValue(row, forKey: "inputBVector")
-        matrix.setValue(CIVector(x: 0, y: 0, z: 0, w: 0), forKey: "inputAVector")
-        let bias = CGFloat(near * gain)
-        matrix.setValue(CIVector(x: bias, y: bias, z: bias, w: 1), forKey: "inputBiasVector")
-        guard let raw = matrix.outputImage else { return nil }
-        let clamped = raw.applyingFilter("CIColorClamp", parameters: [
-            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 1),
-            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
-        ])
-        return clamped
-            .clampedToExtent()
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: Double(min(extent.width, extent.height)) * 0.008])
-            .cropped(to: extent)
-    }
-
-    /// Mean of the red channel over `rect`, unclamped.
-    private static func averageRed(_ image: CIImage, in rect: CGRect) -> Double? {
-        guard let average = CIFilter(name: "CIAreaAverage", parameters: [
-            kCIInputImageKey: image,
-            kCIInputExtentKey: CIVector(cgRect: rect),
-        ])?.outputImage else { return nil }
-        var pixel = [Float](repeating: 0, count: 4)
-        context.render(average, toBitmap: &pixel, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBAf, colorSpace: nil)
-        return Double(pixel[0])
     }
 
     /// Draws a pattern in translucent white over the whole frame. The photo is drawn on top and hides the middle.
@@ -435,89 +338,14 @@ enum PhotoPipeline {
     }
 
     /// Grades a preview base with a look. A few milliseconds on the GPU.
-    static func gradePreview(_ base: CVPixelBuffer, look: FilmLook, portrait: PortraitPass? = nil) -> UIImage? {
+    static func gradePreview(_ base: CVPixelBuffer, look: FilmLook) -> UIImage? {
         let width = CVPixelBufferGetWidth(base), height = CVPixelBufferGetHeight(base)
         guard let grader = MetalGrader.shared,
               let output = MetalGrader.makePixelBuffer(width: width, height: height),
-              grader.grade(source: base, crop: CropRect(x: 0, y: 0, width: width, height: height), mirror: false, look: look, into: output, cachedMasks: false, portrait: portrait)
+              grader.grade(source: base, crop: CropRect(x: 0, y: 0, width: width, height: height), mirror: false, look: look, into: output, cachedMasks: false)
         else { return nil }
         let image = CIImage(cvPixelBuffer: output, options: [.colorSpace: sRGB])
         guard let cgImage = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: sRGB) else { return nil }
         return UIImage(cgImage: cgImage)
-    }
-
-    // MARK: Depth kept with a portrait photo
-
-    /// A portrait photo's depth, and the lens and aperture its background is drawn with.
-    struct PortraitDepth: Sendable {
-        var map: DepthMap
-        var fNumber: Double
-        var lens: LensStyle
-    }
-
-    /// The capture's depth as the app keeps it: disparity in the sensor's landscape orientation.
-    static func depthMap(_ depth: AVDepthData) -> DepthMap? {
-        let disparity = depth.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32).depthDataMap
-        CVPixelBufferLockBaseAddress(disparity, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(disparity, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(disparity) else { return nil }
-        let width = CVPixelBufferGetWidth(disparity), height = CVPixelBufferGetHeight(disparity)
-        let rowBytes = CVPixelBufferGetBytesPerRow(disparity)
-        var values = [Float](repeating: 0, count: width * height)
-        for y in 0 ..< height {
-            let row = (base + y * rowBytes).assumingMemoryBound(to: Float.self)
-            for x in 0 ..< width { values[y * width + x] = row[x] }
-        }
-        return DepthMap(width: width, height: height, values: values)
-    }
-
-    /// A kept depth map as a pixel buffer for the portrait mask.
-    static func disparityBuffer(_ map: DepthMap) -> CVPixelBuffer? {
-        guard let buffer = MetalGrader.makePixelBuffer(width: map.width, height: map.height, format: kCVPixelFormatType_OneComponent32Float) else { return nil }
-        CVPixelBufferLockBaseAddress(buffer, [])
-        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
-        for y in 0 ..< map.height {
-            let row = (base + y * rowBytes).assumingMemoryBound(to: Float.self)
-            for x in 0 ..< map.width { row[x] = map.values[y * map.width + x] }
-        }
-        return buffer
-    }
-
-    /// Half-float depth for the grader, the way the live depth arrives.
-    static func depthBuffer(width: Int, height: Int, values: [Float]) -> CVPixelBuffer? {
-        guard let buffer = MetalGrader.makePixelBuffer(width: width, height: height, format: kCVPixelFormatType_OneComponent16Half) else { return nil }
-        CVPixelBufferLockBaseAddress(buffer, [])
-        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
-        for y in 0 ..< height {
-            let row = (base + y * rowBytes).assumingMemoryBound(to: Float16.self)
-            for x in 0 ..< width { row[x] = Float16(values[y * width + x]) }
-        }
-        return buffer
-    }
-
-    /// The grader's portrait pass for a preview of `width` × `height`, cropped to `aspect` as the preview is.
-    static func portraitPass(_ portrait: PortraitDepth, aspect: AspectOption, width: Int, height: Int) -> PortraitPass? {
-        let values = portrait.map.portrait(aspect: aspect, outWidth: width, outHeight: height)
-        guard let buffer = depthBuffer(width: width, height: height, values: values) else { return nil }
-        let focus = DepthMap(width: width, height: height, values: values).middleDisparity ?? 1
-        return PortraitPass(
-            depth: buffer,
-            depthRotated: true,
-            focus: focus,
-            strength: Float(PortraitAperture.blurStrength(fNumber: portrait.fNumber)),
-            lens: portrait.lens
-        )
-    }
-
-    /// The photo with its background drawn by the lens, as a capture is developed.
-    private static func portraitSubject(_ portrait: PortraitDepth, of image: CIImage) -> CIImage {
-        guard let disparity = disparityBuffer(portrait.map),
-              let blurred = portraitBlur(image, disparity: disparity, fNumber: portrait.fNumber, lens: portrait.lens)
-        else { return image }
-        return lensLook(blurred, lens: portrait.lens)
     }
 }

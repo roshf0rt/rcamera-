@@ -69,14 +69,12 @@ final class AppModel {
         syncCameraControls()
     }
 
-    /// The Camera Control button's lists: presets, grain and halation, plus aperture and lens in portrait mode.
+    /// The Camera Control button's lists: presets, grain and halation.
     func syncCameraControls() {
         let presets = visiblePresets
         let selected = presets.firstIndex { $0.id == settings.selectedPresetID } ?? 0
         let levels = GrainLevel.allCases
-        let stops = PortraitAperture.stops
-        let lenses = LensStyle.allCases.sorted { $0.order < $1.order }
-        var pickers: [CaptureSessionController.ControlPicker] = [
+        let pickers: [CaptureSessionController.ControlPicker] = [
             .init(title: "Preset", symbol: "camera.filters", titles: presets.map(\.name), selected: selected) { [weak self] index in
                 Task { @MainActor in
                     guard let self, self.visiblePresets.indices.contains(index) else { return }
@@ -90,17 +88,6 @@ final class AppModel {
                 Task { @MainActor in self?.updateSettings { $0.halationLevel = levels[index] } }
             },
         ]
-        if settings.portrait {
-            let stopTitles = stops.map { "ƒ" + ApertureTitle.format($0) }
-            pickers.append(.init(title: "Aperture", symbol: "camera.aperture", titles: stopTitles,
-                                 selected: stops.firstIndex(of: settings.portraitFNumber) ?? 0) { [weak self] index in
-                Task { @MainActor in self?.updateSettings { $0.portraitFNumber = stops[index] } }
-            })
-            pickers.append(.init(title: "Lens", symbol: "circle.hexagongrid", titles: lenses.map(\.label),
-                                 selected: lenses.firstIndex(of: settings.lensStyle) ?? 0) { [weak self] index in
-                Task { @MainActor in self?.updateSettings { $0.lensStyle = lenses[index] } }
-            })
-        }
         engine.controller.setControlPickers(pickers)
     }
 
@@ -495,15 +482,12 @@ final class AppModel {
         let grainLevel = settings.grainLevel
         let halationLevel = settings.halationLevel
         let frame = settings.frame
-        let portraitFNumber = settings.portraitFNumber
-        let lens = settings.lensStyle
 
         Task {
-            var look = await cameraLook(for: preset, slot: .photo)
-            if photo.depth != nil { look = look.with { lens.apply(to: &$0) } }
+            let look = await cameraLook(for: preset, slot: .photo)
             let place = saveLocation ? await location.currentPlaceName() : nil
-            let (developed, depthFile) = await Task.detached(priority: .userInitiated) { () -> (PhotoPipeline.Developed?, Data?) in
-                let developed = PhotoPipeline.develop(
+            let developed = await Task.detached(priority: .userInitiated) {
+                PhotoPipeline.develop(
                     raw: photo.raw,
                     processed: photo.processed,
                     look: look,
@@ -512,12 +496,8 @@ final class AppModel {
                     frame: frame,
                     label: preset.name,
                     accentIndex: preset.accentIndex,
-                    depth: photo.depth,
-                    fNumber: portraitFNumber,
-                    lens: lens,
                     orientation: photo.orientation
                 )
-                return (developed, photo.depth.flatMap { PhotoPipeline.depthMap($0)?.encoded() })
             }.value
             processingCount -= 1
             guard let developed else {
@@ -539,13 +519,10 @@ final class AppModel {
                 grainLevel: grainLevel,
                 halationLevel: halationLevel,
                 orientation: photo.orientation,
-                portraitFNumber: photo.depth == nil ? nil : portraitFNumber,
-                lensStyle: photo.depth == nil ? nil : lens,
                 crossover: preset.id == ArriLook.presetID ? preset.adjustments.crossover : nil
             )
             do {
                 try captureStore.write(developed.heic, as: .processed, for: record.id)
-                if let depthFile { try captureStore.write(depthFile, as: .depth, for: record.id) }
                 try captureStore.write(developed.thumbnail, as: .thumbnail, for: record.id)
                 if hasRAW, let raw = photo.raw { try captureStore.write(raw, as: .rawDNG, for: record.id) }
                 // The camera's image before the preset: lets the photo be redeveloped without RAW, or after it expires.
@@ -696,36 +673,20 @@ final class AppModel {
         }.value
     }
 
-    /// The depth map a portrait photo was blurred with; nil for other photos, or when it was not kept.
-    func depthMap(for record: CaptureRecord) async -> DepthMap? {
-        guard record.lensStyle != nil else { return nil }
-        let url = captureStore.url(.depth, for: record.id)
-        return await Task.detached(priority: .userInitiated) {
-            (try? Data(contentsOf: url)).flatMap { DepthMap(encoded: $0) }
-        }.value
-    }
-
     /// Re-renders a stored photo with a different preset and push/pull, replacing the processed image.
-    /// A portrait photo's background is drawn again with `portraitFNumber` and `lens`.
     func redevelop(
         _ record: CaptureRecord,
         presetID: String,
         pushPull: Double,
         texture: PhotoTexture,
         crossover: Double?,
-        portraitFNumber: Double,
-        lens: LensStyle,
         shadowLift: Double = 0
     ) async -> Bool {
         guard let preset = preset(id: presetID),
               let source = await redevelopSource(for: record)
         else { return false }
-        let portrait = await depthMap(for: record).map {
-            PhotoPipeline.PortraitDepth(map: $0, fNumber: portraitFNumber, lens: lens)
-        }
         let crossover = presetID == ArriLook.presetID ? crossover : nil
-        var look = await photoLook(for: preset, texture: texture, crossover: crossover, shadowLift: shadowLift)
-        if portrait != nil { look = look.with { lens.apply(to: &$0) } }
+        let look = await photoLook(for: preset, texture: texture, crossover: crossover, shadowLift: shadowLift)
         let aspect = record.aspect
         let mirror = record.mirrored
         let orientation = record.orientation
@@ -740,7 +701,6 @@ final class AppModel {
                 frame: record.frame,
                 label: preset.name,
                 accentIndex: preset.accentIndex,
-                portrait: portrait,
                 orientation: orientation
             )
         }.value
@@ -757,10 +717,6 @@ final class AppModel {
             updated.texture = texture == PhotoTexture(grain: updated.grainLevel, halation: updated.halationLevel) ? nil : texture
             updated.crossover = crossover
             updated.shadowLift = shadowLift
-            if portrait != nil {
-                updated.portraitFNumber = portraitFNumber
-                updated.lensStyle = lens
-            }
             try captureStore.update(updated)
             captures = captureStore.records
             try? await PhotoLibrarySaver.savePhoto(heicURL: captureStore.url(.processed, for: record.id), rawURL: nil)

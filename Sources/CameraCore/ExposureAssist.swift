@@ -167,3 +167,104 @@ public struct Waveform: Equatable, Sendable {
         return pixels
     }
 }
+
+/// A histogram of the graded picture, as cameras draw it: across is brightness from black to white, up is how
+/// much of the picture has it, for red, green, blue and luma. `Grade.metal` counts it for the viewfinder;
+/// `measure` counts a finished picture the same way.
+public struct Histogram: Equatable, Sendable {
+    public enum Channel: Int, CaseIterable, Sendable {
+        case red, green, blue, luma
+    }
+
+    public let bins: Int
+    /// Pixels counted (each adds one to every channel).
+    public private(set) var samples = 0
+    /// `4 * bins` counts, channel-major (`channel * bins + bin`), in the order of `Channel`.
+    public private(set) var counts: [UInt32]
+
+    public init(bins: Int = 128) {
+        self.bins = max(2, bins)
+        counts = Array(repeating: 0, count: self.bins * Channel.allCases.count)
+    }
+
+    /// Counts made elsewhere (on the GPU), `4 * bins` of them.
+    public init(bins: Int, flat: [UInt32]) {
+        self.init(bins: bins)
+        guard flat.count >= counts.count else { return }
+        counts = Array(flat[0 ..< counts.count])
+        samples = counts[Channel.luma.rawValue * self.bins ..< counts.count].reduce(0) { $0 + Int($1) }
+    }
+
+    /// The bin a level of 0...1 falls in.
+    public func bin(of level: Double) -> Int {
+        min(max(Int(level * Double(bins)), 0), bins - 1)
+    }
+
+    public func count(_ channel: Channel, bin: Int) -> Int {
+        Int(counts[channel.rawValue * bins + bin])
+    }
+
+    /// Counts 8-bit pixels, four bytes each (RGBA when `redFirst`, else BGRA), about `maxSamples` of them
+    /// spread evenly over the picture.
+    public static func measure(
+        pixels: UnsafeRawBufferPointer,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int,
+        redFirst: Bool = false,
+        bins: Int = 128,
+        maxSamples: Int = 60000
+    ) -> Histogram {
+        var histogram = Histogram(bins: bins)
+        guard width > 0, height > 0, bytesPerRow >= width * 4, pixels.count >= bytesPerRow * (height - 1) + width * 4 else { return histogram }
+        let step = max(1, Int((Double(width * height) / Double(max(maxSamples, 1))).squareRoot().rounded(.up)))
+        let size = histogram.bins
+        for y in stride(from: 0, to: height, by: step) {
+            for x in stride(from: 0, to: width, by: step) {
+                let offset = y * bytesPerRow + x * 4
+                let red = Double(pixels[offset + (redFirst ? 0 : 2)]) / 255
+                let green = Double(pixels[offset + 1]) / 255
+                let blue = Double(pixels[offset + (redFirst ? 2 : 0)]) / 255
+                let luma = 0.299 * red + 0.587 * green + 0.114 * blue
+                histogram.counts[histogram.bin(of: red)] += 1
+                histogram.counts[size + histogram.bin(of: green)] += 1
+                histogram.counts[2 * size + histogram.bin(of: blue)] += 1
+                histogram.counts[3 * size + histogram.bin(of: luma)] += 1
+                histogram.samples += 1
+            }
+        }
+        return histogram
+    }
+
+    /// The count the tallest bar stands for: the largest bin of any channel, the first and last bins left
+    /// out, so a clipped sky or a black border does not flatten everything else.
+    public var peak: Int {
+        var top: UInt32 = 0
+        for channel in 0 ..< Channel.allCases.count {
+            for bin in 1 ..< bins - 1 { top = max(top, counts[channel * bins + bin]) }
+        }
+        return Int(top)
+    }
+
+    /// Bar heights of a channel, 0...1 against `peak`. The end bins stop at 1.
+    public func heights(_ channel: Channel) -> [Double] {
+        let peak = peak
+        guard peak > 0 else { return Array(repeating: 0, count: bins) }
+        return (0 ..< bins).map { min(1, Double(count(channel, bin: $0)) / Double(peak)) }
+    }
+
+    /// Share of the picture whose luma sits in the darkest bins (about the lowest 2.5%, `ExposureAssist`'s crushed band).
+    public var crushedShare: Double { share(of: .luma, bins: 0 ..< max(1, bin(of: 0.025) + 1)) }
+
+    /// Share of the picture with a channel in the brightest bins (from about 98.5% up): clipped.
+    public var clippedShare: Double {
+        let first = min(bins - 1, bin(of: 0.985))
+        return [Channel.red, .green, .blue].map { share(of: $0, bins: first ..< bins) }.max() ?? 0
+    }
+
+    private func share(of channel: Channel, bins range: Range<Int>) -> Double {
+        guard samples > 0 else { return 0 }
+        let sum = range.reduce(0) { $0 + count(channel, bin: $1) }
+        return Double(sum) / Double(samples)
+    }
+}

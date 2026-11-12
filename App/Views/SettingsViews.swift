@@ -110,7 +110,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Camera")
                 } footer: {
-                    Text("Lenses (0.5×, 1×, telephoto) are detected automatically. The extra stop is a crop of the main camera. Separate cameras runs each lens as a camera of its own instead of one combined camera: steadier, as nothing switches by itself, but lenses change by swapping cameras, without the smooth zoom (portrait photos keep the combined camera, which gives their depth). Auto macro switching lets the combined camera hop to the ultra wide for close subjects; off, lenses change only when you zoom. Bayer RAW and AutoMotion video also run one camera at a time.")
+                    Text("Lenses (0.5×, 1×, telephoto) are detected automatically. The extra stop is a crop of the main camera. Separate cameras runs each lens as a camera of its own instead of one combined camera: steadier, as nothing switches by itself, but lenses change by swapping cameras, without the smooth zoom. Auto macro switching lets the combined camera hop to the ultra wide for close subjects; off, lenses change only when you zoom. Bayer RAW and AutoMotion video also run one camera at a time.")
                 }
 
                 Section {

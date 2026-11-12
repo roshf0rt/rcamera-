@@ -26,8 +26,6 @@ final class CameraEngine {
         var aspect: AspectOption
         var mirror: Bool
         var date: Date
-        /// Set for portrait photos: the depth the blur is built from.
-        var depth: AVDepthData?
         /// How the phone was held when the shutter was pressed.
         var orientation: DeviceOrientation = .portrait
     }
@@ -55,6 +53,8 @@ final class CameraEngine {
     private(set) var cineState: CaptureSessionController.CineState?
     /// The luma waveform of the viewfinder while it is on.
     private(set) var waveform: CGImage?
+    /// The viewfinder's histogram while it is on.
+    private(set) var histogram: Histogram?
     private(set) var appleLogActive = false
     /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
     private(set) var showsSwitchBlur = false
@@ -137,7 +137,7 @@ final class CameraEngine {
         } else if new.autoMotion != old.autoMotion, mode == .video, lens != .front, !isRecording {
             // AutoMotion needs one camera; the combined one returns when it is off.
             Task { await applyConfig() }
-        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.portrait != old.portrait || new.photoResolution != old.photoResolution || new.separateCameras != old.separateCameras || new.autoMacro != old.autoMacro), !isRecording {
+        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.photoResolution != old.photoResolution || new.separateCameras != old.separateCameras || new.autoMacro != old.autoMacro), !isRecording {
             Task { await applyConfig() }
         } else {
             reapplyIfAppleLogChanged()
@@ -159,10 +159,11 @@ final class CameraEngine {
             controller.onCineState = { [weak self] state in
                 Task { @MainActor in self?.cineState = state }
             }
-            controller.hub.setWaveformHandler { [weak self] image in
+            controller.hub.setScopesHandler { [weak self] image, histogram in
                 Task { @MainActor in
-                    guard let self, self.settings.waveform else { return }
-                    self.waveform = image
+                    guard let self else { return }
+                    if self.settings.waveform, let image { self.waveform = image }
+                    if self.settings.histogram, let histogram { self.histogram = histogram }
                 }
             }
         }
@@ -170,6 +171,7 @@ final class CameraEngine {
         controller.setWhiteBalance(kelvin: settings.whiteBalanceKelvin, tint: settings.whiteBalanceTint)
         updateAssist()
         if !settings.waveform { waveform = nil }
+        if !settings.histogram { histogram = nil }
     }
 
     private func updateAssist() {
@@ -177,6 +179,7 @@ final class CameraEngine {
             zebra: settings.zebra,
             falseColor: settings.falseColor,
             peaking: settings.focusPeaking,
+            histogram: settings.histogram,
             waveform: settings.waveform,
             quarterTurns: deviceOrientation.quarterTurns
         )
@@ -409,7 +412,6 @@ final class CameraEngine {
             wantsRAW: settings.capturesRAW,
             rawFormat: settings.rawFormat,
             photoResolution: settings.photoResolution,
-            portrait: settings.portrait && machine.configuration.mode == .photo,
             motion: settings.autoMotion && machine.configuration.mode == .video,
             separateCameras: settings.separateCameras,
             autoMacro: settings.autoMacro
@@ -502,7 +504,7 @@ final class CameraEngine {
     /// 10-bit Apple Log frames pick the Apple Log look by themselves. If the camera can only deliver
     /// Apple Log as BGRA, every video frame is log while it is active.
     private func updateHub() {
-        var look: FilmLook
+        let look: FilmLook
         if mode == .photo {
             look = looks.photo
         } else if appleLogActive, let appleLog = looks.appleLog {
@@ -510,22 +512,14 @@ final class CameraEngine {
         } else {
             look = looks.video
         }
-        if portraitLook != nil { look = look.with { settings.lensStyle.apply(to: &$0) } }
         controller.hub.configure(
             look: look,
             logLook: mode == .video ? looks.appleLog : nil,
             aspect: mode == .photo ? settings.aspect : .ratio16x9,
             mirror: mirrorsOutput
         )
-        controller.hub.setPortrait(portraitLook)
         // 4K at 120 fps cannot be graded twice per frame, so the viewfinder runs at 30 while recording is whole.
         controller.hub.setPreviewRate(mode == .video && settings.videoFPS > FormatChooser.highFrameRate ? 30 : 0)
-    }
-
-    /// How the chosen lens and f-number draw the live portrait background; nil outside portrait photos.
-    private var portraitLook: FrameHub.PortraitLook? {
-        guard settings.portrait, mode == .photo, lens != .front else { return nil }
-        return FrameHub.PortraitLook(strength: Float(PortraitAperture.blurStrength(fNumber: settings.portraitFNumber)), lens: settings.lensStyle)
     }
 
     // MARK: Photo
@@ -554,9 +548,8 @@ final class CameraEngine {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         let mirror = mirrorsOutput
         let aspect = settings.aspect
-        let portrait = settings.portrait
         let heldAs = deviceOrientation
-        controller.capturePhoto(flash: settings.flash, wantsRAW: settings.capturesRAW, rawFormat: settings.rawFormat, portrait: portrait) { [weak self] outcome in
+        controller.capturePhoto(flash: settings.flash, wantsRAW: settings.capturesRAW, rawFormat: settings.rawFormat) { [weak self] outcome in
             Task { @MainActor in
                 guard let self else { return }
                 self.isCapturing = false
@@ -570,7 +563,6 @@ final class CameraEngine {
                     aspect: aspect,
                     mirror: mirror,
                     date: Date(),
-                    depth: outcome.depth,
                     orientation: heldAs
                 ))
                 if let note = outcome.rawNote { self.message = "RAW not saved: \(note)" }

@@ -122,7 +122,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var isLevelEnabled = false
     public var mirrorFrontCamera = true
     public var capturesRAW = true
-    /// Photos are developed from this RAW when one is captured (flash off, not portrait).
+    /// Photos are developed from this RAW when one is captured (flash off).
     public var rawFormat: RAWFormat = .proRAW
     public var savesLocation = true
     public var digitalZoomStop: DigitalZoomStop = .none
@@ -143,12 +143,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var frame: FrameStyle = .off
     /// Volume buttons take a photo while the camera is on screen. Off by default.
     public var volumeShutter = false
-    /// Portrait photos: blur the background from the depth map. Photo mode only.
-    public var portrait = false
-    /// The f-number the portrait blur is set to.
-    public var portraitFNumber = PortraitAperture.standard
-    /// The lens look applied to portrait photos.
-    public var lensStyle: LensStyle = .solis
     /// The photo size. 12 MP by default.
     public var photoResolution: PhotoResolution = .mp12
 
@@ -174,6 +168,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var zebra = false
     public var focusPeaking = false
     public var falseColor = false
+    public var histogram = false
     public var waveform = false
     /// Video: exposure and white balance stay as they were when recording started.
     public var lockExposureWhileRecording = false
@@ -197,9 +192,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, lastCaptureMode, aspect, flash, timer
         case isGridEnabled, isLevelEnabled, mirrorFrontCamera, capturesRAW, rawFormat, savesLocation, digitalZoomStop
-        case grainLevel, halationLevel, frame, volumeShutter, portrait, portraitFNumber, lensStyle, photoResolution
+        case grainLevel, halationLevel, frame, volumeShutter, photoResolution
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, instantGrade, autoMotion, separateCameras, autoMacro, revision
-        case zebra, focusPeaking, falseColor, waveform, lockExposureWhileRecording, lockWhiteBalanceWhileRecording
+        case zebra, focusPeaking, falseColor, histogram, waveform, lockExposureWhileRecording, lockWhiteBalanceWhileRecording
         case whiteBalanceKelvin, whiteBalanceTint
     }
 
@@ -236,9 +231,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         }
         frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? frame
         volumeShutter = (try? c.decode(Bool.self, forKey: .volumeShutter)) ?? volumeShutter
-        portrait = (try? c.decode(Bool.self, forKey: .portrait)) ?? portrait
-        portraitFNumber = PortraitAperture.nearest(to: (try? c.decode(Double.self, forKey: .portraitFNumber)) ?? portraitFNumber)
-        lensStyle = (try? c.decode(LensStyle.self, forKey: .lensStyle)) ?? lensStyle
         // 48 MP was taken out of the camera screen; a stored choice falls back to 12 MP.
         photoResolution = .mp12
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
@@ -252,6 +244,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         zebra = (try? c.decode(Bool.self, forKey: .zebra)) ?? zebra
         focusPeaking = (try? c.decode(Bool.self, forKey: .focusPeaking)) ?? focusPeaking
         falseColor = (try? c.decode(Bool.self, forKey: .falseColor)) ?? falseColor
+        histogram = (try? c.decode(Bool.self, forKey: .histogram)) ?? histogram
         waveform = (try? c.decode(Bool.self, forKey: .waveform)) ?? waveform
         lockExposureWhileRecording = (try? c.decode(Bool.self, forKey: .lockExposureWhileRecording)) ?? lockExposureWhileRecording
         lockWhiteBalanceWhileRecording = (try? c.decode(Bool.self, forKey: .lockWhiteBalanceWhileRecording)) ?? lockWhiteBalanceWhileRecording

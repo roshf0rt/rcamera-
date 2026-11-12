@@ -25,8 +25,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var wantsRAW: Bool
         var rawFormat: RAWFormat
         var photoResolution: PhotoResolution
-        /// Portrait photo mode: stream depth for the live background blur.
-        var portrait: Bool = false
         /// AutoMotion runs in video: it sets shutter and ISO itself, which the combined back camera does not take.
         var motion: Bool = false
         /// The setting: every back lens runs as a camera of its own, never as the combined camera.
@@ -56,8 +54,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     struct PhotoOutcome: @unchecked Sendable {
         var raw: Data?
         var processed: Data?
-        /// Depth for portrait photos. Nil when the photo was taken without depth.
-        var depth: AVDepthData?
         var error: Error?
         /// Why no RAW came with the photo although it was asked for; nil when it did, or was not asked for.
         var rawNote: String?
@@ -72,9 +68,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private let photoOutput = AVCapturePhotoOutput()
     private let previewOutput = AVCaptureVideoDataOutput()
     private let recordOutput = AVCaptureVideoDataOutput()
-    private let depthOutput = AVCaptureDepthDataOutput()
-    private let depthQueue = DispatchQueue(label: "rcamera.depth", qos: .userInteractive)
-    private var depthOutputAdded = false
 
     private let audioSession = AVCaptureSession()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -240,10 +233,10 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         // the combined back camera takes no custom exposure (Apple's documentation says so for the triple camera), so
         // shutter and ISO can only be set on a single camera.
         let singleCamera = position == .back && (
-            (config.mode == .photo && config.wantsRAW && config.rawFormat == .bayer && !config.portrait)
+            (config.mode == .photo && config.wantsRAW && config.rawFormat == .bayer)
                 || (config.mode == .video && config.motion)
-                // Separate cameras by choice. Portrait photos keep the combined camera, which is where their depth comes from.
-                || (config.separateCameras && !(config.mode == .photo && config.portrait))
+                // Separate cameras by choice.
+                || config.separateCameras
         )
         let wanted = self.device(for: position, highFrameRate: highFrameRate, physicalLens: singleCamera ? config.lens : nil)
         let needsInput = videoInput == nil || currentPosition != position || currentHighFrameRate != highFrameRate
@@ -281,7 +274,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             }
             currentFormatIndex = formatPlan.index
             currentAppleLog = formatPlan.appleLog
-            setDepthFormat(on: device)
             configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW, lean: leanPhotoOutput)
             if #available(iOS 18.0, *) { installControls(device: device) }
             session.commitConfiguration()
@@ -318,7 +310,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         applyMacroBehavior(autoMacro: config.autoMacro, on: device)
         applyWhiteBalance(on: device)
         configureConnections(config)
-        updateDepthOutput(enabled: config.portrait && config.mode == .photo && position == .back, device: device)
 
         if !session.isRunning { session.startRunning() }
 
@@ -750,34 +741,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         installedPickerTitles = controlPickers.map(\.titles)
     }
 
-    /// Streams depth to the hub while portrait mode is on; the connection is simply switched off otherwise.
-    private func updateDepthOutput(enabled: Bool, device: AVCaptureDevice) {
-        let wanted = enabled && device.activeDepthDataFormat != nil
-        if wanted, !depthOutputAdded {
-            session.beginConfiguration()
-            if session.canAddOutput(depthOutput) {
-                session.addOutput(depthOutput)
-                depthOutput.isFilteringEnabled = true
-                depthOutput.alwaysDiscardsLateDepthData = true
-                depthOutput.setDelegate(hub, callbackQueue: depthQueue)
-                depthOutputAdded = true
-            }
-            session.commitConfiguration()
-        }
-        guard depthOutputAdded, let connection = depthOutput.connection(with: .depthData) else {
-            hub.setPortraitDepthAvailable(false)
-            return
-        }
-        if connection.isEnabled != wanted { connection.isEnabled = wanted }
-        var rotated = false
-        if connection.isVideoRotationAngleSupported(90) {
-            if connection.videoRotationAngle != 90 { connection.videoRotationAngle = 90 }
-            rotated = true
-        }
-        hub.setDepthRotated(rotated)
-        hub.setPortraitDepthAvailable(wanted)
-    }
-
     private func installOutputsIfNeeded() {
         guard !outputsInstalled else { return }
         outputsInstalled = true
@@ -837,26 +800,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Portrait photos need a depth map. The device can only deliver one for a depth format that goes with its
-    /// active video format, so the largest disparity or depth format is chosen. Nil when there is none.
-    private func setDepthFormat(on device: AVCaptureDevice) {
-        let depthTypes: Set<OSType> = [
-            kCVPixelFormatType_DepthFloat16, kCVPixelFormatType_DepthFloat32,
-            kCVPixelFormatType_DisparityFloat16, kCVPixelFormatType_DisparityFloat32,
-        ]
-        let usable = device.activeFormat.supportedDepthDataFormats.filter {
-            depthTypes.contains(CMFormatDescriptionGetMediaSubType($0.formatDescription))
-        }
-        let largest = usable.max { lhs, rhs in
-            let a = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription)
-            let b = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription)
-            return Int(a.width) * Int(a.height) < Int(b.width) * Int(b.height)
-        }
-        guard device.activeDepthDataFormat != largest, (try? device.lockForConfiguration()) != nil else { return }
-        device.activeDepthDataFormat = largest
-        device.unlockForConfiguration()
-    }
-
     private func setColorSpace(appleLog: Bool, on device: AVCaptureDevice) {
         guard (try? device.lockForConfiguration()) != nil else { return }
         applyColorSpace(appleLog: appleLog, on: device)
@@ -889,7 +832,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     }
 
     /// 12 MP photos (or the closest the format offers), and ProRAW where the format supports it unless Bayer RAW is wanted.
-    /// `lean` keeps the photo output to its smallest size, without ProRAW or depth, for video formats that need the camera's whole budget.
+    /// `lean` keeps the photo output to its smallest size, without ProRAW, for video formats that need the camera's whole budget.
     private func configurePhotoOutput(device: AVCaptureDevice, resolution: PhotoResolution, rawFormat: RAWFormat, wantsRAW: Bool, lean: Bool = false) {
         let dimensions = device.activeFormat.supportedMaxPhotoDimensions
         // Bayer RAW is the sensor's plain 12 MP frame and only a single camera offers it: the combined back camera
@@ -907,10 +850,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let proRAW = !lean && photoOutput.isAppleProRAWSupported && (rawFormat == .proRAW || device.isVirtualDevice)
         if proRAW != photoOutput.isAppleProRAWEnabled {
             photoOutput.isAppleProRAWEnabled = proRAW
-        }
-        let depth = !lean && photoOutput.isDepthDataDeliverySupported
-        if depth != photoOutput.isDepthDataDeliveryEnabled {
-            photoOutput.isDepthDataDeliveryEnabled = depth
         }
     }
 
@@ -1147,8 +1086,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     // MARK: Photo
 
-    /// `portrait` asks for a depth map with the photo. RAW is skipped then, because depth is delivered with the processed image.
-    func capturePhoto(flash: FlashMode, wantsRAW: Bool, rawFormat: RAWFormat, portrait: Bool, completion: @escaping @Sendable (PhotoOutcome) -> Void) {
+    func capturePhoto(flash: FlashMode, wantsRAW: Bool, rawFormat: RAWFormat, completion: @escaping @Sendable (PhotoOutcome) -> Void) {
         sessionQueue.async {
             let codec: AVVideoCodecType = self.photoOutput.availablePhotoCodecTypes.contains(.hevc) ? .hevc : .jpeg
             let settings: AVCapturePhotoSettings
@@ -1158,16 +1096,14 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             let bayer = rawTypes.first { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
             let rawType = rawFormat == .bayer ? bayer ?? proRAW : proRAW ?? bayer
             var skipped: String?
-            if wantsRAW, !portrait, let rawType {
+            if wantsRAW, let rawType {
                 settings = AVCapturePhotoSettings(rawPixelFormatType: rawType, processedFormat: [AVVideoCodecKey: codec])
                 settings.photoQualityPrioritization = .speed
             } else {
                 settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: codec])
                 if wantsRAW {
                     let size = self.photoOutput.maxPhotoDimensions
-                    // Portrait photos never carry RAW, which is no news: no note for them.
-                    skipped = portrait ? nil
-                        : "this camera offers no RAW at \(size.width)×\(size.height) (\(rawTypes.count) RAW types, ProRAW \(self.photoOutput.isAppleProRAWEnabled ? "on" : "off"))."
+                    skipped = "this camera offers no RAW at \(size.width)×\(size.height) (\(rawTypes.count) RAW types, ProRAW \(self.photoOutput.isAppleProRAWEnabled ? "on" : "off"))."
                 }
             }
 
@@ -1181,14 +1117,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
             if let connection = self.photoOutput.connection(with: .video) { self.rotate(connection) }
 
-            settings.isDepthDataDeliveryEnabled = portrait && self.photoOutput.isDepthDataDeliveryEnabled
-
             let id = settings.uniqueID
             let rawSkipped = skipped
             let delegate = PhotoCaptureDelegate { outcome in
                 self.sessionQueue.async { self.photoDelegates[id] = nil }
                 var outcome = outcome
-                if wantsRAW, !portrait, outcome.raw == nil, outcome.processed != nil {
+                if wantsRAW, outcome.raw == nil, outcome.processed != nil {
                     outcome.rawNote = rawSkipped ?? "the camera returned no RAW file."
                 }
                 completion(outcome)
@@ -1216,7 +1150,6 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private var raw: Data?
     private var processed: Data?
-    private var depth: AVDepthData?
     private var failure: Error?
     private let completion: (CaptureSessionController.PhotoOutcome) -> Void
 
@@ -1233,12 +1166,11 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
             raw = photo.fileDataRepresentation()
         } else {
             processed = photo.fileDataRepresentation()
-            depth = photo.depthData
         }
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
-        completion(.init(raw: raw, processed: processed, depth: depth, error: error ?? failure))
+        completion(.init(raw: raw, processed: processed, error: error ?? failure))
     }
 }
 
@@ -1249,11 +1181,4 @@ private final class CameraControlsDelegate: NSObject, AVCaptureSessionControlsDe
     func sessionControlsWillEnterFullscreenAppearance(_ session: AVCaptureSession) {}
     func sessionControlsWillExitFullscreenAppearance(_ session: AVCaptureSession) {}
     func sessionControlsDidBecomeInactive(_ session: AVCaptureSession) {}
-}
-
-/// "1.8", "2.8", "11": f-numbers as camera dials print them.
-enum ApertureTitle {
-    static func format(_ value: Double) -> String {
-        value >= 10 ? String(Int(value.rounded())) : String(format: "%.1f", value)
-    }
 }

@@ -15,8 +15,6 @@ public enum CaptureFile: String, Sendable {
     case video = "video.mov"
     /// A Log video graded with its preset; Redevelop writes it again.
     case processedVideo = "processed.mov"
-    /// Portrait photos: the depth map the background was blurred with, so Redevelop can change the lens and aperture.
-    case depth = "depth.bin"
 }
 
 public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
@@ -43,9 +41,6 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var frame: FrameStyle
     /// How the phone was held; the saved photo is turned to match, and Redevelop turns it again.
     public var orientation: DeviceOrientation
-    /// Portrait photos: the f-number and lens the background was drawn with. Nil for other photos. Redevelop changes them.
-    public var portraitFNumber: Double?
-    public var lensStyle: LensStyle?
     /// Recorded as flat Apple Log: the file is ungraded and is graded into `processedVideo`.
     public var logVideo: Bool
     /// Shadows moved in Redevelop, -1 (down) to 1 (up), 0 for none; see `ShadowLift`.
@@ -74,8 +69,6 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         grainLevel: GrainLevel = .medium,
         halationLevel: EffectLevel = .medium,
         orientation: DeviceOrientation = .portrait,
-        portraitFNumber: Double? = nil,
-        lensStyle: LensStyle? = nil,
         shadowLift: Double = 0,
         logVideo: Bool = false,
         texture: PhotoTexture? = nil,
@@ -96,8 +89,6 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.grainLevel = grainLevel
         self.halationLevel = halationLevel
         self.orientation = orientation
-        self.portraitFNumber = portraitFNumber
-        self.lensStyle = lensStyle
         self.shadowLift = shadowLift
         self.logVideo = logVideo
         self.texture = texture
@@ -106,7 +97,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
-        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, portraitFNumber, lensStyle, shadowLift, logVideo
+        case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, shadowLift, logVideo
         case texture, crossover
     }
 
@@ -127,8 +118,6 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         try c.encode(grainLevel, forKey: .grainLevel)
         try c.encode(halationLevel, forKey: .halationLevel)
         try c.encode(orientation, forKey: .orientation)
-        try c.encodeIfPresent(portraitFNumber, forKey: .portraitFNumber)
-        try c.encodeIfPresent(lensStyle, forKey: .lensStyle)
         try c.encode(shadowLift, forKey: .shadowLift)
         try c.encode(logVideo, forKey: .logVideo)
         try c.encodeIfPresent(texture, forKey: .texture)
@@ -156,8 +145,6 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         halationLevel = (try? c.decode(EffectLevel.self, forKey: .halationLevel))
             ?? ((try? c.decode(Bool.self, forKey: .halationEnabled)) ?? true ? .medium : .off)
         orientation = (try? c.decode(DeviceOrientation.self, forKey: .orientation)) ?? .portrait
-        portraitFNumber = try? c.decodeIfPresent(Double.self, forKey: .portraitFNumber)
-        lensStyle = try? c.decodeIfPresent(LensStyle.self, forKey: .lensStyle)
         shadowLift = (try? c.decode(Double.self, forKey: .shadowLift)) ?? 0
         logVideo = (try? c.decode(Bool.self, forKey: .logVideo)) ?? false
         texture = try? c.decodeIfPresent(PhotoTexture.self, forKey: .texture)
