@@ -303,6 +303,10 @@ final class DeviceOrientationTests: XCTestCase {
 
     func testRotationsMirrorEachOther() {
         XCTAssertEqual(DeviceOrientation.landscapeLeft.iconRotation, -DeviceOrientation.landscapeRight.iconRotation)
+        // A drag to the right of the picture as seen: along the screen's x held upright, down it held top-left, up it held top-right.
+        XCTAssertEqual(DeviceOrientation.portrait.rightwardTravel(dx: 30, dy: 5), 30)
+        XCTAssertEqual(DeviceOrientation.landscapeLeft.rightwardTravel(dx: 5, dy: 30), 30)
+        XCTAssertEqual(DeviceOrientation.landscapeRight.rightwardTravel(dx: 5, dy: 30), -30)
         XCTAssertEqual(DeviceOrientation.portrait.quarterTurns, 0)
         XCTAssertEqual(DeviceOrientation.landscapeLeft.quarterTurns, 1)
     }

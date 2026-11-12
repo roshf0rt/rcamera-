@@ -269,21 +269,113 @@ struct EVWheel: View {
     }
 }
 
-/// The "Exposure -0.4" label shown above the wheel while it is open.
-struct EVBubble: View {
-    let value: Double
+/// The exposure ruler across the top of the picture, as Kino has it: the value over a ruler of ticks, and a
+/// swipe along it moves the exposure. Held sideways the host lays it along the edge that is then the top
+/// and turns it with the phone, and the swipe follows: `quarterTurns` says which way the user's right runs
+/// on the screen. Double tap puts it back to 0.
+struct ExposureRuler: View {
+    @Binding var value: Double
+    let orientation: DeviceOrientation
+
+    @State private var dragStart: Double?
+    @State private var rawValue: Double?
+    /// Lit while a finger is on it, and a moment after.
+    @State private var active = false
+    @State private var fadeTask: Task<Void, Never>?
+
+    private let pointsPerEV: CGFloat = 180
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text("Exposure").font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
-            Text(EVScale.format(value))
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(Theme.accent)
+        VStack(spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: "sun.max.fill").font(.system(size: 12))
+                Text(EVScale.format(value))
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .frame(width: 44)
+            }
+            .foregroundStyle(abs(value) > 0.05 ? Theme.accent : .white)
+            .shadow(color: .black.opacity(0.5), radius: 3)
+            ZStack {
+                Capsule().fill(Color.black.opacity(0.35))
+                    .background(.ultraThinMaterial, in: Capsule())
+                ticks
+                Capsule().fill(Theme.accent).frame(width: 3, height: 24)
+            }
+            .frame(height: 32)
         }
-        .padding(.horizontal, 26)
-        .padding(.vertical, 8)
-        .background(Capsule().fill(Color.black.opacity(0.4)))
-        .background(.ultraThinMaterial, in: Capsule())
+        .opacity(active ? 1 : 0.85)
+        .contentShape(Rectangle())
+        .gesture(drag)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { reset() })
+        .sensoryFeedback(.selection, trigger: value)
+        .animation(.easeOut(duration: 0.2), value: active)
+        .accessibilityElement()
+        .accessibilityLabel("Exposure")
+        .accessibilityValue(EVScale.format(value))
+        .accessibilityAdjustableAction { direction in
+            let next = value + (direction == .increment ? EVScale.step : -EVScale.step)
+            value = EVScale.snapped(next)
+        }
+    }
+
+    private var ticks: some View {
+        let shown = rawValue ?? value
+        return Canvas { context, size in
+            let center = size.width / 2
+            for step in Int(EVScale.range.lowerBound * 10) ... Int(EVScale.range.upperBound * 10) {
+                let x = center + CGFloat(Double(step) / 10 - shown) * pointsPerEV
+                guard x > 10, x < size.width - 10 else { continue }
+                let whole = step % 10 == 0
+                let half = step % 5 == 0
+                let height: CGFloat = whole ? 20 : (half ? 15 : 10)
+                let rect = CGRect(x: x - 0.75, y: (size.height - height) / 2, width: 1.5, height: height)
+                let opacity = step == 0 ? 0.95 : (half ? 0.65 : 0.35)
+                context.fill(Path(roundedRect: rect, cornerRadius: 0.75), with: .color(.white.opacity(opacity)))
+            }
+        }
+        .mask(
+            LinearGradient(
+                stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.12),
+                        .init(color: .black, location: 0.88), .init(color: .clear, location: 1)],
+                startPoint: .leading, endPoint: .trailing
+            )
+        )
+    }
+
+    /// Measured on the screen, not in the ruler's own turned space, so it is right however the ruler is laid.
+    private var drag: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+            .onChanged { gesture in
+                fadeTask?.cancel()
+                if dragStart == nil {
+                    dragStart = value
+                    active = true
+                }
+                let travel = orientation.rightwardTravel(dx: Double(gesture.translation.width), dy: Double(gesture.translation.height))
+                // Ticks follow the finger, so the value under the centre mark falls as the finger goes right.
+                let raw = min(max((dragStart ?? value) - travel / Double(pointsPerEV), EVScale.range.lowerBound), EVScale.range.upperBound)
+                rawValue = raw
+                value = EVScale.snapped(raw)
+            }
+            .onEnded { _ in
+                dragStart = nil
+                rawValue = nil
+                dim()
+            }
+    }
+
+    private func reset() {
+        value = 0
+        active = true
+        dim()
+    }
+
+    private func dim() {
+        fadeTask?.cancel()
+        fadeTask = Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            if !Task.isCancelled { active = false }
+        }
     }
 }
 

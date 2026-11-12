@@ -37,4 +37,15 @@ public enum DeviceOrientation: String, Codable, Sendable {
         case .landscapeRight: -1
         }
     }
+
+    /// How far a drag of (`dx`, `dy`) screen points, on a portrait screen, runs towards the right of the picture
+    /// as the user sees it with the phone held this way. Held top-left, the user's right is down the screen;
+    /// held top-right, up it. Matches `Waveform.column`.
+    public func rightwardTravel(dx: Double, dy: Double) -> Double {
+        switch quarterTurns {
+        case 1: dy
+        case -1: -dy
+        default: dx
+        }
+    }
 }

@@ -27,7 +27,6 @@ struct CameraView: View {
     @State private var showPresets = false
     @State private var showSettings = false
     @State private var showGallery = false
-    @State private var evActive = false
     @State private var focusMarker: FocusPoint?
     @State private var pinchStart: Double?
     /// Where the zoom stood when a finger began to slide along the lens chips.
@@ -39,7 +38,11 @@ struct CameraView: View {
     }
 
     private let topBarHeight: CGFloat = 50
-    private let controlsHeight: CGFloat = 196
+    /// Shutter row and mode row. The exposure ruler left this block for the top of the picture.
+    private let controlsHeight: CGFloat = 146
+    /// The exposure ruler's thickness, and its gap to the picture's edge.
+    private let rulerThickness: CGFloat = 56
+    private let rulerInset: CGFloat = 8
     private let zoomLineHeight: CGFloat = 56
     /// One spring for every panel that slides in, so the screen moves as one.
     static let panelSpring = Animation.spring(response: 0.36, dampingFraction: 0.86)
@@ -61,6 +64,8 @@ struct CameraView: View {
                         .offset(y: geo.size.height - controlsHeight - 24)
                         .allowsHitTesting(false)
                 }
+
+                exposureRuler(engine: engine, in: layout.preview)
 
                 if engine.mode == .video, !engine.isSwitchingMode, !showPresets {
                     ExposureHUD(
@@ -308,6 +313,38 @@ struct CameraView: View {
         .animation(Self.panelSpring, value: engine.isRecording)
     }
 
+    // MARK: Exposure ruler
+
+    /// The ruler lies along the top of the picture as the user sees it: across the top held upright, along the
+    /// right edge of the portrait layout held top-left, along the left edge held top-right. It turns with the phone,
+    /// and glides to its new place when the phone is turned.
+    private func exposureRuler(engine: CameraEngine, in preview: CGRect) -> some View {
+        let held = model.orientation.current
+        let turns = held.quarterTurns
+        let length = (turns == 0 ? preview.width : preview.height) - 24
+        let centre: CGPoint = switch turns {
+        case 1: CGPoint(x: preview.maxX - rulerInset - rulerThickness / 2, y: preview.midY)
+        case -1: CGPoint(x: preview.minX + rulerInset + rulerThickness / 2, y: preview.midY)
+        default: CGPoint(x: preview.midX, y: preview.minY + rulerInset + rulerThickness / 2)
+        }
+        return ExposureRuler(value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }), orientation: held)
+            .frame(width: length, height: rulerThickness)
+            .rotationEffect(.degrees(held.iconRotation))
+            .offset(x: centre.x - length / 2, y: centre.y - rulerThickness / 2)
+            .animation(.spring(response: 0.45, dampingFraction: 0.82), value: held)
+            .animation(.spring(response: 0.45, dampingFraction: 0.82), value: preview)
+            .opacity(engine.isSwitchingMode || showOptions || showPro ? 0 : 1)
+            .allowsHitTesting(!showOptions && !showPro && !showPresets)
+            .animation(.easeOut(duration: 0.18), value: showOptions || showPro)
+    }
+
+    /// Room the ruler takes at the picture's corners, so the scopes and the legend keep clear of it.
+    private var rulerClearance: EdgeInsets {
+        let band = rulerThickness + rulerInset + 4
+        let turns = model.orientation.current.quarterTurns
+        return EdgeInsets(top: 10 + (turns == 0 ? band : 0), leading: 10 + (turns == -1 ? band : 0), bottom: 10, trailing: 10 + (turns == 1 ? band : 0))
+    }
+
     // MARK: Viewfinder
 
     private func viewfinder(engine: CameraEngine, size: CGSize) -> some View {
@@ -321,13 +358,13 @@ struct CameraView: View {
             if model.settings.isGridEnabled { GridOverlay() }
             if model.settings.waveform || model.settings.histogram {
                 ScopesPanel(engine: engine, showsHistogram: model.settings.histogram, showsWaveform: model.settings.waveform)
-                    .padding(10)
+                    .padding(rulerClearance)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .transition(.opacity)
             }
             if model.settings.falseColor {
                 FalseColorLegend()
-                    .padding(10)
+                    .padding(rulerClearance)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .transition(.opacity)
             }
@@ -427,23 +464,26 @@ struct CameraView: View {
         )
     }
 
-    /// Swipes on the viewfinder: up opens the filters, down pulls the options shade from the top,
-    /// left and right switch between photo and video. Only clearly directional drags count.
+    /// Swipes on the viewfinder: up opens the filters, down pulls the options shade from the top and a second
+    /// swipe down goes on into PRO, left and right switch between photo and video. Up undoes down one step at a
+    /// time. Only clearly directional drags count.
     private func swipe(_ value: DragGesture.Value, engine: CameraEngine) {
         let dx = value.translation.width, dy = value.translation.height
         if abs(dy) > abs(dx) * 1.4, abs(dy) > 60 {
             if dy < 0 {
-                // Up: closes the shade if it is down, otherwise brings up the presets.
-                if showOptions || showPro {
-                    withAnimation(Self.panelSpring) { showOptions = false; showPro = false }
+                if showPro {
+                    withAnimation(Self.panelSpring) { showPro = false; showOptions = true }
+                } else if showOptions {
+                    withAnimation(Self.panelSpring) { showOptions = false }
                 } else if !showPresets {
                     withAnimation(Self.panelSpring) { showPresets = true }
                 }
             } else if showPresets {
                 withAnimation(Self.panelSpring) { showPresets = false }
-            } else {
-                // Down: pulls the shade with the camera options from the top.
-                withAnimation(Self.panelSpring) { showOptions = true; showPro = false }
+            } else if showOptions {
+                withAnimation(Self.panelSpring) { showOptions = false; showPro = true }
+            } else if !showPro {
+                withAnimation(Self.panelSpring) { showOptions = true }
             }
         } else if abs(dx) > abs(dy) * 1.4, abs(dx) > 70, !engine.isRecording, !engine.isSwitchingMode {
             engine.selectMode(engine.mode == .photo ? .video : .photo)
@@ -454,9 +494,7 @@ struct CameraView: View {
     /// while the wheel turns.
     private func zoomLine(engine: CameraEngine) -> some View {
         ZStack {
-            if evActive {
-                EVBubble(value: engine.evBias)
-            } else if engine.lens != .front, !engine.zoomStops.isEmpty, !showPresets {
+            if engine.lens != .front, !engine.zoomStops.isEmpty, !showPresets {
                 ZoomChips(stops: engine.zoomStops, reading: engine.zoomReading, mode: engine.mode) { stop in
                     engine.selectZoom(stop)
                 }
@@ -494,15 +532,9 @@ struct CameraView: View {
 
     private func controls(engine: CameraEngine) -> some View {
         VStack(spacing: 0) {
-            EVWheel(
-                value: Binding(get: { engine.evBias }, set: { engine.setEV($0) }),
-                isActive: $evActive
-            )
-            .frame(height: 46)
-            .padding(.top, 8)
             shutterRow(engine: engine)
                 .frame(height: 90)
-                .padding(.top, 6)
+                .padding(.top, 8)
             modeRow(engine: engine)
                 .frame(height: 40)
             Spacer(minLength: 0)
