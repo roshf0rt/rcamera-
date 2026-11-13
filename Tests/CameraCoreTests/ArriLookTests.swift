@@ -52,17 +52,18 @@ final class ArriLookTests: XCTestCase {
         let pair = ArriLook.Pair(a: a, b: b, slot: .appleLog, size: 5)
 
         let middle = pair.mixed(crossover: 0).apply(r: 0.5, g: 0.5, b: 0.5)
-        XCTAssertEqual(middle.r, 0.5, accuracy: 0.001)
-        XCTAssertEqual(middle.g, 0.4, accuracy: 0.001)
-        XCTAssertEqual(middle.b, 0.5, accuracy: 0.001)
+        // The mix comes out eased, see `soften`.
+        XCTAssertEqual(middle.r, ArriLook.soften(0.5), accuracy: 0.001)
+        XCTAssertEqual(middle.g, ArriLook.soften(0.4), accuracy: 0.001)
+        XCTAssertEqual(middle.b, ArriLook.soften(0.5), accuracy: 0.001)
 
         let warm = pair.mixed(crossover: 1).apply(r: 0.5, g: 0.5, b: 0.5)
-        XCTAssertEqual(warm.r, 0.8, accuracy: 0.001)
+        XCTAssertEqual(warm.r, ArriLook.soften(0.8), accuracy: 0.001)
         let cool = pair.mixed(crossover: -1).apply(r: 0.5, g: 0.5, b: 0.5)
-        XCTAssertEqual(cool.b, 0.8, accuracy: 0.001)
+        XCTAssertEqual(cool.b, ArriLook.soften(0.8), accuracy: 0.001)
 
         let quarter = pair.mixed(crossover: 0.5).apply(r: 0.5, g: 0.5, b: 0.5) // weight of a = 0.75
-        XCTAssertEqual(quarter.r, 0.8 * 0.75 + 0.2 * 0.25, accuracy: 0.001)
+        XCTAssertEqual(quarter.r, ArriLook.soften(0.8 * 0.75 + 0.2 * 0.25), accuracy: 0.001)
     }
 
     func testMixingBakedLUTsEqualsBakingTheMix() throws {
@@ -73,9 +74,26 @@ final class ArriLookTests: XCTestCase {
         let direct = ArriLook.baked(try solid((0.5, 0.5, 0.5)), for: .video, size: 5)
         let mixed = pair.mixed(crossover: 0).apply(r: 0.3, g: 0.6, b: 0.9)
         let expected = direct.apply(r: 0.3, g: 0.6, b: 0.9)
-        XCTAssertEqual(mixed.r, expected.r, accuracy: 0.001)
-        XCTAssertEqual(mixed.g, expected.g, accuracy: 0.001)
-        XCTAssertEqual(mixed.b, expected.b, accuracy: 0.001)
+        // The mix is eased on its way out, the straight baking is not.
+        XCTAssertEqual(mixed.r, ArriLook.soften(expected.r), accuracy: 0.001)
+        XCTAssertEqual(mixed.g, ArriLook.soften(expected.g), accuracy: 0.001)
+        XCTAssertEqual(mixed.b, ArriLook.soften(expected.b), accuracy: 0.001)
+    }
+
+    func testSofteningLiftsBlacksEasesContrastAndKeepsGreyAndWhite() {
+        XCTAssertGreaterThan(ArriLook.soften(0), 0.06)
+        XCTAssertLessThan(ArriLook.soften(0), 0.12)
+        XCTAssertEqual(ArriLook.soften(ArriLook.contrastPivot), ArriLook.contrastPivot, accuracy: 0.01)
+        XCTAssertEqual(ArriLook.soften(1), 1, accuracy: 0.0001)
+        XCTAssertEqual(ArriLook.soften(0.85), 0.85, accuracy: 0.03, "the highlights are left alone")
+        // Still a curve that only goes up, and flatter in the shadows than the input.
+        var previous = ArriLook.soften(0)
+        for step in 1 ... 200 {
+            let value = ArriLook.soften(Float(step) / 200)
+            XCTAssertGreaterThanOrEqual(value, previous - 0.00001, "step \(step)")
+            previous = value
+        }
+        XCTAssertLessThan(ArriLook.soften(0.3) - ArriLook.soften(0.1), 0.2)
     }
 
     func testShippedLUTsAreAMirroredPairWithANeutralMiddle() throws {

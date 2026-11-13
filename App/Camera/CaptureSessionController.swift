@@ -1030,9 +1030,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     func setZoom(lens: LensID, digital: Double, move: ZoomMove = .jump) {
         sessionQueue.async {
             guard let device = self.videoInput?.device else { return }
-            try? device.lockForConfiguration()
-            self.moveZoom(to: self.clampedZoom(self.zoomFactor(lens: lens, digital: digital), for: device), on: device, move: move)
-            device.unlockForConfiguration()
+            // Setting or ramping the zoom of a device that is not locked raises an exception, so a failed lock ends it here.
+            guard (try? device.lockForConfiguration()) != nil else { return }
+            defer { device.unlockForConfiguration() }
+            let target = self.clampedZoom(self.zoomFactor(lens: lens, digital: digital), for: device)
+            guard target.isFinite, target >= 1 else { return }
+            self.moveZoom(to: target, on: device, move: move)
         }
     }
 
