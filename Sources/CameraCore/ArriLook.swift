@@ -23,25 +23,6 @@ public enum ArriLook {
         Float(min(max((value + 1) / 2, 0), 1))
     }
 
-    // MARK: Softening
-
-    /// The print pair is a deep look: its blacks sit at zero and the shadows fall away quickly, which on a phone
-    /// photo reads as crushed. The output is eased: the blacks come up a little, the mid contrast is taken down by a
-    /// tenth around middle grey, and the highlights are left alone, so white stays white.
-    public static let shadowLift: Float = 0.035
-    public static let contrastScale: Float = 0.9
-    public static let contrastPivot: Float = 0.46
-
-    /// One output channel of the pair, eased. Rising, 0 comes out near 0.08, middle grey stays put, 1 stays 1.
-    public static func soften(_ x: Float) -> Float {
-        let inverse = 1 - min(max(x, 0), 1)
-        let lifted = x + shadowLift * inverse * inverse * inverse
-        // The contrast change fades out between 0.55 and 0.85, so the highlights keep their roll-off.
-        let t = min(max((x - 0.55) / 0.3, 0), 1)
-        let weight = 1 - t * t * (3 - 2 * t)
-        return lifted + (1 - contrastScale) * (contrastPivot - lifted) * weight
-    }
-
     // MARK: ARRI LogC3 (EI 800) and ARRI Wide Gamut
 
     /// Scene-linear to LogC3, EI 800. May leave 0...1 for very dark or very bright values; the LUT clamps.
@@ -97,10 +78,12 @@ public enum ArriLook {
 
     // MARK: Input transforms
 
-    /// Linear gain before the LogC encode, about +0.6 stop. The pair is a dark print look: yCam feeds it RAW
-    /// lifted by its own baseline exposure. Without it 18% grey came out at 0.34 instead of 0.46 and the whole
-    /// picture a stop dark; with it grey stays where it was (0.45) and white reaches 0.83.
-    public static let exposureGain: Float = 1.5
+    /// Linear gain before the LogC encode, +2 stops. The pair is a dark print look: its blacks are deep and the
+    /// shadows fall away fast, and yCam feeds it RAW lifted by its own baseline exposure, so its photos look about
+    /// two stops brighter than the plain picture while the blacks stay black. Measured on the shipped LUTs for an
+    /// sRGB photo: with +0.6 stop the codes 0.1 and 0.2 came out at 0.04 and 0.11 (crushed) and grey 0.46 stayed
+    /// 0.45; with +2 stops they come out at 0.09 and 0.27, grey at 0.70, white at 0.91, and black is still 0.
+    public static let exposureGain: Float = 4
 
     static func srgbToLinear(_ x: Float) -> Float {
         x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4)
@@ -112,7 +95,7 @@ public enum ArriLook {
 
     /// The LogC3 AWG code values (0...1) an input pixel of the given kind stands for.
     /// Photos are taken as sRGB, standard video as Rec.709, and Apple Log through its published curve.
-    /// The input is lifted by `exposureGain`, so 18% grey lands at LogC 0.43 and comes out of the pair at its own brightness.
+    /// The input is lifted by `exposureGain`, so 18% grey lands at LogC 0.54 and comes out of the pair about two stops brighter.
     public static func logCCode(for slot: LUTSlot, r: Float, g: Float, b: Float) -> (Float, Float, Float) {
         let linear: [Float]
         let matrix: [[Float]]
@@ -197,22 +180,17 @@ public enum ArriLook {
             self.b = baked[1]
         }
 
-        /// The mix for a slider value, softened (see `ArriLook.soften`). Mixing baked LUTs equals baking the mix,
-        /// because the input transform comes first.
+        /// The mix for a slider value. Mixing baked LUTs equals baking the mix, because the input transform comes first.
         public func mixed(crossover: Double) -> LUT3D {
             let wa = ArriLook.weight(forCrossover: crossover)
-            var values = wa <= 0 ? b.rgba : a.rgba
-            if wa > 0, wa < 1 {
-                b.rgba.withUnsafeBufferPointer { other in
-                    values.withUnsafeMutableBufferPointer { out in
-                        // b + (a - b) * wa: one multiply per value.
-                        for index in out.indices { out[index] = other[index] + (out[index] - other[index]) * wa }
-                    }
+            if wa >= 1 { return a }
+            if wa <= 0 { return b }
+            var values = a.rgba
+            b.rgba.withUnsafeBufferPointer { other in
+                values.withUnsafeMutableBufferPointer { out in
+                    // b + (a - b) * wa: one multiply per value.
+                    for index in out.indices { out[index] = other[index] + (out[index] - other[index]) * wa }
                 }
-            }
-            values.withUnsafeMutableBufferPointer { out in
-                // Every fourth value is alpha.
-                for index in out.indices where index & 3 != 3 { out[index] = ArriLook.soften(out[index]) }
             }
             return try! LUT3D(size: a.size, rgba: values)
         }
