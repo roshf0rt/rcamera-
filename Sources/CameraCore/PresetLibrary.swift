@@ -85,8 +85,8 @@ public enum LUTSlot: String, CaseIterable, Codable, Sendable {
 public enum PresetCatalog {
     /// JaneSu, the Roshfort collection and ARRI: `preset-1` ... `preset-11`.
     public static let classicCount = 11
-    /// The classic presets plus the film looks (`FilmCollection`).
-    public static var defaultCount: Int { classicCount + FilmCollection.entries.count }
+    /// The classic presets, then the video looks (`VideoCollection`), then the film looks (`FilmCollection`).
+    public static var defaultCount: Int { classicCount + VideoCollection.entries.count + FilmCollection.entries.count }
     /// Presets the user adds start with this, so they can be told apart from the built-in ten.
     public static let customPrefix = "custom-"
     /// Bumped whenever default names or looks change, so older installs can adopt them.
@@ -99,11 +99,11 @@ public enum PresetCatalog {
     /// The order the camera shows the built-in presets in: JaneSu, Solstice, Velvet, Rise, Carbon,
     /// Clear, Mosaic, Silver, Sienna, Drift.
     /// ARRI comes second, next to JaneSu.
-    /// The film looks follow them (`visibleOrder`).
+    /// The video and film looks follow them (`visibleOrder`).
     public static let displayOrder = ["preset-1", ArriLook.presetID, "preset-9", "preset-10", "preset-6", "preset-2", "preset-3", "preset-5", "preset-8", "preset-7", "preset-4"]
 
-    /// Every built-in preset shown on the camera: the classic order, then the film looks.
-    public static var visibleOrder: [String] { displayOrder + FilmCollection.ids }
+    /// Every built-in preset shown on the camera: the classic order, then the video looks, then the film looks.
+    public static var visibleOrder: [String] { displayOrder + VideoCollection.ids + FilmCollection.ids }
 
     /// JaneSu first, then the Roshfort collection, then ARRI (`ArriLook`).
     static let names = ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet", "ARRI"]
@@ -120,7 +120,14 @@ public enum PresetCatalog {
     }
 
     public static func defaults() -> [Preset] {
-        classics() + film()
+        classics() + video() + film()
+    }
+
+    /// The video looks, with no grain or halation: they are plain LUTs.
+    public static func video() -> [Preset] {
+        VideoCollection.entries.enumerated().map { index, entry in
+            Preset(id: entry.id, name: entry.name, accentIndex: index)
+        }
     }
 
     /// The film looks, with their starting grain, halation and overlays.
@@ -213,13 +220,18 @@ public final class PresetLibrary {
                 try? JSONEncoder().encode(saved).write(to: presetsFile, options: .atomic)
             }
             // Built-in presets added after this install was made join it: classic ones (ARRI) next to
-            // JaneSu, film looks at the end, in catalogue order.
+            // JaneSu, video looks after the classic ones, film looks at the end, in catalogue order.
             let missing = defaults.filter { fresh in !saved.contains { $0.id == fresh.id } }
             if !missing.isEmpty {
-                let classic = missing.filter { !FilmCollection.isFilm($0.id) }
+                let classic = missing.filter { !VideoCollection.isVideo($0.id) && !FilmCollection.isFilm($0.id) }
+                let video = missing.filter { VideoCollection.isVideo($0.id) }
+                let film = missing.filter { FilmCollection.isFilm($0.id) }
                 let after = (saved.firstIndex { $0.id == "preset-1" } ?? -1) + 1
                 saved.insert(contentsOf: classic, at: after)
-                saved.append(contentsOf: missing.filter { FilmCollection.isFilm($0.id) })
+                let classicIDs = Set(PresetCatalog.classics().map(\.id))
+                let afterClassic = (saved.lastIndex { classicIDs.contains($0.id) } ?? -1) + 1
+                saved.insert(contentsOf: video, at: afterClassic)
+                saved.append(contentsOf: film)
                 try? JSONEncoder().encode(saved).write(to: presetsFile, options: .atomic)
             }
             presets = saved

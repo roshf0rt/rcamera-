@@ -70,6 +70,13 @@ CI собирает неподписанный IPA при каждом push.
 
 Не перенесено: HDR gain map, виджет, Locked-расширение, halation v2/v3 и bloom v3, регуляторы прямо на экране камеры. Список с причинами — в `docs/research/mood-2.4.0/FEATURES.md`.
 
+## Видео-LUT
+
+- **20 видео-пресетов** (`VideoCollection`) идут после классических, перед плёночными. Файлы из `Video_LUTs.zip` лежат в `App/Resources/LUTs/video-<key>.video.cube` (Rec.709) и `video-<key>.applelog.cube` (Apple Log → Rec.709), без пересчёта.
+- Glost, Kodiac, Lectar и Sanda имеют обе версии и работают в любом режиме. Kodiac Rec.709 взят из файла `Kodiac79` (пара по бренду).
+- Пресеты только с Apple Log (Anji, Chroma Dark, Fade, False Colour, Film 03, Natural, Pillow, Tyrel, Verva) подписаны «Apple Log only». В обычном видео и на фото без LUT Rec.709 они не применяют цвет.
+- Base SDR и Base HDR — технические преобразования из архива, включены как пресеты.
+
 ## Плёночные пресеты и текстуры
 
 - **79 плёночных пресетов** (`FilmCollection`) идут на камере после классических. LUT лежат в `App/Resources/LUTs/film-<имя>.lut` (33³, переведены из присланных lookup-PNG 512×512 и `dam_lookup_*.cube`). У пресетов с иконкой (`App/Resources/FilterIcons`) она видна в углу карточки, подпись — «Film • LUT» или «Film • Texture».

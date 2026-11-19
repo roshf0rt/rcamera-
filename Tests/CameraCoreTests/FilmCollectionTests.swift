@@ -14,7 +14,7 @@ final class FilmCollectionTests: XCTestCase {
         let library = try PresetLibrary(storageDirectory: directory)
         let ids = library.presets.map(\.id)
         XCTAssertEqual(Array(ids.prefix(PresetCatalog.classicCount)), PresetCatalog.displayOrder)
-        XCTAssertEqual(Array(ids.dropFirst(PresetCatalog.classicCount)), FilmCollection.ids)
+        XCTAssertEqual(Array(ids.dropFirst(PresetCatalog.classicCount)), VideoCollection.ids + FilmCollection.ids)
         XCTAssertEqual(Set(ids).count, ids.count, "ids are unique")
         for preset in library.presets where FilmCollection.isFilm(preset.id) {
             XCTAssertFalse(preset.isCustom)
@@ -34,7 +34,7 @@ final class FilmCollectionTests: XCTestCase {
         let library = try PresetLibrary(storageDirectory: directory)
         let ids = library.presets.map(\.id)
         XCTAssertEqual(Array(ids.prefix(old.count)), old.map(\.id), "the user's order stays")
-        XCTAssertEqual(Array(ids.dropFirst(old.count)), FilmCollection.ids)
+        XCTAssertEqual(Array(ids.dropFirst(old.count)), VideoCollection.ids + FilmCollection.ids)
         XCTAssertTrue(library.presets.allSatisfy { !$0.isHidden })
         XCTAssertEqual(try PresetLibrary(storageDirectory: directory).presets.count, PresetCatalog.defaultCount)
     }

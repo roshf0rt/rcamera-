@@ -40,6 +40,7 @@ struct PresetCardStyle {
     /// What the preset is: a built-in keeps its own description whatever colours its card is given.
     static func subtitle(of preset: Preset) -> String {
         if preset.isCustom { return "My preset" }
+        if let video = VideoCollection.entry(id: preset.id) { return video.subtitle }
         if FilmCollection.isFilm(preset.id) { return preset.overlays.isEmpty ? "Film • LUT" : "Film • Texture" }
         let number = Int(preset.id.replacingOccurrences(of: "preset-", with: "")) ?? 0
         return all.indices.contains(number - 1) ? all[number - 1].subtitle : of(preset).subtitle
