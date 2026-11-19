@@ -90,11 +90,12 @@ final class PresetLibraryTests: XCTestCase {
 
     func testDefaultsHaveElevenNamedPresets() throws {
         let library = try PresetLibrary(storageDirectory: makeTempDirectory())
-        XCTAssertEqual(library.presets.count, 11)
-        XCTAssertEqual(library.presets.map(\.name), ["JaneSu", "ARRI", "Solstice", "Velvet", "Rise", "Carbon", "Clear", "Mosaic", "Silver", "Sienna", "Drift"])
-        XCTAssertEqual(library.presets.last?.id, "preset-4")
+        XCTAssertEqual(library.presets.count, PresetCatalog.defaultCount)
+        let classics = Array(library.presets.prefix(PresetCatalog.classicCount))
+        XCTAssertEqual(classics.map(\.name), ["JaneSu", "ARRI", "Solstice", "Velvet", "Rise", "Carbon", "Clear", "Mosaic", "Silver", "Sienna", "Drift"])
+        XCTAssertEqual(classics.last?.id, "preset-4")
         XCTAssertFalse(library.presets.contains(where: \.isHidden))
-        XCTAssertTrue(library.presets.allSatisfy { $0.grain > 0 }, "presets start with film grain")
+        XCTAssertTrue(classics.allSatisfy { $0.grain > 0 }, "presets start with film grain")
         XCTAssertFalse(library.hasLUT(for: "preset-1"))
     }
 
@@ -448,11 +449,11 @@ final class CustomPresetTests: XCTestCase {
         let reopened = try PresetLibrary(storageDirectory: directory)
         XCTAssertEqual(Array(reopened.presets.map(\.id).prefix(11)), PresetCatalog.displayOrder)
         XCTAssertEqual(reopened.preset(id: mine.id)?.isHidden, true)
-        XCTAssertEqual(reopened.presets.filter { !$0.isHidden }.count, 11)
+        XCTAssertEqual(reopened.presets.filter { !$0.isHidden }.count, PresetCatalog.visibleOrder.count)
 
         try reopened.setHidden(false, id: mine.id)
         XCTAssertEqual(try PresetLibrary(storageDirectory: directory).preset(id: mine.id)?.isHidden, false, "the order is adopted once")
-        for id in PresetCatalog.displayOrder { try reopened.setHidden(true, id: id) }
+        for id in PresetCatalog.visibleOrder { try reopened.setHidden(true, id: id) }
         XCTAssertEqual(reopened.presets.filter { !$0.isHidden }.count, 1, "one preset always stays visible")
     }
 

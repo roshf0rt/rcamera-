@@ -15,7 +15,13 @@ targets:
       - path: App
         excludes:
           - Resources/LUTs/**
+          - Resources/Overlays/**
+          - Resources/FilterIcons/**
       - path: App/Resources/LUTs
+        type: folder
+      - path: App/Resources/Overlays
+        type: folder
+      - path: App/Resources/FilterIcons
         type: folder
     dependencies:
       - package: RCamera

@@ -343,7 +343,7 @@ final class AppModel {
         adjustments.dynamicRange = 1
         // LUT strength is a photo setting; video and Apple Log always take the whole LUT.
         if slot != .photo { adjustments.filmStrength = 1 }
-        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation, adjustments: adjustments)
+        let look = FilmLook(lut: lut, grain: preset.grain, halation: preset.halation, adjustments: adjustments, overlays: preset.overlays)
         // Every slider step makes a new 65^3 LUT (4 MB), so only the newest ARRI mix of each kind is kept.
         if usesArriPair { lookCache = lookCache.filter { !$0.key.hasPrefix("\(preset.id)|\(slot.rawValue)|") } }
         lookCache[key] = look

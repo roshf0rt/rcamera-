@@ -60,6 +60,33 @@ struct GradeParams {
     int waveStepY;
     int waveTurn;         // DeviceOrientation.quarterTurns: the columns run across the picture as it is held
     int histBins;         // histogram: red, green, blue and luma counts of this many bins follow the waveform's
+    // Overlay layer 0 (`PresetOverlay`): blend 0 = none, 1 normal, 2 screen, 3 multiply, 4 overlay, 5 soft light, 6 add.
+    int ov0Blend;
+    int ov0Tile;      // 1: texture coordinate = pixel * scale + offset, repeating
+    int ov0Rotate;    // 1: texture is turned a quarter to match the frame
+    float ov0Opacity;
+    float ov0ScaleX;
+    float ov0ScaleY;
+    float ov0OffsetX;
+    float ov0OffsetY;
+    // Overlay layer 1 (`PresetOverlay`): blend 0 = none, 1 normal, 2 screen, 3 multiply, 4 overlay, 5 soft light, 6 add.
+    int ov1Blend;
+    int ov1Tile;      // 1: texture coordinate = pixel * scale + offset, repeating
+    int ov1Rotate;    // 1: texture is turned a quarter to match the frame
+    float ov1Opacity;
+    float ov1ScaleX;
+    float ov1ScaleY;
+    float ov1OffsetX;
+    float ov1OffsetY;
+    // Overlay layer 2 (`PresetOverlay`): blend 0 = none, 1 normal, 2 screen, 3 multiply, 4 overlay, 5 soft light, 6 add.
+    int ov2Blend;
+    int ov2Tile;      // 1: texture coordinate = pixel * scale + offset, repeating
+    int ov2Rotate;    // 1: texture is turned a quarter to match the frame
+    float ov2Opacity;
+    float ov2ScaleX;
+    float ov2ScaleY;
+    float ov2OffsetX;
+    float ov2OffsetY;
 };
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
@@ -228,6 +255,40 @@ static float focusEdge(texture2d<float, access::read> luma,
     return abs(4.0 * centre - around);
 }
 
+// Mirrors `PresetOverlay.Blend`. `o` is the overlay texel (alpha from PNGs), `amount` its opacity.
+static float3 blendOverlay(float3 c, float4 o, int mode, float amount) {
+    float3 t = o.rgb;
+    float3 r;
+    switch (mode) {
+        case 1: r = t; break;
+        case 2: r = 1.0 - (1.0 - c) * (1.0 - t); break;
+        case 3: r = c * t; break;
+        case 4: r = select(1.0 - 2.0 * (1.0 - c) * (1.0 - t), 2.0 * c * t, c < 0.5); break;
+        case 5: r = (1.0 - 2.0 * t) * c * c + 2.0 * t * c; break;
+        case 6: r = min(c + t, 1.0); break;
+        default: return c;
+    }
+    return saturate(mix(c, r, amount * o.a));
+}
+
+static float3 applyOverlay(float3 c, texture2d<float> tex, uint2 gid, float2 uv,
+                           int mode, int tile, int rotate, float amount, float2 scale, float2 offset) {
+    if (mode == 0 || amount <= 0.0) {
+        return c;
+    }
+    float4 o;
+    if (tile != 0) {
+        o = tex.sample(linearRepeat, float2(gid) * scale + offset);
+    } else {
+        float2 a = uv * scale + offset;
+        if (rotate != 0) {
+            a = float2(a.y, 1.0 - a.x);
+        }
+        o = tex.sample(linearClamp, a);
+    }
+    return blendOverlay(c, o, mode, amount);
+}
+
 kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
                   texture2d<float, access::read> chroma [[texture(1)]],
                   texture3d<float> lut [[texture(2)]],
@@ -235,6 +296,9 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
                   texture2d<float> grain [[texture(4)]],
                   texture2d<float, access::write> destination [[texture(5)]],
                   texture3d<float> previousLUT [[texture(6)]],
+                  texture2d<float> overlay0 [[texture(7)]],
+                  texture2d<float> overlay1 [[texture(8)]],
+                  texture2d<float> overlay2 [[texture(9)]],
                   constant GradeParams &p [[buffer(0)]],
                   device atomic_uint *wave [[buffer(1)]],
                   uint2 gid [[thread_position_in_grid]]) {
@@ -296,6 +360,13 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
         float weight = y > 0.5 ? 1.12 - y : y + 0.18;
         color = saturate(color + p.grain * weight * noise);
     }
+
+    color = applyOverlay(color, overlay0, gid, uv, p.ov0Blend, p.ov0Tile, p.ov0Rotate, p.ov0Opacity,
+                         float2(p.ov0ScaleX, p.ov0ScaleY), float2(p.ov0OffsetX, p.ov0OffsetY));
+    color = applyOverlay(color, overlay1, gid, uv, p.ov1Blend, p.ov1Tile, p.ov1Rotate, p.ov1Opacity,
+                         float2(p.ov1ScaleX, p.ov1ScaleY), float2(p.ov1OffsetX, p.ov1OffsetY));
+    color = applyOverlay(color, overlay2, gid, uv, p.ov2Blend, p.ov2Tile, p.ov2Rotate, p.ov2Opacity,
+                         float2(p.ov2ScaleX, p.ov2ScaleY), float2(p.ov2OffsetX, p.ov2OffsetY));
 
     if (p.assist != 0) {
         float y = dot(color, kLuma);

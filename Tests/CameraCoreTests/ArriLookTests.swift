@@ -142,14 +142,14 @@ final class ArriLookTests: XCTestCase {
         try "5".write(to: directory.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
 
         let library = try PresetLibrary(storageDirectory: directory)
-        XCTAssertEqual(library.presets.count, 11)
+        XCTAssertEqual(library.presets.count, PresetCatalog.defaultCount)
         let arri = try XCTUnwrap(library.preset(id: ArriLook.presetID))
         XCTAssertEqual(arri.name, "ARRI")
         XCTAssertFalse(arri.isHidden)
         XCTAssertFalse(arri.isCustom)
         XCTAssertEqual(library.presets[1].id, ArriLook.presetID, "next to the first preset")
         // It stays after a second launch.
-        XCTAssertEqual(try PresetLibrary(storageDirectory: directory).presets.count, 11)
+        XCTAssertEqual(try PresetLibrary(storageDirectory: directory).presets.count, PresetCatalog.defaultCount)
     }
 
     func testCrossoverIsTheOnlyEditARRIKeepsAndItSurvivesEncoding() throws {

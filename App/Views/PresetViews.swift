@@ -40,6 +40,7 @@ struct PresetCardStyle {
     /// What the preset is: a built-in keeps its own description whatever colours its card is given.
     static func subtitle(of preset: Preset) -> String {
         if preset.isCustom { return "My preset" }
+        if FilmCollection.isFilm(preset.id) { return preset.overlays.isEmpty ? "Film • LUT" : "Film • Texture" }
         let number = Int(preset.id.replacingOccurrences(of: "preset-", with: "")) ?? 0
         return all.indices.contains(number - 1) ? all[number - 1].subtitle : of(preset).subtitle
     }
@@ -149,6 +150,16 @@ struct PresetCard: View {
                 .padding(.horizontal, 10)
                 .padding(.top, 10)
                 .padding(.bottom, 9)
+            }
+            .overlay(alignment: .topTrailing) {
+                if let icon = FilmIcons.image(for: preset.id) {
+                    Image(uiImage: icon)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 26, height: 26)
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .padding(8)
+                }
             }
             .frame(width: Self.width, height: Self.height)
             .clipShape(shape)
@@ -425,5 +436,20 @@ struct WheelPicker: View {
 
     private func turn(to target: Int) {
         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { pick(target) }
+    }
+}
+
+/// The bundled film icons (App/Resources/FilterIcons), by preset id.
+enum FilmIcons {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    static func image(for presetID: String) -> UIImage? {
+        guard let file = FilmCollection.entry(id: presetID)?.icon else { return nil }
+        if let hit = cache.object(forKey: file as NSString) { return hit }
+        guard let url = Bundle.main.url(forResource: "FilterIcons", withExtension: nil)?.appendingPathComponent(file),
+              let image = UIImage(contentsOfFile: url.path)
+        else { return nil }
+        cache.setObject(image, forKey: file as NSString)
+        return image
     }
 }

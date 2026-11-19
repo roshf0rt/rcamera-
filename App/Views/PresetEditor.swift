@@ -33,6 +33,8 @@ struct PresetEditorView: View {
     @State private var openingGrain = 0.0
     @State private var openingHalation = 0.0
     @State private var adjustments = LookAdjustments.neutral
+    @State private var overlays: [PresetOverlay] = []
+    @State private var showOverlayPicker = false
     @State private var loaded = false
     @State private var lut: LUT3D?
     @State private var importSlot: LUTSlot?
@@ -100,6 +102,13 @@ struct PresetEditorView: View {
             }
         }
         .onDisappear(perform: save)
+        .sheet(isPresented: $showOverlayPicker) {
+            OverlayPickerSheet { file in
+                guard overlays.count < PresetOverlay.maxLayers else { return }
+                overlays.append(PresetOverlay(file: file))
+                save()
+            }
+        }
         .sheet(isPresented: $showNewPreset) {
             NewPresetSheet(base: current) { id in onCreated?(id) }
         }
@@ -141,6 +150,7 @@ struct PresetEditorView: View {
         openingGrain = preset.grain
         openingHalation = preset.halation
         adjustments = preset.adjustments
+        overlays = preset.overlays
     }
 
     /// Built-in preset: the Quality and Tone wheels, like mood's preset screen.
@@ -162,6 +172,8 @@ struct PresetEditorView: View {
                     continuousTile("Saturation", value: $adjustments.saturation, range: 0 ... 2, reset: LookAdjustments.neutral.saturation) { String(format: "%.2f×", $0) }
                     if presetID == ArriLook.presetID { crossoverTile }
                 }
+                overlaySection
+                    .padding(.top, 6)
                 cardSection
                     .padding(.top, 6)
                 Text("Built-in presets keep their LUT and colour grade. LUT strength and saturation are yours to set. To change anything else, make your own preset from this one.")
@@ -218,6 +230,7 @@ struct PresetEditorView: View {
         var adjustments: LookAdjustments
         var grain: Double
         var halation: Double
+        var overlays: [PresetOverlay]
         var base: ObjectIdentifier?
         var look: ObjectIdentifier?
     }
@@ -227,6 +240,7 @@ struct PresetEditorView: View {
             adjustments: adjustments,
             grain: grain,
             halation: halation,
+            overlays: overlays,
             base: base.map { ObjectIdentifier($0) },
             look: look.map { ObjectIdentifier($0) }
         )
@@ -351,7 +365,7 @@ struct PresetEditorView: View {
         guard let base, let look else { return }
         try? await Task.sleep(for: .milliseconds(12))
         guard !Task.isCancelled else { return }
-        let live = look.with(grain: grain, halation: halation, adjustments: adjustments)
+        let live = look.with(grain: grain, halation: halation, adjustments: adjustments).with(overlays: overlays)
         let image = await Task.detached(priority: .userInitiated) { PhotoPipeline.gradePreview(base.buffer, look: live) }.value
         guard !Task.isCancelled, let image else { return }
         graded = image
@@ -386,6 +400,7 @@ struct PresetEditorView: View {
                             grain = fresh.grain
                             halation = fresh.halation
                             adjustments = fresh.adjustments
+                            overlays = fresh.overlays
                         }
                     }
                 }
@@ -469,7 +484,93 @@ struct PresetEditorView: View {
                 steppedTile("Bloom", labels: ["Off", "Low", "Medium", "High"], values: [0, 1.0 / 3, 2.0 / 3, 1], value: $adjustments.bloom, reset: LookAdjustments.neutral.bloom)
                 continuousTile("Sharpness", value: $adjustments.sharpness, range: -0.5 ... 0.5, reset: LookAdjustments.neutral.sharpness) { Regulator.sharpness.format($0) }
             }
+            overlaySection
         }
+    }
+
+    /// Bundled textures over the picture: grain scans, light leaks, dust, masks. Up to three, in order.
+    private var overlaySection: some View {
+        section("Textures") {
+            VStack(spacing: 10) {
+                ForEach(overlays.indices, id: \.self) { index in
+                    overlayRow(index)
+                }
+                Button { showOverlayPicker = true } label: {
+                    Label(overlays.isEmpty ? "Add texture" : "Add another texture", systemImage: "plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.chrome.opacity(0.55)))
+                }
+                .buttonStyle(PressableStyle())
+                .tint(Theme.accent)
+                .disabled(overlays.count >= PresetOverlay.maxLayers)
+                Text("Grain, light leaks, dust and masks, applied after the LUT on the viewfinder, photos and video. Up to \(PresetOverlay.maxLayers).")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func overlayRow(_ index: Int) -> some View {
+        let layer = overlays[index]
+        let opacity = Binding<Double>(
+            get: { overlays.indices.contains(index) ? overlays[index].opacity : 0 },
+            set: { if overlays.indices.contains(index) { overlays[index].opacity = $0 } }
+        )
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                OverlayThumbnail(file: layer.file)
+                    .frame(width: 40, height: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(layer.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                    Text(PresetOverlay.category(of: layer.file)).font(.footnote).foregroundStyle(Theme.secondaryText)
+                }
+                Spacer()
+                Menu {
+                    ForEach(PresetOverlay.Blend.allCases, id: \.self) { blend in
+                        Button {
+                            overlays[index].blend = blend
+                            save()
+                        } label: {
+                            if blend == layer.blend { Label(blend.title, systemImage: "checkmark") } else { Text(blend.title) }
+                        }
+                    }
+                    Divider()
+                    Button {
+                        overlays[index].tile.toggle()
+                        save()
+                    } label: {
+                        Label(layer.tile ? "Stretch over the frame" : "Repeat as grain", systemImage: layer.tile ? "arrow.up.left.and.arrow.down.right" : "square.grid.3x3")
+                    }
+                } label: {
+                    Text(layer.blend.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Theme.chrome))
+                }
+                Button(role: .destructive) {
+                    overlays.remove(at: index)
+                    save()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.bordered)
+            }
+            HStack(spacing: 10) {
+                Text(String(format: "%.0f%%", layer.opacity * 100))
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .frame(width: 44, alignment: .leading)
+                ResettableSlider(value: opacity, range: 0 ... 1, reset: 1) { editing in
+                    if !editing { save() }
+                }
+                .frame(height: 30)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.chrome.opacity(0.55)))
     }
 
     private var tone: some View {
@@ -686,6 +787,7 @@ struct PresetEditorView: View {
         updated.grain = grain
         updated.halation = halation
         updated.adjustments = adjustments
+        updated.overlays = overlays
         guard updated != preset else { return }
         model.updatePreset(updated)
     }
@@ -745,5 +847,77 @@ struct ColourChartCard: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 16).fill(Color(white: 0.09)))
+    }
+}
+
+/// Every bundled texture by category, with a small preview; tapping one adds it.
+struct OverlayPickerSheet: View {
+    let onPick: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    private let columns = [GridItem(.adaptive(minimum: 96), spacing: 10)]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(OverlayTextures.catalog, id: \.category) { group in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(group.category.uppercased())
+                                .font(.system(size: 12, weight: .semibold))
+                                .tracking(0.6)
+                                .foregroundStyle(Theme.secondaryText)
+                            LazyVGrid(columns: columns, spacing: 10) {
+                                ForEach(group.files, id: \.self) { file in
+                                    Button {
+                                        onPick(file)
+                                        dismiss()
+                                    } label: {
+                                        VStack(spacing: 4) {
+                                            OverlayThumbnail(file: file)
+                                                .frame(height: 96)
+                                            Text(PresetOverlay(file: file).title)
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.white.opacity(0.8))
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    .buttonStyle(PressableStyle())
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle("Textures")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+/// A small preview of a bundled texture, decoded off the main thread.
+struct OverlayThumbnail: View {
+    let file: String
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            Color(white: 0.16)
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .task(id: file) {
+            guard let url = OverlayTextures.url(for: file) else { return }
+            image = await Task.detached(priority: .utility) {
+                UIImage(contentsOfFile: url.path)?.preparingThumbnail(of: CGSize(width: 200, height: 200))
+            }.value
+        }
     }
 }

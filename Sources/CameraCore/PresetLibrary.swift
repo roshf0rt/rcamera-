@@ -16,6 +16,9 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
     public var adjustments: LookAdjustments
     /// Left out of the camera's preset row and Camera Control; still listed in Settings.
     public var isHidden: Bool
+    /// Bundled textures over the graded picture (grain scans, light leaks, dust, masks), at most
+    /// `PresetOverlay.maxLayers`, in order.
+    public var overlays: [PresetOverlay]
 
     public init(
         id: String,
@@ -24,7 +27,8 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
         halation: Double = 0,
         accentIndex: Int,
         adjustments: LookAdjustments = .neutral,
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        overlays: [PresetOverlay] = []
     ) {
         self.id = id
         self.name = name
@@ -33,9 +37,10 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
         self.accentIndex = accentIndex
         self.adjustments = adjustments
         self.isHidden = isHidden
+        self.overlays = Array(overlays.prefix(PresetOverlay.maxLayers))
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, grain, halation, accentIndex, adjustments, isHidden }
+    enum CodingKeys: String, CodingKey { case id, name, grain, halation, accentIndex, adjustments, isHidden, overlays }
 
     /// Files written before halation existed still load.
     public init(from decoder: Decoder) throws {
@@ -47,6 +52,7 @@ public struct Preset: Identifiable, Equatable, Codable, Sendable {
         accentIndex = (try? c.decode(Int.self, forKey: .accentIndex)) ?? 0
         adjustments = (try? c.decode(LookAdjustments.self, forKey: .adjustments)) ?? .neutral
         isHidden = (try? c.decode(Bool.self, forKey: .isHidden)) ?? false
+        overlays = Array(((try? c.decode([PresetOverlay].self, forKey: .overlays)) ?? []).prefix(PresetOverlay.maxLayers))
     }
 }
 
@@ -77,7 +83,10 @@ public enum LUTSlot: String, CaseIterable, Codable, Sendable {
 }
 
 public enum PresetCatalog {
-    public static let defaultCount = 11
+    /// JaneSu, the Roshfort collection and ARRI: `preset-1` ... `preset-11`.
+    public static let classicCount = 11
+    /// The classic presets plus the film looks (`FilmCollection`).
+    public static var defaultCount: Int { classicCount + FilmCollection.entries.count }
     /// Presets the user adds start with this, so they can be told apart from the built-in ten.
     public static let customPrefix = "custom-"
     /// Bumped whenever default names or looks change, so older installs can adopt them.
@@ -90,7 +99,11 @@ public enum PresetCatalog {
     /// The order the camera shows the built-in presets in: JaneSu, Solstice, Velvet, Rise, Carbon,
     /// Clear, Mosaic, Silver, Sienna, Drift.
     /// ARRI comes second, next to JaneSu.
+    /// The film looks follow them (`visibleOrder`).
     public static let displayOrder = ["preset-1", ArriLook.presetID, "preset-9", "preset-10", "preset-6", "preset-2", "preset-3", "preset-5", "preset-8", "preset-7", "preset-4"]
+
+    /// Every built-in preset shown on the camera: the classic order, then the film looks.
+    public static var visibleOrder: [String] { displayOrder + FilmCollection.ids }
 
     /// JaneSu first, then the Roshfort collection, then ARRI (`ArriLook`).
     static let names = ["JaneSu", "Carbon", "Clear", "Drift", "Mosaic", "Rise", "Sienna", "Silver", "Solstice", "Velvet", "ARRI"]
@@ -106,7 +119,25 @@ public enum PresetCatalog {
         name == "Пресет \(index)" || name == "JaneSu 2"
     }
 
-    public static func defaults(count: Int = defaultCount) -> [Preset] {
+    public static func defaults() -> [Preset] {
+        classics() + film()
+    }
+
+    /// The film looks, with their starting grain, halation and overlays.
+    public static func film() -> [Preset] {
+        FilmCollection.entries.enumerated().map { index, entry in
+            Preset(
+                id: entry.id,
+                name: entry.name,
+                grain: FilmCollection.grain(for: entry),
+                halation: FilmCollection.halation,
+                accentIndex: index,
+                overlays: entry.overlays
+            )
+        }
+    }
+
+    static func classics(count: Int = classicCount) -> [Preset] {
         (1 ... count).map { index in
             let slot = (index - 1) % names.count
             return Preset(
@@ -181,11 +212,14 @@ public final class PresetLibrary {
                 }
                 try? JSONEncoder().encode(saved).write(to: presetsFile, options: .atomic)
             }
-            // Built-in presets added after this install was made (ARRI) join it, next to JaneSu.
+            // Built-in presets added after this install was made join it: classic ones (ARRI) next to
+            // JaneSu, film looks at the end, in catalogue order.
             let missing = defaults.filter { fresh in !saved.contains { $0.id == fresh.id } }
             if !missing.isEmpty {
+                let classic = missing.filter { !FilmCollection.isFilm($0.id) }
                 let after = (saved.firstIndex { $0.id == "preset-1" } ?? -1) + 1
-                saved.insert(contentsOf: missing, at: after)
+                saved.insert(contentsOf: classic, at: after)
+                saved.append(contentsOf: missing.filter { FilmCollection.isFilm($0.id) })
                 try? JSONEncoder().encode(saved).write(to: presetsFile, options: .atomic)
             }
             presets = saved
@@ -227,7 +261,7 @@ public final class PresetLibrary {
     /// Puts the built-in presets in `PresetCatalog.displayOrder` and hides every preset outside it.
     /// Hidden presets keep their files and can be shown again from Settings.
     private func adoptDisplayOrder() {
-        let order = PresetCatalog.displayOrder
+        let order = PresetCatalog.visibleOrder
         for index in presets.indices {
             presets[index].isHidden = !order.contains(presets[index].id)
         }
@@ -236,11 +270,12 @@ public final class PresetLibrary {
     }
 
     /// What may change on a built-in preset: the film speed's values (grain, grain size, sharpness,
-    /// fringing), the contrast curve's tone, dynamic range and the card's colours. Everything else stays as stored.
+    /// fringing), the contrast curve's tone, dynamic range, the overlays and the card's colours. Everything else stays as stored.
     public static func lockedEdit(stored: Preset, edited: Preset) -> Preset {
         var result = stored
         result.grain = edited.grain
         result.accentIndex = edited.accentIndex
+        result.overlays = Array(edited.overlays.prefix(PresetOverlay.maxLayers))
         var look = stored.adjustments
         let wanted = edited.adjustments
         look.grainSize = wanted.grainSize
@@ -272,6 +307,7 @@ public final class PresetLibrary {
         var updated = preset.isCustom ? preset : Self.lockedEdit(stored: presets[index], edited: preset)
         updated.grain = min(max(updated.grain, 0), 1)
         updated.halation = min(max(updated.halation, 0), 1)
+        updated.overlays = Array(updated.overlays.prefix(PresetOverlay.maxLayers))
         presets[index] = updated
         try save()
     }

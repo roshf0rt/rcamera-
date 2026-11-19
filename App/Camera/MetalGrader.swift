@@ -55,6 +55,69 @@ private struct GradeParams {
     var waveStepY: Int32 = 1
     var waveTurn: Int32 = 0
     var histBins: Int32 = 2
+    var ov0Blend: Int32 = 0
+    var ov0Tile: Int32 = 0
+    var ov0Rotate: Int32 = 0
+    var ov0Opacity: Float = 0
+    var ov0ScaleX: Float = 1
+    var ov0ScaleY: Float = 1
+    var ov0OffsetX: Float = 0
+    var ov0OffsetY: Float = 0
+    var ov1Blend: Int32 = 0
+    var ov1Tile: Int32 = 0
+    var ov1Rotate: Int32 = 0
+    var ov1Opacity: Float = 0
+    var ov1ScaleX: Float = 1
+    var ov1ScaleY: Float = 1
+    var ov1OffsetX: Float = 0
+    var ov1OffsetY: Float = 0
+    var ov2Blend: Int32 = 0
+    var ov2Tile: Int32 = 0
+    var ov2Rotate: Int32 = 0
+    var ov2Opacity: Float = 0
+    var ov2ScaleX: Float = 1
+    var ov2ScaleY: Float = 1
+    var ov2OffsetX: Float = 0
+    var ov2OffsetY: Float = 0
+}
+
+/// Where one overlay layer samples its texture, in the shader's terms (`applyOverlay` in Grade.metal).
+struct OverlayPlacement: Equatable {
+    var rotate = false
+    var scaleX: Float = 1
+    var scaleY: Float = 1
+    var offsetX: Float = 0
+    var offsetY: Float = 0
+
+    /// Stretched layers fill the frame without distortion (cropping the long side), turned a quarter when the
+    /// picture is portrait and the frame landscape or the other way round. Tiled layers keep one texel per
+    /// output pixel at 1080 across, like the grain, and start at `shift` (in texels).
+    static func make(textureWidth: Int, textureHeight: Int, width: Int, height: Int, tile: Bool, shift: (Float, Float) = (0, 0)) -> OverlayPlacement {
+        var placement = OverlayPlacement()
+        guard textureWidth > 0, textureHeight > 0, width > 0, height > 0 else { return placement }
+        if tile {
+            let texel = Float(max(1, Double(min(width, height)) / 1080))
+            placement.scaleX = 1 / (Float(textureWidth) * texel)
+            placement.scaleY = 1 / (Float(textureHeight) * texel)
+            placement.offsetX = shift.0 / Float(textureWidth)
+            placement.offsetY = shift.1 / Float(textureHeight)
+            return placement
+        }
+        var tw = Float(textureWidth), th = Float(textureHeight)
+        if textureWidth != textureHeight, (textureWidth > textureHeight) != (width > height) {
+            placement.rotate = true
+            swap(&tw, &th)
+        }
+        let frame = Float(width) / Float(height), picture = tw / th
+        if picture > frame {
+            placement.scaleX = frame / picture
+        } else {
+            placement.scaleY = picture / frame
+        }
+        placement.offsetX = 0.5 - 0.5 * placement.scaleX
+        placement.offsetY = 0.5 - 0.5 * placement.scaleY
+        return placement
+    }
 }
 
 /// The viewfinder's aids for one frame (`ExposureAssist`). Only the viewfinder stream asks for them.
@@ -253,6 +316,30 @@ final class MetalGrader: @unchecked Sendable {
         params.grainOffsetY = Float.random(in: 0 ..< grainSpan)
         let grain = grainTextures.randomElement() ?? emptyMask
 
+        var overlayTextures: [MTLTexture] = []
+        // Up to three bundled textures over the result; layers whose picture is missing are skipped.
+        for layer in look.overlays.prefix(PresetOverlay.maxLayers) {
+            guard layer.opacity > 0, let texture = OverlayTextures.texture(for: layer.file, device: device) else { continue }
+            let shift = (Float.random(in: 0 ..< Float(texture.width)), Float.random(in: 0 ..< Float(texture.height)))
+            let at = OverlayPlacement.make(textureWidth: texture.width, textureHeight: texture.height,
+                                           width: crop.width, height: crop.height, tile: layer.tile, shift: shift)
+            let slot = overlayTextures.count
+            overlayTextures.append(texture)
+            let blend = layer.blend.shaderCode, tile: Int32 = layer.tile ? 1 : 0, rotate: Int32 = at.rotate ? 1 : 0
+            let opacity = Float(layer.opacity)
+            switch slot {
+            case 0:
+                (params.ov0Blend, params.ov0Tile, params.ov0Rotate, params.ov0Opacity) = (blend, tile, rotate, opacity)
+                (params.ov0ScaleX, params.ov0ScaleY, params.ov0OffsetX, params.ov0OffsetY) = (at.scaleX, at.scaleY, at.offsetX, at.offsetY)
+            case 1:
+                (params.ov1Blend, params.ov1Tile, params.ov1Rotate, params.ov1Opacity) = (blend, tile, rotate, opacity)
+                (params.ov1ScaleX, params.ov1ScaleY, params.ov1OffsetX, params.ov1OffsetY) = (at.scaleX, at.scaleY, at.offsetX, at.offsetY)
+            default:
+                (params.ov2Blend, params.ov2Tile, params.ov2Rotate, params.ov2Opacity) = (blend, tile, rotate, opacity)
+                (params.ov2ScaleX, params.ov2ScaleY, params.ov2OffsetX, params.ov2OffsetY) = (at.scaleX, at.scaleY, at.offsetX, at.offsetY)
+            }
+        }
+
         params.halation = FilmMath.halationStrength(look.halation)
         // Bloom reuses the halation mask, so it needs the mask even when halation is off.
         let needsGlow = params.halation > 0 || params.bloom > 0
@@ -321,6 +408,9 @@ final class MetalGrader: @unchecked Sendable {
         encoder.setTexture(grain, index: 4)
         encoder.setTexture(destination, index: 5)
         encoder.setTexture(previousLUT ?? emptyLUT, index: 6)
+        for slot in 0 ..< PresetOverlay.maxLayers {
+            encoder.setTexture(slot < overlayTextures.count ? overlayTextures[slot] : emptyMask, index: 7 + slot)
+        }
         encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
         encoder.setBuffer(wave, offset: 0, index: 1)
         dispatch(encoder, state: gradeState, width: crop.width, height: crop.height)

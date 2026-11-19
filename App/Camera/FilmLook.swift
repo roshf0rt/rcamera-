@@ -9,6 +9,8 @@ final class FilmLook: @unchecked Sendable {
     let grain: Double
     let halation: Double
     let adjustments: LookAdjustments
+    /// Bundled textures blended over the result (`OverlayTextures`).
+    let overlays: [PresetOverlay]
 
     /// Shared between a look and its toggled variants, so the LUT is uploaded once.
     private let upload: Upload
@@ -18,19 +20,21 @@ final class FilmLook: @unchecked Sendable {
         var texture: MTLTexture?
     }
 
-    init(lut: LUT3D?, grain: Double, halation: Double = 0, adjustments: LookAdjustments = .neutral) {
+    init(lut: LUT3D?, grain: Double, halation: Double = 0, adjustments: LookAdjustments = .neutral, overlays: [PresetOverlay] = []) {
         self.lut = lut
         self.grain = grain
         self.halation = halation
         self.adjustments = adjustments
+        self.overlays = overlays
         upload = Upload()
     }
 
-    private init(lut: LUT3D?, grain: Double, halation: Double, adjustments: LookAdjustments, upload: Upload) {
+    private init(lut: LUT3D?, grain: Double, halation: Double, adjustments: LookAdjustments, overlays: [PresetOverlay], upload: Upload) {
         self.lut = lut
         self.grain = grain
         self.halation = halation
         self.adjustments = adjustments
+        self.overlays = overlays
         self.upload = upload
     }
 
@@ -44,19 +48,24 @@ final class FilmLook: @unchecked Sendable {
     /// The same look with grain or halation switched off by the camera-screen toggles.
     func with(grain grainOn: Bool, halation halationOn: Bool) -> FilmLook {
         if grainOn, halationOn { return self }
-        return FilmLook(lut: lut, grain: grainOn ? grain : 0, halation: halationOn ? halation : 0, adjustments: adjustments, upload: upload)
+        return FilmLook(lut: lut, grain: grainOn ? grain : 0, halation: halationOn ? halation : 0, adjustments: adjustments, overlays: overlays, upload: upload)
     }
 
     /// The same look with other regulator values. The LUT upload is shared, so this costs nothing on the GPU.
     func with(adjustments change: (inout LookAdjustments) -> Void) -> FilmLook {
         var next = adjustments
         change(&next)
-        return FilmLook(lut: lut, grain: grain, halation: halation, adjustments: next, upload: upload)
+        return FilmLook(lut: lut, grain: grain, halation: halation, adjustments: next, overlays: overlays, upload: upload)
     }
 
     /// The same LUT with other amounts and regulators, for live editing. The LUT upload is shared.
     func with(grain: Double, halation: Double, adjustments: LookAdjustments) -> FilmLook {
-        FilmLook(lut: lut, grain: grain, halation: halation, adjustments: adjustments, upload: upload)
+        FilmLook(lut: lut, grain: grain, halation: halation, adjustments: adjustments, overlays: overlays, upload: upload)
+    }
+
+    /// The same look with other overlays, for live editing. The LUT upload is shared.
+    func with(overlays: [PresetOverlay]) -> FilmLook {
+        FilmLook(lut: lut, grain: grain, halation: halation, adjustments: adjustments, overlays: overlays, upload: upload)
     }
 
     /// The LUT as a 3D half-float texture, red along x. Created on first use.
