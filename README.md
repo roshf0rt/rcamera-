@@ -81,7 +81,7 @@ CI собирает неподписанный IPA при каждом push.
 - Glost, Kodiac, Lectar и Sanda имеют обе версии и работают в любом режиме. Kodiac Rec.709 взят из файла `Kodiac79` (пара по бренду).
 - Пресеты только с Apple Log (Anji, Chroma Dark, Fade, False Colour, Film 03, Natural, Pillow, Tyrel, Verva) подписаны «Apple Log only». В обычном видео и на фото без LUT Rec.709 они не применяют цвет.
 - Base SDR и Base HDR — технические преобразования из архива, включены как пресеты.
-- **9 пресетов IvakinColor** (Cabinet, Film 2, Baby Day, Baby Night, Ivakin, Osen, Super 8, Vision 3, Skin) идут сразу после них. Файл `_REC709` — видео-LUT, `_LOG` — Apple Log. Skin есть только в Rec.709: он не трогает нейтральные серые и правит тон кожи. Кубы 65³ (Osen Rec.709 и Skin) переведены в бинарный `.lut` того же размера, как делает `luttool convert`.
+- **9 пресетов IvakinColor** (Cabinet, Film 2, Baby Day, Baby Night, Ivakin, Osen, Super 8, Vision 3, Skin) идут сразу после них. Файл `_REC709` — видео-LUT, `_LOG` — Apple Log первой версии; камера пишет именно его (`AVCaptureColorSpace.appleLog`), Apple Log 2 не используется. Skin есть только в Rec.709: он не трогает нейтральные серые и правит тон кожи. Кубы 65³ (Osen Rec.709 и Skin) переведены в бинарный `.lut` того же размера, как делает `luttool convert`.
 
 ## Плёночные пресеты и текстуры
 
