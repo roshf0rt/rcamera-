@@ -52,5 +52,15 @@ public enum VideoCollection {
         Entry(key: "wallis", name: "Wallis", hasVideo: true, hasAppleLog: false),
         Entry(key: "base-sdr", name: "Base SDR", hasVideo: true, hasAppleLog: false),
         Entry(key: "base-hdr", name: "Base HDR", hasVideo: true, hasAppleLog: false),
+        // IvakinColor pack: the REC709 file is the video LUT, the LOG file the Apple Log one.
+        Entry(key: "ivakin-cabinet", name: "Cabinet", hasVideo: true, hasAppleLog: true),
+        Entry(key: "ivakin-film2", name: "Film 2", hasVideo: true, hasAppleLog: true),
+        Entry(key: "ivakin-baby-day", name: "Baby Day", hasVideo: true, hasAppleLog: true),
+        Entry(key: "ivakin-baby-night", name: "Baby Night", hasVideo: true, hasAppleLog: true),
+        Entry(key: "ivakin-lut", name: "Ivakin", hasVideo: true, hasAppleLog: true),
+        Entry(key: "ivakin-osen", name: "Osen", hasVideo: true, hasAppleLog: true),
+        Entry(key: "ivakin-sup8", name: "Super 8", hasVideo: true, hasAppleLog: true),
+        Entry(key: "ivakin-vision3", name: "Vision 3", hasVideo: true, hasAppleLog: true),
+        Entry(key: "ivakin-skin", name: "Skin", hasVideo: true, hasAppleLog: false),
     ]
 }

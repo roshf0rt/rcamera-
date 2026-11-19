@@ -20,7 +20,20 @@ final class VideoCollectionTests: XCTestCase {
         for entry in VideoCollection.entries {
             XCTAssertTrue(entry.hasVideo || entry.hasAppleLog, entry.id)
         }
-        XCTAssertEqual(VideoCollection.entries.filter { $0.hasVideo && $0.hasAppleLog }.map(\.key), ["glost", "kodiac", "lectar", "sanda"])
+        let pairs = Set(VideoCollection.entries.filter { $0.hasVideo && $0.hasAppleLog }.map(\.key))
+        XCTAssertTrue(pairs.isSuperset(of: ["glost", "kodiac", "lectar", "sanda", "ivakin-cabinet", "ivakin-vision3"]))
+        XCTAssertEqual(VideoCollection.entry(id: "video-ivakin-skin")?.subtitle, "Video • LUT")
+    }
+
+    func testNewVideoLooksJoinAfterTheOnesAlreadyInstalled() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // An install from before the IvakinColor looks: classics, the first video looks, film looks.
+        let older = PresetCatalog.defaults().filter { !$0.id.hasPrefix("video-ivakin-") }
+        try JSONEncoder().encode(older).write(to: directory.appendingPathComponent("presets.json"))
+        try "5".write(to: directory.appendingPathComponent("catalog-revision"), atomically: true, encoding: .utf8)
+        let library = try PresetLibrary(storageDirectory: directory)
+        XCTAssertEqual(library.presets.map(\.id), PresetCatalog.defaults().map(\.id))
     }
 
     func testBundledVideoLUTsArePresentAndParse() throws {

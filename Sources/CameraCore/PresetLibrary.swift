@@ -228,9 +228,10 @@ public final class PresetLibrary {
                 let film = missing.filter { FilmCollection.isFilm($0.id) }
                 let after = (saved.firstIndex { $0.id == "preset-1" } ?? -1) + 1
                 saved.insert(contentsOf: classic, at: after)
+                // After the last classic or video preset already there, so new video looks follow older ones.
                 let classicIDs = Set(PresetCatalog.classics().map(\.id))
-                let afterClassic = (saved.lastIndex { classicIDs.contains($0.id) } ?? -1) + 1
-                saved.insert(contentsOf: video, at: afterClassic)
+                let afterVideo = (saved.lastIndex { classicIDs.contains($0.id) || VideoCollection.isVideo($0.id) } ?? -1) + 1
+                saved.insert(contentsOf: video, at: afterVideo)
                 saved.append(contentsOf: film)
                 try? JSONEncoder().encode(saved).write(to: presetsFile, options: .atomic)
             }
