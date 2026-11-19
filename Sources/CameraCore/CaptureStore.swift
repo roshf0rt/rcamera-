@@ -43,6 +43,8 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     public var orientation: DeviceOrientation
     /// Recorded as flat Apple Log: the file is ungraded and is graded into `processedVideo`.
     public var logVideo: Bool
+    /// The flat file is Apple Log 2 rather than Apple Log, so grading converts it first (`AppleLog.forLog2`).
+    public var logVersion2: Bool
     /// Shadows moved in Redevelop, -1 (down) to 1 (up), 0 for none; see `ShadowLift`.
     public var shadowLift: Double
     /// Grain and halation set finely in Redevelop. Nil: `grainLevel` and `halationLevel` decide.
@@ -71,6 +73,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         orientation: DeviceOrientation = .portrait,
         shadowLift: Double = 0,
         logVideo: Bool = false,
+        logVersion2: Bool = false,
         texture: PhotoTexture? = nil,
         crossover: Double? = nil
     ) {
@@ -91,6 +94,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         self.orientation = orientation
         self.shadowLift = shadowLift
         self.logVideo = logVideo
+        self.logVersion2 = logVersion2
         self.texture = texture
         self.crossover = crossover
     }
@@ -98,7 +102,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, date, kind, presetID, evPushPull, aspect, hasRAW, placeName, isFavorite, rawExposureOffset, mirrored, frame
         case grainLevel, halationLevel, grainEnabled, halationEnabled, orientation, shadowLift, logVideo
-        case texture, crossover
+        case texture, crossover, logVersion2
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -120,6 +124,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         try c.encode(orientation, forKey: .orientation)
         try c.encode(shadowLift, forKey: .shadowLift)
         try c.encode(logVideo, forKey: .logVideo)
+        try c.encode(logVersion2, forKey: .logVersion2)
         try c.encodeIfPresent(texture, forKey: .texture)
         try c.encodeIfPresent(crossover, forKey: .crossover)
     }
@@ -147,6 +152,7 @@ public struct CaptureRecord: Identifiable, Codable, Equatable, Sendable {
         orientation = (try? c.decode(DeviceOrientation.self, forKey: .orientation)) ?? .portrait
         shadowLift = (try? c.decode(Double.self, forKey: .shadowLift)) ?? 0
         logVideo = (try? c.decode(Bool.self, forKey: .logVideo)) ?? false
+        logVersion2 = (try? c.decode(Bool.self, forKey: .logVersion2)) ?? false
         texture = try? c.decodeIfPresent(PhotoTexture.self, forKey: .texture)
         crossover = try? c.decodeIfPresent(Double.self, forKey: .crossover)
     }

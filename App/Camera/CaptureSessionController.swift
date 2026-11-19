@@ -20,6 +20,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var format: VideoFormat
         var stabilization: VideoStabilization
         var appleLog: Bool
+        /// Apple Log 2 instead of Apple Log where the format has it (iOS 26, iPhone 17 Pro).
+        var appleLog2: Bool = false
         var digitalZoom: Double
         var exposureBias: Double
         var wantsRAW: Bool
@@ -37,6 +39,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var focalLengths: [LensID: Double]
         var rawAvailable: Bool
         var appleLogActive: Bool
+        /// The Log that runs is Apple Log 2.
+        var appleLog2Active = false
         /// The session was rebuilt, so the viewfinder paused for a moment.
         var didReconfigure: Bool
         /// Frame rates the camera runs for each video width (1920, 3840).
@@ -81,6 +85,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var currentHighFrameRate = false
     private var currentFormatIndex: Int?
     private var currentAppleLog = false
+    /// What the last configuration asked for, and whether Apple Log 2 is what the device runs.
+    private var currentAppleLog2Wanted = false
+    private var activeAppleLog2 = false
     /// Cameras whose hand-picked 4:3 format gave no RAW. Their photos use the `.photo` preset instead,
     /// which always offers RAW where the camera has it, at the cost of a rebuild when switching to video.
     private var photoPresetPositions: Set<AVCaptureDevice.Position> = []
@@ -250,6 +257,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         let needsFormat = needsInput
             || formatPlan.index != currentFormatIndex
             || formatPlan.appleLog != currentAppleLog
+            || (formatPlan.appleLog && config.appleLog2 != currentAppleLog2Wanted)
             || (formatPlan.index == nil && session.sessionPreset != formatPlan.fallbackPreset)
         let structural = needsFormat || !outputsInstalled
         let wasRunning = session.isRunning
@@ -267,13 +275,15 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 currentHighFrameRate = highFrameRate
             }
             if let index = formatPlan.index, index < device.formats.count {
-                setFormat(device.formats[index], appleLog: formatPlan.appleLog, on: device)
+                setFormat(device.formats[index], appleLog: formatPlan.appleLog, log2: config.appleLog2, on: device)
             } else if session.canSetSessionPreset(formatPlan.fallbackPreset) {
                 session.sessionPreset = formatPlan.fallbackPreset
                 setColorSpace(appleLog: false, on: device)
+                activeAppleLog2 = false
             }
             currentFormatIndex = formatPlan.index
             currentAppleLog = formatPlan.appleLog
+            currentAppleLog2Wanted = config.appleLog2
             configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW, lean: leanPhotoOutput)
             if #available(iOS 18.0, *) { installControls(device: device) }
             session.commitConfiguration()
@@ -323,6 +333,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             focalLengths: focalLengths(),
             rawAvailable: !photoOutput.availableRawPhotoPixelFormatTypes.isEmpty,
             appleLogActive: formatPlan.appleLog,
+            appleLog2Active: formatPlan.appleLog && activeAppleLog2,
             didReconfigure: structural && wasRunning,
             frameRates: [1920: FormatChooser.frameRates(described, width: 1920), 3840: FormatChooser.frameRates(described, width: 3840)],
             deviceID: device.uniqueID,
@@ -789,12 +800,12 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    private func setFormat(_ format: AVCaptureDevice.Format, appleLog: Bool, on device: AVCaptureDevice) {
+    private func setFormat(_ format: AVCaptureDevice.Format, appleLog: Bool, log2: Bool = false, on device: AVCaptureDevice) {
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
             if device.activeFormat != format { device.activeFormat = format }
-            applyColorSpace(appleLog: appleLog, on: device)
+            activeAppleLog2 = applyColorSpace(appleLog: appleLog, log2: log2, on: device)
         } catch {
             // The device keeps its previous format.
         }
@@ -806,11 +817,32 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         device.unlockForConfiguration()
     }
 
-    /// Call with the device locked.
-    private func applyColorSpace(appleLog: Bool, on device: AVCaptureDevice) {
+    /// Call with the device locked. Returns true when Apple Log 2 is what was set.
+    @discardableResult
+    private func applyColorSpace(appleLog: Bool, log2: Bool = false, on device: AVCaptureDevice) -> Bool {
         let supported = device.activeFormat.supportedColorSpaces
-        let wanted: AVCaptureColorSpace = appleLog && supported.contains(.appleLog) ? .appleLog : .sRGB
+        var wanted: AVCaptureColorSpace = appleLog && supported.contains(.appleLog) ? .appleLog : .sRGB
+        var usesLog2 = false
+        // `.appleLog2` exists from the iOS 26 SDK (Xcode 26) on; older toolchains build without it.
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *), appleLog, log2, supported.contains(.appleLog2) {
+            wanted = .appleLog2
+            usesLog2 = true
+        }
+        #endif
         if supported.contains(wanted), device.activeColorSpace != wanted { device.activeColorSpace = wanted }
+        return usesLog2
+    }
+
+    /// Whether this iPhone has Apple Log 2 at all, for the setting.
+    static var supportsAppleLog2: Bool {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            let back = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+            return back?.formats.contains { $0.supportedColorSpaces.contains(.appleLog2) } ?? false
+        }
+        #endif
+        return false
     }
 
     private func setPixelFormat(tenBit: Bool) {

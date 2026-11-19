@@ -53,7 +53,7 @@ final class AppModel {
         captures = captureStore.records
 
         engine.onPhoto = { [weak self] result in self?.ingest(photo: result) }
-        engine.onVideo = { [weak self] url, keepsLog in self?.ingest(videoAt: url, keepsLog: keepsLog) }
+        engine.onVideo = { [weak self] url, keepsLog, log2 in self?.ingest(videoAt: url, keepsLog: keepsLog, log2: log2) }
         engine.onModeChanged = { [weak self] mode in self?.updateSettings { $0.lastCaptureMode = mode } }
         engine.onFormatFallback = { [weak self] format in
             self?.updateSettings {
@@ -211,6 +211,7 @@ final class AppModel {
         guard updated != settings else { return }
         let togglesChanged = updated.grainLevel != settings.grainLevel
             || updated.halationLevel != settings.halationLevel
+            || updated.appleLog2 != settings.appleLog2
         settings = updated
         try? settingsStore.save(updated)
         engine.update(settings: updated)
@@ -368,6 +369,22 @@ final class AppModel {
 
     nonisolated static let neutralAppleLog = AppleLog.neutralRec709LUT()
 
+    /// The preset's Apple Log look for Apple Log 2 frames: the exact Log 2 → Log conversion baked in front of its
+    /// Apple Log LUT (or the neutral chain), so Log LUTs work unchanged.
+    func appleLog2Look(for preset: Preset) async -> FilmLook {
+        let key = "\(preset.id)|appleLog2|\(preset.adjustments.crossover)"
+        if let cached = lookCache[key] { return cached }
+        let base = await baseLook(for: preset, slot: .appleLog)
+        let lut = base.lut ?? Self.neutralAppleLog
+        let converted = await Task.detached(priority: .userInitiated) { AppleLog.forLog2(lut) }.value
+        if let cached = lookCache[key] { return cached }
+        let look = FilmLook(lut: converted, grain: base.grain, halation: base.halation, adjustments: base.adjustments, overlays: base.overlays)
+        // ARRI makes a new mix on every Crossover step; keep only the newest.
+        if preset.id == ArriLook.presetID { lookCache = lookCache.filter { !$0.key.hasPrefix("\(preset.id)|appleLog2|") } }
+        lookCache[key] = look
+        return look
+    }
+
     /// Loads every preset's photo look in the background, so the first switch to each is instant too.
     func prepareLooks() async {
         for preset in presets {
@@ -403,7 +420,12 @@ final class AppModel {
     /// The preset's look with the camera-screen grain and halation toggles applied.
     func cameraLook(for preset: Preset, slot: LUTSlot = .photo) async -> FilmLook {
         let base = await baseLook(for: preset, slot: slot)
-        return base.with(
+        return atCameraLevels(base)
+    }
+
+    /// The camera-screen grain and halation levels on a look.
+    private func atCameraLevels(_ base: FilmLook) -> FilmLook {
+        base.with(
             grain: min(1, base.grain * settings.grainLevel.multiplier),
             halation: base.halation * settings.halationLevel.multiplier,
             adjustments: base.adjustments
@@ -418,8 +440,9 @@ final class AppModel {
             let photo = await cameraLook(for: preset, slot: .photo)
             let video = await cameraLook(for: preset, slot: .video)
             let appleLog = await cameraLook(for: preset, slot: .appleLog)
+            let appleLog2 = settings.appleLog2 ? atCameraLevels(await appleLog2Look(for: preset)) : nil
             guard preset.id == selectedPreset.id else { return }
-            engine.setLooks(CameraEngine.Looks(photo: photo, video: video, appleLog: appleLog))
+            engine.setLooks(CameraEngine.Looks(photo: photo, video: video, appleLog: appleLog, appleLog2: appleLog2))
         }
     }
 
@@ -547,7 +570,7 @@ final class AppModel {
         }
     }
 
-    private func ingest(videoAt tempURL: URL, keepsLog: Bool) {
+    private func ingest(videoAt tempURL: URL, keepsLog: Bool, log2: Bool = false) {
         let preset = selectedPreset
         let saveLocation = settings.savesLocation
         let grain = settings.grainLevel
@@ -563,6 +586,7 @@ final class AppModel {
                 grainLevel: grain,
                 halationLevel: halation,
                 logVideo: keepsLog,
+                logVersion2: keepsLog && log2,
                 crossover: preset.id == ArriLook.presetID ? preset.adjustments.crossover : nil
             )
             do {
@@ -593,10 +617,10 @@ final class AppModel {
     }
 
     /// The look a Log video is graded with: the preset's Apple Log look, with grain and halation at the given levels.
-    func videoDevelopLook(presetID: String, grain: GrainLevel, halation: EffectLevel, crossover: Double? = nil) async -> FilmLook? {
+    func videoDevelopLook(presetID: String, grain: GrainLevel, halation: EffectLevel, crossover: Double? = nil, log2: Bool = false) async -> FilmLook? {
         guard var preset = preset(id: presetID) else { return nil }
         if presetID == ArriLook.presetID, let crossover { preset.adjustments.crossover = crossover }
-        let base = await baseLook(for: preset, slot: .appleLog)
+        let base = log2 ? await appleLog2Look(for: preset) : await baseLook(for: preset, slot: .appleLog)
         return base.with(
             grain: min(1, base.grain * grain.multiplier),
             halation: base.halation * halation.multiplier,
@@ -609,7 +633,7 @@ final class AppModel {
     @discardableResult
     func redevelopVideo(_ record: CaptureRecord, presetID: String, grain: GrainLevel, halation: EffectLevel, crossover: Double? = nil) async -> Bool {
         let crossover = presetID == ArriLook.presetID ? crossover : nil
-        guard let look = await videoDevelopLook(presetID: presetID, grain: grain, halation: halation, crossover: crossover) else { return false }
+        guard let look = await videoDevelopLook(presetID: presetID, grain: grain, halation: halation, crossover: crossover, log2: record.logVersion2) else { return false }
         let id = record.id
         let source = captureStore.url(.video, for: id)
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("redevelop-\(UUID().uuidString).mov")

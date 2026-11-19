@@ -627,7 +627,7 @@ private struct CapturePage: View {
             // A quick run of changes only builds the last one.
             try? await Task.sleep(for: .milliseconds(200))
             if Task.isCancelled { return }
-            if let look = await model.videoDevelopLook(presetID: grade.presetID, grain: grade.grain, halation: grade.halation, crossover: grade.crossover) {
+            if let look = await model.videoDevelopLook(presetID: grade.presetID, grain: grade.grain, halation: grade.halation, crossover: grade.crossover, log2: record.logVersion2) {
                 graded = try? await LogGradePreview.playerItem(url: model.url(.video, for: record), look: look)
             }
         }

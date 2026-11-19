@@ -81,8 +81,8 @@ final class ArriLookTests: XCTestCase {
     }
 
     func testSofteningLiftsBlacksEasesContrastAndKeepsGreyAndWhite() {
-        XCTAssertGreaterThan(ArriLook.soften(0), 0.06)
-        XCTAssertLessThan(ArriLook.soften(0), 0.12)
+        XCTAssertGreaterThan(ArriLook.soften(0), 0.04)
+        XCTAssertLessThan(ArriLook.soften(0), 0.065)
         XCTAssertEqual(ArriLook.soften(ArriLook.contrastPivot), ArriLook.contrastPivot, accuracy: 0.01)
         XCTAssertEqual(ArriLook.soften(1), 1, accuracy: 0.0001)
         XCTAssertEqual(ArriLook.soften(0.85), 0.85, accuracy: 0.03, "the highlights are left alone")

@@ -18,6 +18,8 @@ final class CameraEngine {
         var photo = FilmLook.identity
         var video = FilmLook.identity
         var appleLog: FilmLook?
+        /// The same look for Apple Log 2 frames: an exact Log 2 → Log conversion, then `appleLog`.
+        var appleLog2: FilmLook?
     }
 
     struct PhotoResult {
@@ -56,6 +58,8 @@ final class CameraEngine {
     /// The viewfinder's histogram while it is on.
     private(set) var histogram: Histogram?
     private(set) var appleLogActive = false
+    /// The Log that runs is Apple Log 2 (`AppSettings.appleLog2` on a camera that has it).
+    private(set) var appleLog2Active = false
     /// Shown over the viewfinder while the session rebuilds, until fresh frames arrive (Lampa's "unblur").
     private(set) var showsSwitchBlur = false
     var message: String?
@@ -72,9 +76,10 @@ final class CameraEngine {
 
     @ObservationIgnored let controller = CaptureSessionController()
     @ObservationIgnored var onPhoto: ((PhotoResult) -> Void)?
-    /// The finished video, and whether it was recorded as flat Apple Log.
-    @ObservationIgnored var onVideo: ((URL, Bool) -> Void)?
+    /// The finished video, whether it was recorded as flat Apple Log, and whether that Log is Apple Log 2.
+    @ObservationIgnored var onVideo: ((URL, Bool, Bool) -> Void)?
     @ObservationIgnored private var recordingKeepsLog = false
+    @ObservationIgnored private var recordingIsLog2 = false
     @ObservationIgnored var onModeChanged: ((CaptureMode) -> Void)?
     /// The video format had to step down to fit the camera's hardware budget.
     @ObservationIgnored var onFormatFallback: ((VideoFormat) -> Void)?
@@ -137,7 +142,7 @@ final class CameraEngine {
         } else if new.autoMotion != old.autoMotion, mode == .video, lens != .front, !isRecording {
             // AutoMotion needs one camera; the combined one returns when it is off.
             Task { await applyConfig() }
-        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.photoResolution != old.photoResolution || new.separateCameras != old.separateCameras || new.autoMacro != old.autoMacro), !isRecording {
+        } else if (new.videoStabilization != old.videoStabilization || new.capturesRAW != old.capturesRAW || new.rawFormat != old.rawFormat || new.photoResolution != old.photoResolution || new.separateCameras != old.separateCameras || new.autoMacro != old.autoMacro || new.appleLog2 != old.appleLog2), !isRecording {
             Task { await applyConfig() }
         } else {
             reapplyIfAppleLogChanged()
@@ -407,6 +412,7 @@ final class CameraEngine {
             format: machine.configuration.format,
             stabilization: settings.videoStabilization,
             appleLog: appleLogRequested,
+            appleLog2: settings.appleLog2,
             digitalZoom: digitalZoom,
             exposureBias: evBias,
             wantsRAW: settings.capturesRAW,
@@ -421,6 +427,7 @@ final class CameraEngine {
         focalLengths = info.focalLengths
         rawAvailable = info.rawAvailable
         appleLogActive = info.appleLogActive
+        appleLog2Active = info.appleLog2Active
         if !info.frameRates.isEmpty { frameRates = info.frameRates }
         settleRotation(deviceID: info.deviceID)
         syncExposure()
@@ -505,16 +512,17 @@ final class CameraEngine {
     /// Apple Log as BGRA, every video frame is log while it is active.
     private func updateHub() {
         let look: FilmLook
+        let logLook = appleLog2Active ? (looks.appleLog2 ?? looks.appleLog) : looks.appleLog
         if mode == .photo {
             look = looks.photo
-        } else if appleLogActive, let appleLog = looks.appleLog {
-            look = appleLog
+        } else if appleLogActive, let logLook {
+            look = logLook
         } else {
             look = looks.video
         }
         controller.hub.configure(
             look: look,
-            logLook: mode == .video ? looks.appleLog : nil,
+            logLook: mode == .video ? logLook : nil,
             aspect: mode == .photo ? settings.aspect : .ratio16x9,
             mirror: mirrorsOutput
         )
@@ -576,6 +584,7 @@ final class CameraEngine {
         controller.setRecordingLocks(exposure: settings.lockExposureWhileRecording, whiteBalance: settings.lockWhiteBalanceWhileRecording)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rec-\(UUID().uuidString).mov")
         recordingKeepsLog = appleLogActive && !settings.instantGrade
+        recordingIsLog2 = recordingKeepsLog && appleLog2Active
         controller.startRecording(url: url, fps: machine.configuration.format.fps, quarterTurns: deviceOrientation.quarterTurns, keepsLog: recordingKeepsLog) { [weak self] in
             Task { @MainActor in self?.recordingDidStart() }
         } onFail: { [weak self] error in
@@ -610,7 +619,7 @@ final class CameraEngine {
                 self.recordingStart = nil
                 self.send(.videoRecordingDidFinish)
                 if let url {
-                    self.onVideo?(url, self.recordingKeepsLog)
+                    self.onVideo?(url, self.recordingKeepsLog, self.recordingIsLog2)
                 } else if let error {
                     self.message = error.localizedDescription
                 }

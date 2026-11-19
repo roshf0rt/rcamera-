@@ -26,13 +26,14 @@ public enum ArriLook {
     // MARK: Softening
 
     /// The print pair is a deep look: its blacks sit at zero and the shadows fall away quickly, which on a phone
-    /// photo reads as crushed. The output is eased: the blacks come up a little, the mid contrast is taken down by a
-    /// tenth around middle grey, and the highlights are left alone, so white stays white.
-    public static let shadowLift: Float = 0.035
-    public static let contrastScale: Float = 0.9
+    /// photo reads as crushed. The output is eased: the blacks come up a little, the mid contrast is taken down by
+    /// 7% around middle grey, and the highlights are left alone, so white stays white. (Earlier 0.035 and 0.9 lifted
+    /// black to 0.08, which looked washed out; now it sits near 0.05.)
+    public static let shadowLift: Float = 0.02
+    public static let contrastScale: Float = 0.93
     public static let contrastPivot: Float = 0.46
 
-    /// One output channel of the pair, eased. Rising, 0 comes out near 0.08, middle grey stays put, 1 stays 1.
+    /// One output channel of the pair, eased. Rising, 0 comes out near 0.05, middle grey stays put, 1 stays 1.
     public static func soften(_ x: Float) -> Float {
         let inverse = 1 - min(max(x, 0), 1)
         let lifted = x + shadowLift * inverse * inverse * inverse

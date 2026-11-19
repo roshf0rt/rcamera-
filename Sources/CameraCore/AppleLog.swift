@@ -59,6 +59,50 @@ public enum AppleLog {
         return (out[0], out[1], out[2])
     }
 
+    // MARK: Apple Log 2
+
+    /// Linear Apple Wide Gamut (Apple Log 2's primaries) to linear Rec.2020 (Apple Log's), D65 on both sides.
+    /// From the primaries in Apple's "Apple Log 2 Profile": R 0.725/0.301, G 0.221/0.814, B 0.068/−0.076.
+    /// Through ACES the same primaries give OCIO's published Apple Log 2 matrix, which checks them.
+    static let appleWideGamutTo2020: [[Float]] = [
+        [1.0281009, 0.0989788, -0.1270798],
+        [0.0025203, 1.1708496, -0.1733700],
+        [-0.0220876, -0.0640504, 1.0861380],
+    ]
+
+    /// An Apple Log 2 pixel as the Apple Log pixel of the same light. Apple Log 2 keeps the Apple Log curve and
+    /// only widens the primaries, so this decodes, changes primaries and encodes again. Colours outside Rec.2020
+    /// are clipped to its edge.
+    public static func log2ToLog1(r: Float, g: Float, b: Float) -> (Float, Float, Float) {
+        let linear = [decode(r), decode(g), decode(b)]
+        let m = appleWideGamutTo2020
+        let out = (0 ..< 3).map { row in
+            min(max(encode(m[row][0] * linear[0] + m[row][1] * linear[1] + m[row][2] * linear[2]), 0), 1)
+        }
+        return (out[0], out[1], out[2])
+    }
+
+    public static func log2ToLog1LUT(size: Int = 33) -> LUT3D {
+        var values: [Float] = []
+        values.reserveCapacity(size * size * size * 4)
+        let scale = Float(size - 1)
+        for b in 0 ..< size {
+            for g in 0 ..< size {
+                for r in 0 ..< size {
+                    let out = log2ToLog1(r: Float(r) / scale, g: Float(g) / scale, b: Float(b) / scale)
+                    values += [out.0, out.1, out.2, 1]
+                }
+            }
+        }
+        return try! LUT3D(size: size, rgba: values)
+    }
+
+    /// An Apple Log LUT made to take Apple Log 2: the conversion first, then `lut`, baked at `lut`'s size.
+    /// Every Apple Log LUT, and the neutral chain of presets without one, works in Apple Log 2 this way.
+    public static func forLog2(_ lut: LUT3D) -> LUT3D {
+        log2ToLog1LUT(size: max(lut.size, 33)).followed(by: lut)
+    }
+
     public static func neutralRec709LUT(size: Int = 33) -> LUT3D {
         var values: [Float] = []
         values.reserveCapacity(size * size * size * 4)

@@ -16,6 +16,13 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Use the newest Xcode 26
+        # Apple Log 2 (`AVCaptureColorSpace.appleLog2`) needs the iOS 26 SDK. Without an Xcode 26 the default
+        # one builds, and the app simply has no Apple Log 2 setting.
+        run: |
+          latest=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
+          xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project

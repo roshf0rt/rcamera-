@@ -128,12 +128,15 @@ struct SettingsView: View {
                     }
                     Toggle("Apple Log", isOn: model.binding(\.appleLogVideo))
                     if model.settings.appleLogVideo {
+                        if CaptureSessionController.supportsAppleLog2 {
+                            Toggle("Apple Log 2", isOn: model.binding(\.appleLog2))
+                        }
                         Toggle("Instant Grade", isOn: model.binding(\.instantGrade))
                     }
                 } header: {
                     Text("Video")
                 } footer: {
-                    Text("Apple Log is used by default when the iPhone supports it and the preset has an Apple Log LUT; otherwise normal video is recorded. Instant Grade on records the preset into the video; off records flat Log, saves the Log file to Photos, and the preset is applied later from the gallery's Redevelop. Cinematic stabilization delays the viewfinder.")
+                    Text("Apple Log is used by default when the iPhone supports it and the preset has an Apple Log LUT; otherwise normal video is recorded. Apple Log 2 (iPhone 17 Pro, iOS 26) records the wider Apple Gamut; every Apple Log LUT is used through an exact Log 2 to Log conversion. Instant Grade on records the preset into the video; off records flat Log, saves the Log file to Photos, and the preset is applied later from the gallery's Redevelop. Cinematic stabilization delays the viewfinder.")
                 }
                 .disabled(model.engine.isRecording)
 
