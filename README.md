@@ -70,6 +70,11 @@ CI собирает неподписанный IPA при каждом push.
 
 Не перенесено: HDR gain map, виджет, Locked-расширение, halation v2/v3 и bloom v3, регуляторы прямо на экране камеры. Список с причинами — в `docs/research/mood-2.4.0/FEATURES.md`.
 
+## Цветовой миксер (из Shader_Integration)
+
+- После LUT, до scopes, halation и зерна: **цветовой миксер** (оттенок ±30°, насыщенность и светлота для 8 цветов: красный, оранжевый, жёлтый, зелёный, морской, синий, фиолетовый, пурпурный; между ними плавный переход по оттенку пикселя), **Vibrance** и **Soft highlights** (мягкое плечо в светах с сохранением соотношения каналов). Формулы — `hslCurve`, `vibranceAdjust` и `highlightRolloff` из `Shader_Integration.zip`, переписаны в `Grade.metal` и продублированы в `CameraCore/ColorMix.swift` с тестами. Готовые `.metallib` в приложение не входят.
+- Редактор пресета: вкладка COLOR у своих пресетов; у встроенных блок там же, где LUT strength и Saturation. Значения хранятся в `LookAdjustments` (`vibrance`, `highlightRolloff`, `colorMix`), старые файлы загружаются с нейтральными значениями.
+
 ## Видео-LUT
 
 - **20 видео-пресетов** (`VideoCollection`) идут после классических, перед плёночными. Файлы из `Video_LUTs.zip` лежат в `App/Resources/LUTs/video-<key>.video.cube` (Rec.709) и `video-<key>.applelog.cube` (Apple Log → Rec.709), без пересчёта.

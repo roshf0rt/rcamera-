@@ -87,6 +87,11 @@ struct GradeParams {
     float ov2ScaleY;
     float ov2OffsetX;
     float ov2OffsetY;
+    // After the LUT, mirrored in CameraCore/ColorMix.swift (ColorMixMath).
+    int hasColorMix;        // 1: the 24 values in the colorMix buffer apply
+    float vibrance;         // 0 = off
+    int hasRolloff;
+    float rolloffThreshold;
 };
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
@@ -271,6 +276,99 @@ static float3 blendOverlay(float3 c, float4 o, int mode, float amount) {
     return saturate(mix(c, r, amount * o.a));
 }
 
+// Colour mixer: hue, light and saturation per band, by the pixel's own hue. Mirrors ColorMixMath.mix.
+constant float kBandHues[8] = {0.0, 30.0 / 360.0, 60.0 / 360.0, 120.0 / 360.0, 180.0 / 360.0, 240.0 / 360.0, 270.0 / 360.0, 300.0 / 360.0};
+
+static float bandCurve(constant float *values, float h) {
+    for (int i = 0; i < 7; i++) {
+        float a = kBandHues[i];
+        float b = kBandHues[i + 1];
+        if (h >= a && h <= b) {
+            float t = (h - a) / (b - a);
+            return mix(values[i], values[i + 1], t * t * (3.0 - 2.0 * t));
+        }
+    }
+    float last = kBandHues[7];
+    float wrapped = h < kBandHues[0] ? h + 1.0 : h;
+    float t = (wrapped - last) / (kBandHues[0] + 1.0 - last);
+    return mix(values[7], values[0], t * t * (3.0 - 2.0 * t));
+}
+
+static float3 colorMixer(float3 input, constant float *m) {
+    const float eps = 1.000000013351432e-10;
+    float3 c = saturate(input);
+    float4 p = c.g >= c.b ? float4(c.g, c.b, 0.0, -1.0 / 3.0) : float4(c.b, c.g, -1.0, 2.0 / 3.0);
+    float4 q = c.r >= p.x ? float4(c.r, p.y, p.z, p.x) : float4(p.x, p.y, p.w, c.r);
+    float delta = q.x - min(q.w, q.y);
+    float h0 = abs(q.z + (q.w - q.y) / (6.0 * delta + eps));
+    float s0 = delta / (q.x + eps);
+    float v0 = q.x;
+
+    float h = bandCurve(m, h0);
+    float s = bandCurve(m + 8, h0);
+    float l = bandCurve(m + 16, h0);
+
+    if (h != 0.0) {
+        float shifted = h0 + clamp(h, -1.0 / 12.0, 1.0 / 12.0);
+        if (shifted < 0.0) {
+            shifted += 1.0;
+        } else if (shifted > 1.0) {
+            shifted -= 1.0;
+        }
+        float3 wheel = saturate(abs(fract(shifted + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
+        c = v0 * mix(float3(1.0), wheel, s0);
+    }
+
+    float v1 = clamp((1.0 + s0 * l) * v0, -1.0, 1.0);
+    float ql = v0 == 0.0 ? v1 : (v1 - v0) / v0;
+    if (ql != 0.0) {
+        float z = 1.0449999570846558 * ql;
+        float e = z >= 0.0 ? 1.0 + abs(z) : 1.0 / (1.0 + abs(z));
+        float3 lit = 1.0 - pow(max(1.0 - c, float3(0.0)), float3(e));
+        c = select(lit, float3(1.0), abs(1.0 - c) < 9.999999747378752e-6);
+    }
+
+    float s1 = clamp(s0 * (1.0 + s), -1.0, 1.0);
+    float qs = s0 == 0.0 ? s1 : (s1 - s0) / s0;
+    if (qs > 0.0) {
+        float y = dot(c, float3(0.2126, 0.7152, 0.0722));
+        float k = 1.0 + (1.0 - max(c.r, max(c.g, c.b)) + min(c.r, min(c.g, c.b))) * qs;
+        c = mix(float3(y), c, k);
+    } else if (qs < 0.0) {
+        float t = sqrt(saturate(-qs));
+        float y = dot(c, float3(0.299, 0.587, 0.114));
+        c = mix(c, float3(y), t);
+    }
+    return c;
+}
+
+/// Mirrors ColorMixMath.vibrance.
+static float3 vibrance(float3 c, float amount) {
+    float y = dot(c, float3(0.2126, 0.7152, 0.0722));
+    float t = 1.0 + (1.0 - max(c.r, max(c.g, c.b)) + min(c.r, min(c.g, c.b))) * amount;
+    return mix(float3(y), c, t);
+}
+
+/// Mirrors ColorMixMath.rollOff.
+static float3 rollOff(float3 input, float threshold) {
+    float3 c = input;
+    float lowest = min(c.r, min(c.g, c.b));
+    if (lowest < 0.0) {
+        float y = max(dot(c, float3(0.2126, 0.7152, 0.0722)), 0.0);
+        float denominator = y - lowest;
+        float scale = denominator > 0.0 ? y / denominator : 0.0;
+        c = max(y + scale * (c - y), float3(0.0));
+    }
+    float top = max(c.r, max(c.g, c.b));
+    if (top <= threshold) {
+        return c;
+    }
+    float headroom = 1.0 - threshold;
+    float over = top - threshold;
+    float compressed = threshold + over * headroom / (over + headroom);
+    return saturate(c * (compressed / top));
+}
+
 static float3 applyOverlay(float3 c, texture2d<float> tex, uint2 gid, float2 uv,
                            int mode, int tile, int rotate, float amount, float2 scale, float2 offset) {
     if (mode == 0 || amount <= 0.0) {
@@ -301,6 +399,7 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
                   texture2d<float> overlay2 [[texture(9)]],
                   constant GradeParams &p [[buffer(0)]],
                   device atomic_uint *wave [[buffer(1)]],
+                  constant float *colorMix [[buffer(2)]],
                   uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= uint(p.width) || gid.y >= uint(p.height)) {
         return;
@@ -314,6 +413,20 @@ kernel void grade(texture2d<float, access::read> luma [[texture(0)]],
             previous = previousLUT.sample(linearClamp, coordinate).rgb;
         }
         color = mix(color, previous, p.previousMix);
+    }
+
+    // Colour mixer, vibrance and roll-off act on the graded colour, before the scopes, halation and grain.
+    if (p.hasColorMix != 0 || p.vibrance != 0.0 || p.hasRolloff != 0) {
+        if (p.hasColorMix != 0) {
+            color = colorMixer(color, colorMix);
+        }
+        if (p.vibrance != 0.0) {
+            color = vibrance(color, p.vibrance);
+        }
+        if (p.hasRolloff != 0) {
+            color = rollOff(color, p.rolloffThreshold);
+        }
+        color = saturate(color);
     }
 
     float2 uv = (float2(gid) + 0.5) / float2(float(p.width), float(p.height));

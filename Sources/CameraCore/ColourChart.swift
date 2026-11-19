@@ -24,9 +24,9 @@ public enum ColourChart {
     /// One patch after the look. Without a LUT only the regulators apply.
     public static func grade(_ color: SIMD3<Double>, look: LookAdjustments, lut: LUT3D?) -> SIMD3<Double> {
         let regulated = ToneMath.regulate(color, look)
-        guard let lut else { return regulated }
+        guard let lut else { return ColorMixMath.apply(regulated, look: look) }
         let mapped = lut.apply(r: Float(regulated.x), g: Float(regulated.y), b: Float(regulated.z))
         let graded = SIMD3(Double(mapped.r), Double(mapped.g), Double(mapped.b))
-        return regulated + (graded - regulated) * look.filmStrength
+        return ColorMixMath.apply(regulated + (graded - regulated) * look.filmStrength, look: look)
     }
 }

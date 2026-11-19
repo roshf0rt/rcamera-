@@ -16,6 +16,7 @@ struct PresetEditorView: View {
         case emulation = "EMULATION"
         case quality = "QUALITY"
         case tone = "TONE"
+        case color = "COLOR"
     }
 
     /// What the preview shows.
@@ -35,6 +36,7 @@ struct PresetEditorView: View {
     @State private var adjustments = LookAdjustments.neutral
     @State private var overlays: [PresetOverlay] = []
     @State private var showOverlayPicker = false
+    @State private var band: ColorMix.Band = .red
     @State private var loaded = false
     @State private var lut: LUT3D?
     @State private var importSlot: LUTSlot?
@@ -172,11 +174,13 @@ struct PresetEditorView: View {
                     continuousTile("Saturation", value: $adjustments.saturation, range: 0 ... 2, reset: LookAdjustments.neutral.saturation) { String(format: "%.2f×", $0) }
                     if presetID == ArriLook.presetID { crossoverTile }
                 }
+                colorControls
+                    .padding(.top, 6)
                 overlaySection
                     .padding(.top, 6)
                 cardSection
                     .padding(.top, 6)
-                Text("Built-in presets keep their LUT and colour grade. LUT strength and saturation are yours to set. To change anything else, make your own preset from this one.")
+                Text("Built-in presets keep their LUT and colour grade. LUT strength, saturation, vibrance, the colour mixer and textures are yours to set. To change anything else, make your own preset from this one.")
                     .font(.footnote)
                     .foregroundStyle(Theme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -206,6 +210,7 @@ struct PresetEditorView: View {
                 case .emulation: emulation
                 case .quality: quality
                 case .tone: tone
+                case .color: colorControls
                 }
             }
             .padding(.horizontal, 16)
@@ -486,6 +491,76 @@ struct PresetEditorView: View {
             }
             overlaySection
         }
+    }
+
+    /// After the LUT: vibrance, soft highlights and hue, saturation and light per colour band.
+    private var colorControls: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            grid {
+                continuousTile("Vibrance", value: $adjustments.vibrance, range: -1 ... 1, reset: 0) { String(format: "%+.0f", $0 * 100) }
+                continuousTile("Soft highlights", value: $adjustments.highlightRolloff, range: 0 ... 1, reset: 0) { String(format: "%.0f%%", $0 * 100) }
+            }
+            section("Colour mixer") {
+                VStack(alignment: .leading, spacing: 12) {
+                    bandPicker
+                    grid {
+                        continuousTile("Hue", value: bandValue(\.hue), range: -1 ... 1, reset: 0) { String(format: "%+.0f°", $0 * 30) }
+                        continuousTile("Saturation", value: bandValue(\.saturation), range: -1 ... 1, reset: 0) { String(format: "%+.0f", $0 * 100) }
+                        continuousTile("Light", value: bandValue(\.light), range: -1 ... 1, reset: 0) { String(format: "%+.0f", $0 * 100) }
+                    }
+                    if !adjustments.colorMix.isNeutral {
+                        Button("Reset colour mixer") {
+                            adjustments.colorMix = .neutral
+                            save()
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .tint(Theme.accent)
+                    }
+                }
+            }
+        }
+    }
+
+    /// One circle per band in its own colour; a dot marks bands that were changed.
+    private var bandPicker: some View {
+        HStack(spacing: 0) {
+            ForEach(ColorMix.Band.allCases, id: \.self) { item in
+                let changed = adjustments.colorMix[hue: item] != 0 || adjustments.colorMix[saturation: item] != 0
+                    || adjustments.colorMix[light: item] != 0
+                Button {
+                    Haptics.selection()
+                    band = item
+                } label: {
+                    VStack(spacing: 4) {
+                        Circle()
+                            .fill(Color(hue: item.wheelPosition, saturation: 0.85, brightness: 0.95))
+                            .frame(width: 26, height: 26)
+                            .overlay(Circle().strokeBorder(.white, lineWidth: band == item ? 2.5 : 0))
+                        Circle()
+                            .fill(changed ? Theme.accent : Color.clear)
+                            .frame(width: 5, height: 5)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressableStyle())
+                .accessibilityLabel(item.title)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            Text(band.title.uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(Theme.secondaryText)
+                .offset(y: -22)
+        }
+    }
+
+    private func bandValue(_ curve: WritableKeyPath<ColorMix, [Double]>) -> Binding<Double> {
+        Binding(
+            get: { adjustments.colorMix[keyPath: curve][band.rawValue] },
+            set: { adjustments.colorMix[keyPath: curve][band.rawValue] = $0 }
+        )
     }
 
     /// Bundled textures over the picture: grain scans, light leaks, dust, masks. Up to three, in order.

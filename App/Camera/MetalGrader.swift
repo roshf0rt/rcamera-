@@ -79,6 +79,10 @@ private struct GradeParams {
     var ov2ScaleY: Float = 1
     var ov2OffsetX: Float = 0
     var ov2OffsetY: Float = 0
+    var hasColorMix: Int32 = 0
+    var vibrance: Float = 0
+    var hasRolloff: Int32 = 0
+    var rolloffThreshold: Float = 1
 }
 
 /// Where one overlay layer samples its texture, in the shader's terms (`applyOverlay` in Grade.metal).
@@ -340,6 +344,15 @@ final class MetalGrader: @unchecked Sendable {
             }
         }
 
+        let mixer = look.adjustments.colorMix
+        params.hasColorMix = mixer.isNeutral ? 0 : 1
+        params.vibrance = Float(look.adjustments.vibrance)
+        if let threshold = ColorMixMath.rollOffThreshold(look.adjustments.highlightRolloff) {
+            params.hasRolloff = 1
+            params.rolloffThreshold = Float(threshold)
+        }
+        let mixerValues = mixer.shaderValues
+
         params.halation = FilmMath.halationStrength(look.halation)
         // Bloom reuses the halation mask, so it needs the mask even when halation is off.
         let needsGlow = params.halation > 0 || params.bloom > 0
@@ -413,6 +426,9 @@ final class MetalGrader: @unchecked Sendable {
         }
         encoder.setBytes(&params, length: MemoryLayout<GradeParams>.stride, index: 0)
         encoder.setBuffer(wave, offset: 0, index: 1)
+        mixerValues.withUnsafeBytes { bytes in
+            encoder.setBytes(bytes.baseAddress!, length: bytes.count, index: 2)
+        }
         dispatch(encoder, state: gradeState, width: crop.width, height: crop.height)
         encoder.endEncoding()
 

@@ -39,6 +39,12 @@ public struct LookAdjustments: Codable, Equatable, Sendable {
     public var crossover: Double = 0
     /// The contrast curve last applied, if any. Only used to show its name.
     public var curve: ContrastCurve?
+    /// After the LUT: pushes muted colours more than saturated ones, -1...1.
+    public var vibrance: Double = 0
+    /// After the LUT: soft shoulder for the brightest colours, 0 (off)...1 (`ColorMixMath.rollOff`).
+    public var highlightRolloff: Double = 0
+    /// After the LUT: hue, saturation and light per colour band.
+    public var colorMix: ColorMix = .neutral
 
     public init() {}
 
@@ -67,6 +73,9 @@ public struct LookAdjustments: Codable, Equatable, Sendable {
         chromaticAberration = Self.clamp(chromaticAberration, 0, 4)
         bloom = Self.clamp(bloom, 0, 1)
         crossover = Self.clamp(crossover, -1, 1)
+        vibrance = Self.clamp(vibrance, -1, 1)
+        highlightRolloff = Self.clamp(highlightRolloff, 0, 1)
+        colorMix.clamp()
     }
 
     static func clamp(_ value: Double, _ low: Double, _ high: Double) -> Double {
@@ -76,6 +85,7 @@ public struct LookAdjustments: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case postExposure, contrast, saturation, temp, tint, hue, shadows, midpoint, highlights
         case fade, mute, filmStrength, dynamicRange, grainSize, sharpness, chromaticAberration, bloom, crossover, curve
+        case vibrance, highlightRolloff, colorMix
     }
 
     /// Missing keys keep their neutral values, so files written before a regulator existed still load.
@@ -104,6 +114,9 @@ public struct LookAdjustments: Codable, Equatable, Sendable {
         bloom = value(.bloom, bloom)
         crossover = value(.crossover, crossover)
         curve = try? c.decodeIfPresent(ContrastCurve.self, forKey: .curve)
+        vibrance = value(.vibrance, vibrance)
+        highlightRolloff = value(.highlightRolloff, highlightRolloff)
+        colorMix = (try? c.decodeIfPresent(ColorMix.self, forKey: .colorMix)) ?? .neutral
         clamp()
     }
 }

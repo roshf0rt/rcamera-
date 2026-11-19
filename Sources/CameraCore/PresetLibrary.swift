@@ -305,6 +305,9 @@ public final class PresetLibrary {
         look.curve = wanted.curve
         look.dynamicRange = wanted.dynamicRange
         look.crossover = wanted.crossover
+        look.vibrance = wanted.vibrance
+        look.highlightRolloff = wanted.highlightRolloff
+        look.colorMix = wanted.colorMix
         result.adjustments = look
         return result
     }
