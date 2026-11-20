@@ -1142,6 +1142,51 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     }
 
     /// Holds focus at a lens position (0 close ... 1 far), or with nil goes back to continuous autofocus.
+    /// Diagnostics for RWater: the camera's Objective-C properties and methods (public and internal) whose names
+    /// mention focus, depth or the LiDAR scanner, with the current value of the yes/no and number properties.
+    /// It only reads; it is there to find whether this iPhone has a switch for LiDAR-assisted focus.
+    func focusInternals() -> [String] {
+        guard let device = videoInput?.device else { return ["No camera running"] }
+        let pattern = try? NSRegularExpression(pattern: "focus|depth|lidar|jasper|tof|distance|range|pdaf|assist", options: [.caseInsensitive])
+        func matches(_ name: String) -> Bool {
+            pattern?.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil
+        }
+        var lines = ["Device: \(device.localizedName) · \(NSStringFromClass(type(of: device)))", "AF system: \(device.activeFormat.autoFocusSystem.rawValue) (0 none, 1 contrast, 2 phase)"]
+        var seen = Set<String>()
+        var cls: AnyClass? = type(of: device)
+        while let current = cls, current != NSObject.self {
+            let className = NSStringFromClass(current)
+            var count: UInt32 = 0
+            if let list = class_copyPropertyList(current, &count) {
+                for i in 0 ..< Int(count) {
+                    let name = String(cString: property_getName(list[i]))
+                    guard matches(name), seen.insert("p" + name).inserted else { continue }
+                    let attributes = property_getAttributes(list[i]).map { String(cString: $0) } ?? ""
+                    var value = ""
+                    // Only plain yes/no and number properties are read; objects are left alone.
+                    if let type = attributes.split(separator: ",").first,
+                       ["TB", "Tc", "Ti", "Tq", "TQ", "Tf", "Td", "TI", "Tl", "TL"].contains(String(type)),
+                       device.responds(to: NSSelectorFromString(name)) {
+                        value = " = \(device.value(forKey: name).map { "\($0)" } ?? "nil")"
+                    }
+                    let writable = attributes.contains(",R") ? "" : " [rw]"
+                    lines.append("\(className).\(name)\(value)\(writable)")
+                }
+                free(list)
+            }
+            if let methods = class_copyMethodList(current, &count) {
+                for i in 0 ..< Int(count) {
+                    let name = NSStringFromSelector(method_getName(methods[i]))
+                    guard matches(name), name.hasPrefix("set") || name.contains(":"), seen.insert("m" + name).inserted else { continue }
+                    lines.append("\(className) -\(name)")
+                }
+                free(methods)
+            }
+            cls = class_getSuperclass(current)
+        }
+        return lines
+    }
+
     func setManualFocus(_ position: Float?) {
         sessionQueue.async {
             guard let device = self.videoInput?.device, (try? device.lockForConfiguration()) != nil else { return }

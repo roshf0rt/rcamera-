@@ -101,6 +101,14 @@ struct UnderwaterSettingsView: View {
                     Text("Pair the housing in the iPhone's Bluetooth settings; it connects as a keyboard. The screen stays on while RWater is open.")
                 }
 
+                Section {
+                    NavigationLink("Focus internals") { FocusInternalsView() }
+                } header: {
+                    Text("Diagnostics")
+                } footer: {
+                    Text("Lists what the camera has inside for focus, depth and LiDAR, to look for a way to switch LiDAR-assisted focus off. Share the list with the developer.")
+                }
+
                 Section {} footer: {
                     Text("RWater \(SettingsView.version)").font(.system(size: 12, design: .monospaced))
                 }
@@ -115,5 +123,27 @@ struct UnderwaterSettingsView: View {
         }
         .preferredColorScheme(.dark)
         .tint(Theme.accent)
+    }
+}
+
+/// The camera's focus, depth and LiDAR internals, as text to share.
+struct FocusInternalsView: View {
+    @Environment(AppModel.self) private var model
+    @State private var lines: [String] = []
+
+    var body: some View {
+        List(lines, id: \.self) { line in
+            Text(line)
+                .font(.system(size: 12, design: .monospaced))
+                .textSelection(.enabled)
+        }
+        .navigationTitle("Focus internals")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                ShareLink(item: lines.joined(separator: "\n")) { Image(systemName: "square.and.arrow.up") }
+            }
+        }
+        .onAppear { lines = model.engine.focusInternals() }
     }
 }

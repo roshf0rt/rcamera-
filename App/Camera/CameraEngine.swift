@@ -337,6 +337,8 @@ final class CameraEngine {
     /// Manual focus at a lens position 0 (close) ... 1 (far); nil gives focus back to the camera.
     private(set) var manualFocus: Double?
 
+    func focusInternals() -> [String] { controller.focusInternals() }
+
     func setManualFocus(_ position: Double?) {
         manualFocus = position.map { min(max($0, 0), 1) }
         controller.setManualFocus(manualFocus.map { Float($0) })
