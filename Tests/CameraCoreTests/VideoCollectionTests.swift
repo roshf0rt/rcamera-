@@ -50,7 +50,10 @@ final class VideoCollectionTests: XCTestCase {
                 XCTAssertNotNil(lut, entry.id)
             }
             if entry.hasAppleLog {
-                let lut = try library.loadLUT(for: entry.id, slot: .appleLog)
+                // Log 2-only looks ship a .applelog2 file; Apple Log converts into it.
+                let lut = entry.appleLog2
+                    ? try library.loadAppleLog2LUT(for: entry.id)
+                    : try library.loadLUT(for: entry.id, slot: .appleLog)
                 XCTAssertNotNil(lut, entry.id)
             }
         }
