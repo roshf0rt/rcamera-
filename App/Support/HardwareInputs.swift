@@ -84,17 +84,20 @@ final class VolumeShutter {
 /// button of an underwater housing arrive the same way. The interaction sits on the whole viewfinder.
 @available(iOS 17.2, *)
 struct CameraControlHost: UIViewRepresentable {
+    /// Volume up shoots too (RWater, where the housing's shutter may send either key).
+    var volumeUp = false
     let onPress: () -> Void
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .clear
+        let both = volumeUp
         let interaction = AVCaptureEventInteraction(
             primary: { event in
                 if event.phase == .ended { onPress() }
             },
             secondary: { event in
-                if event.phase == .ended { onPress() }
+                if both, event.phase == .ended { onPress() }
             }
         )
         view.addInteraction(interaction)

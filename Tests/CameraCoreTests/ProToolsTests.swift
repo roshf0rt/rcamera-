@@ -41,34 +41,48 @@ final class MotionExposureTests: XCTestCase {
         XCTAssertEqual(decision.status, .cinematic)
     }
 
-    func testBrightLightPastTheLowestISOMakesTheShutterFaster() throws {
-        // At ISO 50 the picture is still half a stop too bright: the shutter gets faster, the ISO stays at the bottom.
+    func testBendsTheShutterUpToAStopInBrightLight() throws {
+        // At ISO 50 the picture is still half a stop too bright: the shutter gets faster.
         let decision = step(.motion, iso: 50, duration: 1.0 / 50, offset: 0.5)
         XCTAssertEqual(decision.mode, .motion)
         guard case .bent(let stops) = decision.status else { return XCTFail("expected bent, got \(decision.status)") }
         XCTAssertGreaterThan(stops, 0)
-        let setting = try XCTUnwrap(decision.setting)
-        XCTAssertLessThan(setting.duration, 1.0 / 50)
-        XCTAssertEqual(setting.iso, 50, accuracy: 1e-9)
+        XCTAssertLessThan(try XCTUnwrap(decision.setting).duration, 1.0 / 50)
     }
 
-    func testTheCameraNeverTakesOverWhileTheLoopRuns() throws {
-        // Two stops too bright at ISO 50: the loop keeps the exposure and glides the shutter instead of handing over.
+    func testHandsOverWhenTheLightIsOutOfReachAndTakesBackWithHysteresis() throws {
+        // Two stops too bright at ISO 50: out of reach of 180°.
         let out = step(.motion, iso: 50, duration: 1.0 / 50, offset: 2)
-        XCTAssertEqual(out.mode, .motion)
-        let setting = try XCTUnwrap(out.setting)
-        XCTAssertEqual(log2((1.0 / 50) / setting.duration), MotionExposure.maxStep, accuracy: 1e-6, "one capped step")
-        // The camera's own exposure is taken over on the first step.
-        let first = step(.native, iso: 130, duration: 1.0 / 40, offset: 0, strikes: 0)
-        XCTAssertEqual(first.mode, .motion)
-        XCTAssertNotNil(first.setting)
+        XCTAssertEqual(out.mode, .native)
+        XCTAssertNil(out.setting)
+        XCTAssertEqual(out.status, .handedOver(tooBright: true))
+
+        // The camera runs 0.8 stops past ISO 50 at 1/50: not back yet (needs 0.7).
+        let close = step(.native, iso: 50, duration: 1.0 / 50 / pow(2, 0.8), offset: 0)
+        XCTAssertEqual(close.mode, .native)
+        // At 0.5 stops it takes back, with the shutter bent by half a stop.
+        let back = step(.native, iso: 50, duration: 1.0 / 50 / pow(2, 0.5), offset: 0)
+        XCTAssertEqual(back.mode, .motion)
+        guard case .bent(let stops) = back.status else { return XCTFail("expected bent, got \(back.status)") }
+        XCTAssertEqual(stops, 0.5, accuracy: 1e-6)
     }
 
-    func testBigChangesOfLightGlide() throws {
-        let decision = step(.motion, iso: 400, duration: 1.0 / 50, offset: -3)
-        let setting = try XCTUnwrap(decision.setting)
-        XCTAssertEqual(setting.iso, 400 * pow(2, MotionExposure.maxStep), accuracy: 1e-6)
-        XCTAssertEqual(setting.duration, 1.0 / 50, accuracy: 1e-12)
+    func testWaitsBeforeSwitchingSoTheModesDoNotThrash() throws {
+        // Within reach, but only for the first step: the camera keeps running, amber.
+        let first = step(.native, iso: 130, duration: 1.0 / 40, offset: 0, strikes: 0)
+        XCTAssertEqual(first.mode, .native)
+        XCTAssertNil(first.setting)
+        XCTAssertEqual(first.status, .settling)
+        XCTAssertEqual(first.strikes, 1)
+        // Out of reach for a moment only: the loop holds 180° with the shutter bent and counts.
+        let flash = step(.motion, iso: 50, duration: 1.0 / 50, offset: 2, strikes: 0)
+        XCTAssertEqual(flash.mode, .motion)
+        XCTAssertEqual(flash.strikes, 1)
+        guard case .bent = flash.status else { return XCTFail("expected bent, got \(flash.status)") }
+        // Back within reach: the count starts again.
+        XCTAssertEqual(step(.motion, iso: 400, duration: 1.0 / 50, offset: 0, strikes: 3).strikes, 0)
+        // Leaving the reach resets the count of a camera waiting to take back.
+        XCTAssertEqual(step(.native, iso: 50, duration: 1.0 / 400, offset: 0, strikes: 4).strikes, 0)
     }
 
     func testRoomLightAt24FpsGoesTo180() throws {
@@ -85,20 +99,80 @@ final class MotionExposureTests: XCTestCase {
         XCTAssertLessThanOrEqual(setting.duration, 1.0 / 24 + 1e-12)
         XCTAssertLessThanOrEqual(setting.iso, 6400)
         let night = step(.motion, iso: 6400, duration: 1.0 / 24, offset: -3)
+        XCTAssertEqual(night.status, .handedOver(tooBright: false))
+    }
+}
+
+final class HoldShutterTests: XCTestCase {
+    private let limits = CineExposure.Limits(minISO: 50, maxISO: 6400, minDuration: 1.0 / 20000, maxDuration: 1.0 / 3)
+
+    private func step(
+        _ mode: MotionExposure.Mode = .motion, iso: Double, duration: Double, offset: Double = 0, fps: Int = 24, mainsHz: Int? = 50, bias: Double = 0
+    ) -> MotionExposure.Decision {
+        MotionExposure.step(mode: mode, current: .init(iso: iso, duration: duration), offset: offset, fps: fps, limits: limits, mainsHz: mainsHz, policy: .holdShutter, bias: bias)
+    }
+
+    func testDimLightRaisesTheISONotTheShutter() throws {
+        for iso in [800.0, 1600, 5000] {
+            let decision = step(iso: iso, duration: 1.0 / 48, mainsHz: nil)
+            let setting = try XCTUnwrap(decision.setting)
+            XCTAssertEqual(setting.duration, 1.0 / 48, accuracy: 1e-12)
+            XCTAssertEqual(setting.iso, iso, accuracy: 1e-6)
+            XCTAssertEqual(decision.status, .cinematic)
+        }
+    }
+
+    func testTheShutterSlowsOnlyPastTheHighestISOAndNeverPastAFrame() throws {
+        let decision = step(iso: 12800, duration: 1.0 / 48, mainsHz: nil)
+        let setting = try XCTUnwrap(decision.setting)
+        XCTAssertEqual(setting.iso, 6400, accuracy: 1e-6)
+        XCTAssertEqual(setting.duration, 1.0 / 24, accuracy: 1e-12)
+        guard case .bent(let stops) = decision.status else { return XCTFail("expected bent, got \(decision.status)") }
+        XCTAssertLessThan(stops, 0)
+        let thirty = step(iso: 25600, duration: 1.0 / 60, fps: 30, mainsHz: nil)
+        XCTAssertEqual(try XCTUnwrap(thirty.setting).duration, 1.0 / 30, accuracy: 1e-12)
+        let night = step(iso: 6400, duration: 1.0 / 24, offset: -3)
         XCTAssertEqual(night.status, .handedOver(tooBright: false), "out of reach, said so")
         XCTAssertEqual(try XCTUnwrap(night.setting).duration, 1.0 / 24, accuracy: 1e-12)
     }
 
+    func testThereIsNoJumpWhereTheISORunsOut() throws {
+        let below = try XCTUnwrap(step(iso: 6399, duration: 1.0 / 48, mainsHz: nil).setting)
+        let above = try XCTUnwrap(step(iso: 6401, duration: 1.0 / 48, mainsHz: nil).setting)
+        XCTAssertEqual(below.duration, above.duration, accuracy: 1e-4)
+        XCTAssertEqual(below.iso, above.iso, accuracy: 1)
+    }
+
+    func testBrightLightGlidesTheShutterInsteadOfHandingOver() throws {
+        let out = step(iso: 50, duration: 1.0 / 50, offset: 2)
+        XCTAssertEqual(out.mode, .motion)
+        let setting = try XCTUnwrap(out.setting)
+        XCTAssertEqual(setting.iso, 50, accuracy: 1e-9)
+        XCTAssertEqual(log2((1.0 / 50) / setting.duration), MotionExposure.maxStep, accuracy: 1e-6, "one capped step")
+        let first = step(.native, iso: 130, duration: 1.0 / 40)
+        XCTAssertEqual(first.mode, .motion, "the camera's exposure is taken over on the first step")
+        XCTAssertEqual(try XCTUnwrap(first.setting).duration, 1.0 / 50, accuracy: 1e-12)
+    }
+
+    func testBigChangesOfLightGlide() throws {
+        let setting = try XCTUnwrap(step(iso: 400, duration: 1.0 / 50, offset: -3).setting)
+        XCTAssertEqual(setting.iso, 400 * pow(2, MotionExposure.maxStep), accuracy: 1e-6)
+        XCTAssertEqual(setting.duration, 1.0 / 50, accuracy: 1e-12)
+    }
+
     func testETTRBiasExposesToTheRight() throws {
-        // The camera says the picture is on target; with +0.7 the loop brightens it, by ISO only.
-        let decision = MotionExposure.step(mode: .motion, current: .init(iso: 400, duration: 1.0 / 50), offset: 0, fps: 24, limits: limits, mainsHz: 50, bias: 0.7)
-        let setting = try XCTUnwrap(decision.setting)
+        let setting = try XCTUnwrap(step(iso: 400, duration: 1.0 / 50, bias: 0.7).setting)
         XCTAssertEqual(setting.duration, 1.0 / 50, accuracy: 1e-12)
         XCTAssertEqual(setting.iso, 400 * pow(2, 0.7 * MotionExposure.rate), accuracy: 1e-6)
-        // Once the picture sits 0.7 stops over the camera's target it stays.
-        let held = MotionExposure.step(mode: .motion, current: .init(iso: 400, duration: 1.0 / 50), offset: 0.7, fps: 24, limits: limits, mainsHz: 50, bias: 0.7)
+        let held = step(iso: 400, duration: 1.0 / 50, offset: 0.7, bias: 0.7)
         XCTAssertEqual(held.setting, .init(iso: 400, duration: 1.0 / 50))
         XCTAssertEqual(held.status, .cinematic)
+    }
+
+    func testTheClassicLoopIsUnchanged() throws {
+        // RCamera's loop still slows the shutter past the comfortable ISO.
+        let classic = MotionExposure.step(mode: .motion, current: .init(iso: 1600, duration: 1.0 / 48), offset: 0, fps: 24, limits: limits)
+        XCTAssertGreaterThan(try XCTUnwrap(classic.setting).duration, 1.0 / 48)
     }
 }
 
@@ -158,12 +232,15 @@ final class HousingRemoteTests: XCTestCase {
         let fresh = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         XCTAssertTrue(fresh.housingKeys)
         XCTAssertEqual(fresh.logETTR, 0.7)
+        XCTAssertFalse(fresh.motionHoldsShutter, "RCamera keeps the classic AutoMotion")
         var settings = AppSettings()
         settings.housingKeys = false
         settings.logETTR = 0.3
+        settings.motionHoldsShutter = true
         let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
         XCTAssertFalse(decoded.housingKeys)
         XCTAssertEqual(decoded.logETTR, 0.3)
+        XCTAssertTrue(decoded.motionHoldsShutter)
         let wild = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"logETTR":9}"#.utf8))
         XCTAssertEqual(wild.logETTR, 1.5, "clamped")
     }
@@ -188,41 +265,53 @@ final class CameraChoiceSettingsTests: XCTestCase {
     }
 }
 
-final class MotionShutterHoldTests: XCTestCase {
+final class MotionComfortTests: XCTestCase {
     private let limits = CineExposure.Limits(minISO: 50, maxISO: 6400, minDuration: 1.0 / 20000, maxDuration: 1.0 / 3)
 
     private func step(iso: Double, duration: Double, fps: Int = 24) -> MotionExposure.Decision {
         MotionExposure.step(mode: .motion, current: .init(iso: iso, duration: duration), offset: 0, fps: fps, limits: limits, mainsHz: nil)
     }
 
-    func testDimLightRaisesTheISONotTheShutter() throws {
-        // ISO 1600 and 5000 at 1/48: the shutter stays on 180°, the ISO does the work.
-        for iso in [800.0, 1600, 5000] {
-            let decision = step(iso: iso, duration: 1.0 / 48)
-            let setting = try XCTUnwrap(decision.setting)
-            XCTAssertEqual(setting.duration, 1.0 / 48, accuracy: 1e-12)
-            XCTAssertEqual(setting.iso, iso, accuracy: 1e-6)
-            XCTAssertEqual(decision.status, .cinematic)
-        }
+    func testComfortISOIsTwentyFiveTimesTheLowest() {
+        XCTAssertEqual(MotionExposure.comfortISO(limits: limits), 1250)
+        XCTAssertEqual(MotionExposure.comfortISO(limits: .init(minISO: 32, maxISO: 3000, minDuration: 0.0001, maxDuration: 0.3)), 800)
+        // Never past what the camera can do.
+        XCTAssertEqual(MotionExposure.comfortISO(limits: .init(minISO: 100, maxISO: 1000, minDuration: 0.0001, maxDuration: 0.3)), 1000)
     }
 
-    func testTheShutterSlowsOnlyPastTheHighestISOAndNeverPastAFrame() throws {
-        // 12800 at 1/48 is a stop past ISO 6400: the shutter takes it, up to 1/24.
-        let decision = step(iso: 12800, duration: 1.0 / 48)
+    func testComfortableISOKeepsTheShutterOn180() throws {
+        let decision = step(iso: 800, duration: 1.0 / 48)
         let setting = try XCTUnwrap(decision.setting)
-        XCTAssertEqual(setting.iso, 6400, accuracy: 1e-6)
-        XCTAssertEqual(setting.duration, 1.0 / 24, accuracy: 1e-12)
+        XCTAssertEqual(setting.duration, 1.0 / 48, accuracy: 1e-12)
+        XCTAssertEqual(setting.iso, 800, accuracy: 1e-6)
+        XCTAssertEqual(decision.status, .cinematic)
+    }
+
+    func testDimLightSlowsTheShutterBeforeTheISOClimbs() throws {
+        // ISO 1600 at 1/48 would be 800 at 1/24 (a stop slower); the ISO stops at 1250 and the shutter makes up the rest.
+        let decision = step(iso: 1600, duration: 1.0 / 48)
+        let setting = try XCTUnwrap(decision.setting)
+        XCTAssertEqual(setting.iso, 1250, accuracy: 1e-6)
+        XCTAssertEqual(setting.iso * setting.duration, 1600.0 / 48, accuracy: 1e-9)
+        XCTAssertGreaterThan(setting.duration, 1.0 / 48)
         guard case .bent(let stops) = decision.status else { return XCTFail("expected bent, got \(decision.status)") }
         XCTAssertLessThan(stops, 0)
-        let thirty = step(iso: 25600, duration: 1.0 / 60, fps: 30)
+    }
+
+    func testTheShutterNeverGoesPastAStopOrAFrame() throws {
+        let decision = step(iso: 5000, duration: 1.0 / 48)
+        let setting = try XCTUnwrap(decision.setting)
+        XCTAssertEqual(setting.duration, 1.0 / 24, accuracy: 1e-12)
+        XCTAssertEqual(setting.iso, 2500, accuracy: 1e-6)
+        // At 30 fps a frame is 1/30, which is under a stop past 1/60: the frame time is the limit.
+        let thirty = step(iso: 5000, duration: 1.0 / 60, fps: 30)
         XCTAssertEqual(try XCTUnwrap(thirty.setting).duration, 1.0 / 30, accuracy: 1e-12)
     }
 
-    func testThereIsNoJumpWhereTheISORunsOut() throws {
-        let below = try XCTUnwrap(step(iso: 6399, duration: 1.0 / 48).setting)
-        let above = try XCTUnwrap(step(iso: 6401, duration: 1.0 / 48).setting)
+    func testThereIsNoJumpWhereTheComfortLimitIsCrossed() throws {
+        let below = try XCTUnwrap(step(iso: 1249, duration: 1.0 / 48).setting)
+        let above = try XCTUnwrap(step(iso: 1251, duration: 1.0 / 48).setting)
         XCTAssertEqual(below.duration, above.duration, accuracy: 1e-4)
-        XCTAssertEqual(below.iso, above.iso, accuracy: 1)
     }
 }
 

@@ -176,7 +176,8 @@ final class CameraEngine {
             video: mode == .video,
             autoMotion: settings.autoMotion,
             fps: settings.videoFPS,
-            ettr: mode == .video && appleLogActive ? settings.logETTR : 0
+            holdsShutter: settings.motionHoldsShutter,
+            ettr: settings.motionHoldsShutter && mode == .video && appleLogActive ? settings.logETTR : 0
         )
         controller.setWhiteBalance(kelvin: settings.whiteBalanceKelvin, tint: settings.whiteBalanceTint)
         updateAssist()
@@ -331,6 +332,14 @@ final class CameraEngine {
     func toggleLock() {
         isAELocked.toggle()
         controller.setLocked(isAELocked)
+    }
+
+    /// Manual focus at a lens position 0 (close) ... 1 (far); nil gives focus back to the camera.
+    private(set) var manualFocus: Double?
+
+    func setManualFocus(_ position: Double?) {
+        manualFocus = position.map { min(max($0, 0), 1) }
+        controller.setManualFocus(manualFocus.map { Float($0) })
     }
 
     /// `point` is normalized (0...1, origin top-left) inside the visible, cropped viewfinder.

@@ -374,6 +374,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var motionStrikes = 0
     /// Stops to the right of the camera's target that Apple Log is exposed at (ETTR); 0 outside Log.
     private var ettrTarget = 0.0
+    private var motionPolicy = MotionExposure.Policy.classic
     /// Takes the ETTR bias back while the Log picture clips (`HighlightGuard`).
     private var highlightGuard = HighlightGuard()
     /// The latest share of clipped Log highlights, and when it came; older than a second counts as unmeasured.
@@ -421,9 +422,11 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     /// Reads exposure out in video mode, and with `autoMotion` runs AutoMotion (`MotionExposure`) at `fps`.
     /// The loop steps every third frame (at most 30 times a second): a new exposure takes a couple of
     /// frames to reach the meter, and stepping faster would overshoot. The readout alone runs 8 times a second.
-    /// `ettr` is how far right Apple Log is exposed; pass 0 when the camera is not in Log.
-    func setExposureMonitor(video: Bool, autoMotion: Bool, fps: Int, ettr: Double = 0) {
+    /// `holdsShutter` runs `MotionExposure.Policy.holdShutter` (RWater); `ettr` is how far right Apple Log is
+    /// exposed with it, 0 when the camera is not in Log.
+    func setExposureMonitor(video: Bool, autoMotion: Bool, fps: Int, holdsShutter: Bool = false, ettr: Double = 0) {
         sessionQueue.async {
+            self.motionPolicy = holdsShutter ? .holdShutter : .classic
             if self.ettrTarget != ettr {
                 self.ettrTarget = ettr
                 self.highlightGuard = HighlightGuard(bias: 0)
@@ -626,6 +629,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             limits: limits,
             mainsHz: mainsHz,
             strikes: motionStrikes,
+            policy: motionPolicy,
             bias: bias
         )
         motionMode = decision.mode
@@ -1134,6 +1138,19 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             if device.isFocusModeSupported(focus) { device.focusMode = focus }
             if device.isExposureModeSupported(exposure) { device.exposureMode = exposure }
             device.unlockForConfiguration()
+        }
+    }
+
+    /// Holds focus at a lens position (0 close ... 1 far), or with nil goes back to continuous autofocus.
+    func setManualFocus(_ position: Float?) {
+        sessionQueue.async {
+            guard let device = self.videoInput?.device, (try? device.lockForConfiguration()) != nil else { return }
+            defer { device.unlockForConfiguration() }
+            if let position, device.isLockingFocusWithCustomLensPositionSupported {
+                device.setFocusModeLocked(lensPosition: min(max(position, 0), 1), completionHandler: nil)
+            } else if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+            }
         }
     }
 

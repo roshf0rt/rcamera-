@@ -45,7 +45,19 @@ final class AppModel {
         }
         settingsStore = SettingsStore(url: base.appendingPathComponent("settings.json"))
 
+        #if RWATER
+        // RWater: no film looks, flat Log to grade later, and AutoMotion that holds the shutter.
+        var loaded = settingsStore.load()
+        loaded.grainLevel = .off
+        loaded.halationLevel = .off
+        loaded.frame = .off
+        loaded.instantGrade = false
+        loaded.motionHoldsShutter = true
+        loaded.housingKeys = true
+        try? settingsStore.save(loaded)
+        #else
         let loaded = settingsStore.load()
+        #endif
         settings = loaded
         presets = presetLibrary.presets
         captures = captureStore.records
@@ -444,6 +456,13 @@ final class AppModel {
     /// Resolves the selected preset in the background, then hands it to the camera. The old look stays on
     /// screen until then, and the camera crossfades to the new one.
     private func pushLooks() {
+        #if RWATER
+        // Natural colour: photos and video as the camera makes them, Log shown through the neutral conversion.
+        let log = FilmLook(lut: Self.neutralAppleLog, grain: 0)
+        let log2 = settings.appleLog2 ? FilmLook(lut: AppleLog.forLog2(Self.neutralAppleLog), grain: 0) : nil
+        engine.setLooks(CameraEngine.Looks(photo: .identity, video: .identity, appleLog: log, appleLog2: log2))
+        return
+        #endif
         let preset = selectedPreset
         Task {
             let photo = await cameraLook(for: preset, slot: .photo)

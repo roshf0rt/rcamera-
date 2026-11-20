@@ -171,19 +171,7 @@ struct CameraView: View {
             .animation(.smooth(duration: 0.25), value: engine.notice)
         }
         .background(Color.black.ignoresSafeArea())
-        .background {
-            HousingKeyHost(active: housingKeysActive) { action, factor in
-                model.engine.housingAction(action, factor: factor)
-            }
-            .frame(width: 1, height: 1)
-            .allowsHitTesting(false)
-        }
         .environment(\.iconRotation, model.orientation.current.iconRotation)
-        .onChange(of: model.housing.isConnected) { _, connected in
-            model.engine.showNotice(connected ? "Housing connected: its buttons run the camera." : "Housing disconnected.")
-            keepScreenOn()
-        }
-        .onChange(of: engine.isRecording) { _, _ in keepScreenOn() }
         .onChange(of: model.orientation.current) { _, held in engine.deviceOrientation = held }
         .overlay { if engine.access == .denied { accessDenied } }
         .fullScreenCover(isPresented: $showGallery) { GalleryView() }
@@ -223,7 +211,6 @@ struct CameraView: View {
             if phase == .active {
                 Task { await activate() }
             } else if phase == .background {
-                UIApplication.shared.isIdleTimerDisabled = false
                 engine.stop()
                 model.syncVolumeShutter(active: false)
                 model.orientation.stop()
@@ -273,20 +260,7 @@ struct CameraView: View {
         )
     }
 
-    /// The housing's keys go to the camera unless a sheet is up, where they may be typing.
-    private var housingKeysActive: Bool {
-        model.settings.housingKeys && !showSettings && !showGallery && editingPresetID == nil && newPresetBase == nil
-    }
-
-    /// The screen stays on while recording and while a housing is connected: in the housing nobody touches the
-    /// phone, and a screen that locks underwater cannot be woken.
-    private func keepScreenOn() {
-        UIApplication.shared.isIdleTimerDisabled = scenePhase == .active
-            && (model.engine.isRecording || (model.settings.housingKeys && model.housing.isConnected))
-    }
-
     private func activate() async {
-        keepScreenOn()
         if model.settings.savesLocation { model.location.start() }
         if model.settings.isLevelEnabled { model.level.start() }
         model.syncVolumeShutter(active: true)
@@ -388,7 +362,7 @@ struct CameraView: View {
         ZStack {
             ViewfinderLayerView(layer: engine.displayLayer)
                 .background {
-                    if #available(iOS 17.2, *) {
+                    if #available(iOS 18.0, *) {
                         CameraControlHost { engine.shutterTapped() }
                     }
                 }

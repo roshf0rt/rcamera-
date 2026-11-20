@@ -55,3 +55,52 @@ targets:
         NSMicrophoneUsageDescription: RCamera needs the microphone to record video sound.
         NSPhotoLibraryAddUsageDescription: RCamera saves your photos and videos to the library.
         NSLocationWhenInUseUsageDescription: RCamera can add the place name to your photos.
+  RWater:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      # The camera engine and the shared views, without RCamera's entry point, film looks and icon.
+      - path: App
+        excludes:
+          - RCameraApp.swift
+          - Resources/LUTs/**
+          - Resources/Overlays/**
+          - Resources/FilterIcons/**
+          - Resources/Assets.xcassets/**
+          - Resources/Assets.xcassets
+      - path: RWater
+    dependencies:
+      - package: RCamera
+        product: CameraCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rcamera.rwater
+        PRODUCT_NAME: RWater
+        SWIFT_VERSION: "5.0"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) RWATER"
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: RWater/Info.plist
+      properties:
+        CFBundleDisplayName: RWater
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        NSCameraUsageDescription: RWater needs the camera to take photos and videos.
+        NSMicrophoneUsageDescription: RWater needs the microphone to record video sound.
+        NSPhotoLibraryAddUsageDescription: RWater saves your photos and videos to the library.
+        NSLocationWhenInUseUsageDescription: RWater can add the place to your photos.

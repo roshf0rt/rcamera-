@@ -181,6 +181,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Green (negative) to magenta (positive), with a fixed colour temperature.
     public var whiteBalanceTint = 0
     /// Bumped when defaults change; older files adopt the new defaults once.
+    /// AutoMotion holds the shutter on 180° and moves only the ISO (`MotionExposure.Policy.holdShutter`), with
+    /// Apple Log exposed to the right by `logETTR`. RWater turns it on; RCamera keeps the classic loop.
+    public var motionHoldsShutter = false
     /// Buttons of an underwater housing paired as a Bluetooth keyboard drive the camera (`HousingRemote`).
     public var housingKeys = true
     /// Apple Log under AutoMotion is exposed this many stops to the right of the camera's target (ETTR),
@@ -205,7 +208,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, appleLog2, instantGrade, autoMotion, separateCameras, autoMacro, revision
         case zebra, focusPeaking, falseColor, histogram, waveform, lockExposureWhileRecording, lockWhiteBalanceWhileRecording
         case whiteBalanceKelvin, whiteBalanceTint
-        case housingKeys, logETTR
+        case housingKeys, logETTR, motionHoldsShutter
     }
 
     /// Keys older settings files used.
@@ -262,6 +265,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         whiteBalanceKelvin = (try? c.decode(Int?.self, forKey: .whiteBalanceKelvin)) ?? nil
         whiteBalanceTint = (try? c.decode(Int.self, forKey: .whiteBalanceTint)) ?? whiteBalanceTint
         housingKeys = (try? c.decode(Bool.self, forKey: .housingKeys)) ?? housingKeys
+        motionHoldsShutter = (try? c.decode(Bool.self, forKey: .motionHoldsShutter)) ?? motionHoldsShutter
         logETTR = min(max((try? c.decode(Double.self, forKey: .logETTR)) ?? logETTR, 0), 1.5)
         revision = (try? c.decode(Int.self, forKey: .revision)) ?? 0
         if let stabilization = try? c.decode(VideoStabilization.self, forKey: .videoStabilization) {

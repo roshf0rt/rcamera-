@@ -2,7 +2,11 @@ import CameraCore
 import SwiftUI
 
 enum Theme {
+    #if RWATER
+    static let accent = Color(red: 0.25, green: 0.89, blue: 0.94)
+    #else
     static let accent = Color(red: 0.96, green: 0.94, blue: 0.36)
+    #endif
     static let chrome = Color(white: 0.17)
     static let chromeDark = Color(white: 0.09)
     static let cardLight = Color(red: 0.92, green: 0.91, blue: 0.86)

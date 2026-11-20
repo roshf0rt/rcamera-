@@ -132,34 +132,11 @@ struct SettingsView: View {
                             Toggle("Apple Log 2", isOn: model.binding(\.appleLog2))
                         }
                         Toggle("Instant Grade", isOn: model.binding(\.instantGrade))
-                        Picker("Log exposure (ETTR)", selection: model.binding(\.logETTR)) {
-                            ForEach(AppSettings.logETTRChoices, id: \.self) { stops in
-                                Text(stops == 0 ? "As metered" : String(format: "+%.1f EV", stops)).tag(stops)
-                            }
-                        }
                     }
                 } header: {
                     Text("Video")
                 } footer: {
                     Text("Apple Log is used by default when the iPhone supports it and the preset has an Apple Log LUT; otherwise normal video is recorded. Apple Log 2 (iPhone 17 Pro, iOS 26) records the wider Apple Gamut; every Apple Log LUT is used through an exact Log 2 to Log conversion. Instant Grade on records the preset into the video; off records flat Log, saves the Log file to Photos, and the preset is applied later from the gallery's Redevelop. Cinematic stabilization delays the viewfinder.")
-                }
-                .disabled(model.engine.isRecording)
-
-                Section {
-                    Toggle("Housing buttons", isOn: model.binding(\.housingKeys))
-                    if model.settings.housingKeys {
-                        ForEach(HousingRemote.legend.indices, id: \.self) { index in
-                            LabeledContent(HousingRemote.legend[index].key) {
-                                Text(HousingRemote.legend[index].action).multilineTextAlignment(.trailing)
-                            }
-                            .font(.footnote)
-                        }
-                        LabeledContent("Status", value: model.housing.isConnected ? "Connected" : "Not connected")
-                    }
-                } header: {
-                    Text("Underwater housing")
-                } footer: {
-                    Text("Pair the housing in the iPhone's Bluetooth settings (it shows up as a keyboard), then open RCamera; its own app is not needed. While it is connected the screen stays on. With AutoMotion the shutter stays on 180° and only the ISO moves; Apple Log is exposed to the right by the Log exposure setting, and pulled back when the highlights start to clip.")
                 }
                 .disabled(model.engine.isRecording)
 
