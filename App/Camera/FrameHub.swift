@@ -55,6 +55,9 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     private var assistFrame = 0
     private var lastCountTime = CMTime.invalid
     private var onScopes: ((CGImage?, Histogram?) -> Void)?
+    /// Gets the share of clipped highlights in Apple Log frames (`HighlightMeter`), four times a second.
+    private var onHighlights: ((Double) -> Void)?
+    private var lastHighlightTime = CMTime.invalid
     /// At more than 60 fps the viewfinder is drawn at this many frames per second, so the grader has the
     /// time for the recording. Zero draws every frame.
     private var previewRate = 0.0
@@ -106,6 +109,37 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
         lock.lock()
         onScopes = handler
         lock.unlock()
+    }
+
+    /// Called on the capture queue with the share of clipped highlights in Apple Log frames; nil stops it.
+    func setHighlightHandler(_ handler: ((Double) -> Void)?) {
+        lock.lock()
+        onHighlights = handler
+        lastHighlightTime = .invalid
+        lock.unlock()
+    }
+
+    /// About 2000 luma samples spread over a 10-bit frame, as levels 0...1 of the video range.
+    private static func lumaLevels(_ buffer: CVPixelBuffer) -> [Double] {
+        guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return [] }
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return [] }
+        let width = CVPixelBufferGetWidthOfPlane(buffer, 0), height = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let rowBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        guard width > 0, height > 0 else { return [] }
+        let columns = 56, rows = 36
+        var levels: [Double] = []
+        levels.reserveCapacity(columns * rows)
+        for row in 0 ..< rows {
+            let y = (row * height + height / 2) / rows
+            let line = base.advanced(by: y * rowBytes).assumingMemoryBound(to: UInt16.self)
+            for column in 0 ..< columns {
+                let x = (column * width + width / 2) / columns
+                // Ten bits in the top of each 16-bit sample.
+                levels.append(HighlightMeter.level(videoRangeCode: Int(line[x] >> 6)))
+            }
+        }
+        return levels
     }
 
     /// Zebra, false colour, focus peaking, the histogram and the waveform for the viewfinder. `quarterTurns`
@@ -223,7 +257,16 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
             frameAssist = pass
         }
         let scopesHandler = onScopes
+        var highlightHandler: ((Double) -> Void)?
+        if isLog, !isRecordStream, let onHighlights,
+           !lastHighlightTime.isValid || CMTimeGetSeconds(CMTimeSubtract(time, lastHighlightTime)) >= 0.25 {
+            lastHighlightTime = time
+            highlightHandler = onHighlights
+        }
         lock.unlock()
+        if let highlightHandler {
+            highlightHandler(HighlightMeter.clippedShare(levels: Self.lumaLevels(source)))
+        }
         if skipsFrame { return }
 
         if isRecordStream {

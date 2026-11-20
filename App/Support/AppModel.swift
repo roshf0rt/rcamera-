@@ -11,6 +11,8 @@ import UIKit
 final class AppModel {
     let engine: CameraEngine
     @ObservationIgnored let volumeShutter = VolumeShutter()
+    /// An underwater housing (or any keyboard) paired with the phone.
+    let housing = HousingMonitor()
     let location = LocationProvider()
     let level = LevelMonitor()
     let orientation = OrientationMonitor()

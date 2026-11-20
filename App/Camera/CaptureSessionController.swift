@@ -370,8 +370,15 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var motionEnabled = false
     /// Who runs exposure while AutoMotion is on: the loop, or the camera when the light is out of reach.
     private var motionMode: MotionExposure.Mode = .native
-    /// Steps in a row the light has stood past a switching threshold (`MotionExposure.patience`).
+    /// Passed back to `MotionExposure.step`.
     private var motionStrikes = 0
+    /// Stops to the right of the camera's target that Apple Log is exposed at (ETTR); 0 outside Log.
+    private var ettrTarget = 0.0
+    /// Takes the ETTR bias back while the Log picture clips (`HighlightGuard`).
+    private var highlightGuard = HighlightGuard()
+    /// The latest share of clipped Log highlights, and when it came; older than a second counts as unmeasured.
+    private var clippedShare: (share: Double, at: Date)?
+    private var guardReadingTime: Date?
     /// Which way the camera's meter reads (`MotionExposure.Meter`): +1 or -1 once found out, 0 when it did
     /// not answer, nil before the test. Kept for the session: it is a property of the device.
     private var meterSign: Double?
@@ -414,8 +421,21 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     /// Reads exposure out in video mode, and with `autoMotion` runs AutoMotion (`MotionExposure`) at `fps`.
     /// The loop steps every third frame (at most 30 times a second): a new exposure takes a couple of
     /// frames to reach the meter, and stepping faster would overshoot. The readout alone runs 8 times a second.
-    func setExposureMonitor(video: Bool, autoMotion: Bool, fps: Int) {
+    /// `ettr` is how far right Apple Log is exposed; pass 0 when the camera is not in Log.
+    func setExposureMonitor(video: Bool, autoMotion: Bool, fps: Int, ettr: Double = 0) {
         sessionQueue.async {
+            if self.ettrTarget != ettr {
+                self.ettrTarget = ettr
+                self.highlightGuard = HighlightGuard(bias: 0)
+            }
+            if ettr > 0 {
+                self.hub.setHighlightHandler { [weak self] share in
+                    self?.sessionQueue.async { self?.clippedShare = (share, Date()) }
+                }
+            } else {
+                self.hub.setHighlightHandler(nil)
+                self.clippedShare = nil
+            }
             let fpsChanged = self.videoFPS != fps
             self.videoFPS = fps
             let wasOn = self.motionEnabled
@@ -582,7 +602,22 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             meterDetail = String(format: "no meter %+.2f", raw)
             return .noMeter
         }
+        // ETTR for Log: the guard follows the latest clipping reading, a fresh one or none.
+        // Each reading moves the guard once; with none for a second the plain target applies.
+        var bias = 0.0
+        if ettrTarget > 0 {
+            if let reading = clippedShare, Date().timeIntervalSince(reading.at) < 1 {
+                if reading.at != guardReadingTime {
+                    guardReadingTime = reading.at
+                    highlightGuard.update(target: ettrTarget, clippedShare: reading.share)
+                }
+            } else {
+                highlightGuard.update(target: ettrTarget, clippedShare: nil)
+            }
+            bias = min(highlightGuard.bias, ettrTarget)
+        }
         meterDetail = String(format: "meter %+.2f · ISO %d–%d · %@", offset * sign, Int(limits.minISO), Int(limits.maxISO), sign > 0 ? "+" : "−")
+        if ettrTarget > 0 { meterDetail += String(format: " · ETTR %+.1f", bias) }
         let decision = MotionExposure.step(
             mode: motionMode,
             current: current,
@@ -590,7 +625,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             fps: videoFPS,
             limits: limits,
             mainsHz: mainsHz,
-            strikes: motionStrikes
+            strikes: motionStrikes,
+            bias: bias
         )
         motionMode = decision.mode
         motionStrikes = decision.strikes

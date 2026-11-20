@@ -172,7 +172,12 @@ final class CameraEngine {
                 }
             }
         }
-        controller.setExposureMonitor(video: mode == .video, autoMotion: settings.autoMotion, fps: settings.videoFPS)
+        controller.setExposureMonitor(
+            video: mode == .video,
+            autoMotion: settings.autoMotion,
+            fps: settings.videoFPS,
+            ettr: mode == .video && appleLogActive ? settings.logETTR : 0
+        )
         controller.setWhiteBalance(kelvin: settings.whiteBalanceKelvin, tint: settings.whiteBalanceTint)
         updateAssist()
         if !settings.waveform { waveform = nil }
@@ -206,8 +211,35 @@ final class CameraEngine {
         }
     }
 
+    /// A button of an underwater housing (`HousingRemote`). Zoom presses step; `factor` is the step, smaller
+    /// while a key is held.
+    func housingAction(_ action: HousingRemote.Action, factor: Double = HousingRemote.stepFactor) {
+        switch action {
+        case .zoomIn, .zoomOut:
+            guard lens != .front else { return }
+            let lowest = zoomStops.map { $0.factor(focalLengths: focalLengths) }.min() ?? 1
+            setContinuousZoom(HousingRemote.zoom(absoluteZoom, action, factor: factor, range: lowest ... Self.maxZoom))
+        case .flipCamera:
+            guard !isRecording else {
+                showNotice("Stop the recording to switch cameras.")
+                return
+            }
+            flipCamera()
+        case .photoMode:
+            if isRecording {
+                if phase == .videoRecording { shutterTapped() }
+            } else {
+                selectMode(.photo)
+            }
+        case .videoMode:
+            if !isRecording { selectMode(.video) }
+        case .shutter:
+            shutterTapped()
+        }
+    }
+
     /// Shows `text` over the viewfinder for a few seconds.
-    private func showNotice(_ text: String) {
+    func showNotice(_ text: String) {
         notice = text
         noticeTask?.cancel()
         noticeTask = Task { [weak self] in

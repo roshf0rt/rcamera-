@@ -1,16 +1,17 @@
 import Foundation
 
 /// Auto exposure for video that keeps motion cinematic, after Kino's AutoMotion: the camera's metering says
-/// how bright the picture should be, and the loop makes that brightness with the shutter on 180°
-/// (`CineExposure.referenceShutter`) and ISO doing the work, moving a fifth of the way per step so the
-/// picture ramps instead of jumping.
+/// how bright the picture should be, and the loop makes that brightness with the shutter held on 180°
+/// (`CineExposure.referenceShutter`) and only the ISO moving, a fifth of the way per step (at most
+/// `maxStep` stops), so the picture ramps instead of jumping and the motion blur never changes.
 ///
-/// The ISO is kept comfortable first (`comfortISO`): in dim light the shutter slows up to a stop past 180° before
-/// the ISO climbs. When ISO alone cannot reach the brightness at all, the shutter gives up to one stop (faster in
-/// bright light, slower in the dark, never longer than a frame). Past that, for `patience` steps in a row, the light is
-/// out of reach of 180° and the iPhone's own auto exposure takes over, until the light has been back within
-/// 0.7 stops for as long. The wait keeps a brief flash or a noisy meter from throwing the camera between
-/// the two every frame.
+/// The shutter leaves 180° only where the ISO has run out: in light too bright for the lowest ISO it gets
+/// faster (as an ND filter would be needed), in the dark past the highest ISO it slows, never longer than a
+/// frame. Both follow the same ramp, so even then it glides. The iPhone's own auto exposure never takes over
+/// while the loop runs: it would move the shutter freely.
+///
+/// For Apple Log the target sits `bias` stops to the right of the camera's (ETTR): less noise in the shadows,
+/// which the grade pulls down again. `HighlightGuard` takes the bias back when highlights start to clip.
 ///
 /// The meter is the camera's: `AVCaptureDevice.exposureTargetOffset`, which in custom exposure still says
 /// how far the picture is from the camera's target, with the EV bias added.
@@ -30,7 +31,8 @@ public enum MotionExposure {
         case settling
         /// The shutter had to leave 180° by `stops`: positive faster (too much light), negative slower.
         case bent(stops: Double)
-        /// Out of reach of 180°; the camera's own auto exposure runs.
+        /// Past what the shutter and ISO can make by more than `outOfReach` stops: too bright even at the fastest
+        /// shutter, or too dark at the highest ISO and a frame-long shutter. The loop keeps running.
         case handedOver(tooBright: Bool)
         /// The camera's meter did not answer a test change in exposure; its own auto exposure runs.
         case noMeter
@@ -70,21 +72,20 @@ public enum MotionExposure {
         /// Shutter and ISO to set. Nil hands exposure to the camera.
         public var setting: CineExposure.Setting?
         public var status: Status
-        /// Steps in a row the light has stood past the threshold for switching mode; pass it to the next step.
+        /// Kept for callers that pass it back; the loop no longer counts steps before switching.
         public var strikes = 0
     }
 
-    /// Steps in a row past a threshold before the mode switches.
-    public static let patience = 6
-
-    /// Stops past the ISO range at which the loop hands over to the camera.
-    public static let handOver = 1.0
-    /// Stops past the ISO range below which it takes exposure back.
-    public static let takeBack = 0.7
+    /// Kept for callers: the loop takes over on its first step.
+    public static let patience = 1
     /// Share of the metering error corrected per step.
     public static let rate = 0.2
+    /// The most the exposure moves in one step, in stops, so a sudden change of light glides.
+    public static let maxStep = 0.25
     /// Errors smaller than this, in stops, are left alone, so the picture does not pump.
     public static let deadband = 0.1
+    /// Stops of headroom past the ISO range at which the status says the light is out of reach.
+    public static let outOfReach = 1.0
 
     /// How many stops beyond the ISO range the exposure `exposure` (ISO × seconds) lies at the shutter
     /// `reference`; zero when ISO alone can make it.
@@ -96,8 +97,8 @@ public enum MotionExposure {
     }
 
     /// One step. `current` is what the camera runs now, `offset` how far the metered picture is above the
-    /// target in stops (positive: too bright), as `AVCaptureDevice.exposureTargetOffset` reports it.
-    /// `strikes` is the last decision's.
+    /// camera's target in stops (positive: too bright), as `AVCaptureDevice.exposureTargetOffset` reports it.
+    /// `bias` moves the target: +0.7 exposes 0.7 stops brighter than the camera would (ETTR for Log).
     public static func step(
         mode: Mode,
         current: CineExposure.Setting,
@@ -105,73 +106,106 @@ public enum MotionExposure {
         fps: Int,
         limits: CineExposure.Limits,
         mainsHz: Int? = nil,
-        strikes: Int = 0
+        strikes: Int = 0,
+        bias: Double = 0
     ) -> Decision {
         let longest = min(limits.maxDuration, 1 / Double(max(fps, 1)))
         let reference = min(max(CineExposure.referenceShutter(fps: fps, mainsHz: mainsHz), limits.minDuration), longest)
-        let wanted = current.iso * current.duration * pow(2, -offset)
-        let gap = shortfall(exposure: wanted, reference: reference, limits: limits)
-
+        let error = offset - bias
+        let exposure: Double
         switch mode {
         case .native:
-            guard gap.stops <= takeBack else {
-                return Decision(mode: .native, setting: nil, status: .handedOver(tooBright: gap.tooBright))
-            }
-            guard strikes + 1 >= patience else {
-                // Within reach, not for long enough yet: amber while the camera still runs.
-                return Decision(mode: .native, setting: nil, status: .settling, strikes: strikes + 1)
-            }
-            // The camera was exposing right, so the loop starts from its brightness at once.
-            return place(exposure: wanted, reference: reference, longest: longest, limits: limits, offset: 0)
+            // The camera was exposing right, so the loop starts from its brightness at once and ramps to the bias.
+            exposure = current.iso * current.duration * pow(2, -offset)
         case .motion:
-            var outOfReach = 0
-            if gap.stops > handOver {
-                outOfReach = strikes + 1
-                if outOfReach >= patience {
-                    return Decision(mode: .native, setting: nil, status: .handedOver(tooBright: gap.tooBright))
-                }
-            }
-            let correction = abs(offset) < deadband ? 0 : -offset * rate
-            let exposure = current.iso * current.duration * pow(2, correction)
-            var decision = place(exposure: exposure, reference: reference, longest: longest, limits: limits, offset: offset)
-            decision.strikes = outOfReach
-            return decision
+            let correction = abs(error) < deadband ? 0 : min(max(-error * rate, -maxStep), maxStep)
+            exposure = current.iso * current.duration * pow(2, correction)
         }
+        return place(exposure: exposure, reference: reference, longest: longest, limits: limits, error: mode == .native ? offset - bias : error)
     }
 
-    /// The ISO the loop would rather not pass: 25 times the camera's lowest (about ISO 800 on a main camera, where
-    /// pictures are still clean). Past it the shutter lengthens before the ISO climbs any further.
+    /// Kept for the readout: the ISO the old loop would rather not pass. The shutter no longer slows for it.
     public static func comfortISO(limits: CineExposure.Limits) -> Double {
         min(limits.maxISO, max(limits.minISO * 25, 640))
     }
 
-    /// Shutter and ISO for `exposure`: 180° while the ISO stays comfortable; in dimmer light the shutter slows
-    /// (at most a stop past 180°, never longer than a frame) to keep the ISO down; at the ends of the ISO range
-    /// the shutter bends the other way as well.
-    private static func place(exposure: Double, reference: Double, longest: Double, limits: CineExposure.Limits, offset: Double) -> Decision {
+    /// Shutter and ISO for `exposure`: 180° with the ISO doing the work; only past the ends of the ISO range
+    /// the shutter takes the rest, faster in bright light, slower in the dark up to a frame.
+    private static func place(exposure: Double, reference: Double, longest: Double, limits: CineExposure.Limits, error: Double) -> Decision {
         let iso = exposure / reference
-        let comfort = comfortISO(limits: limits)
-        if iso >= limits.minISO, iso <= comfort {
-            // The shutter is already on 180°; the status goes green once the picture has ramped near its target.
-            let status: Status = abs(offset) < 0.5 ? .cinematic : .settling
+        if iso >= limits.minISO, iso <= limits.maxISO {
+            let status: Status = abs(error) < 0.5 ? .cinematic : .settling
             return Decision(mode: .motion, setting: .init(iso: iso, duration: reference), status: status)
-        }
-        if iso > comfort {
-            let slowest = min(longest, reference * 2)
-            let duration = min(slowest, exposure / comfort)
-            let finalISO = exposure / duration
-            if finalISO <= limits.maxISO {
-                let status: Status = duration > reference * 1.02 ? .bent(stops: log2(reference / duration)) : (abs(offset) < 0.5 ? .cinematic : .settling)
-                return Decision(mode: .motion, setting: .init(iso: finalISO, duration: duration), status: status)
-            }
         }
         let edgeISO = iso < limits.minISO ? limits.minISO : limits.maxISO
         let duration = min(max(exposure / edgeISO, limits.minDuration), longest)
         let finalISO = min(max(exposure / duration, limits.minISO), limits.maxISO)
-        return Decision(
-            mode: .motion,
-            setting: .init(iso: finalISO, duration: duration),
-            status: .bent(stops: log2(reference / duration))
-        )
+        // At the end of both the ISO and the shutter, an error past `outOfReach` is light the camera cannot make.
+        let atEnd = iso < limits.minISO ? duration <= limits.minDuration * 1.001 : duration >= longest * 0.999
+        let status: Status = atEnd && abs(error) > outOfReach
+            ? .handedOver(tooBright: iso < limits.minISO)
+            : .bent(stops: log2(reference / duration))
+        return Decision(mode: .motion, setting: .init(iso: finalISO, duration: duration), status: status)
+    }
+}
+
+/// How far to the right Apple Log is exposed (ETTR), taken back while highlights clip.
+///
+/// Fed a few times a second with the share of the picture piled up at the top of the Log signal
+/// (`HighlightMeter.clippedShare`): above `clipLimit` the bias drops quickly, below `clearLimit` it creeps back
+/// to the target, in between it stays. It may go under zero, so a bright sky is held even at the cost of shadows.
+public struct HighlightGuard: Equatable, Sendable {
+    /// Share of clipped pixels that starts taking the bias back.
+    public static let clipLimit = 0.01
+    /// Under this share the bias returns to the target.
+    public static let clearLimit = 0.003
+    public static let dropPerUpdate = 0.15
+    public static let risePerUpdate = 0.03
+    /// The lowest the bias goes, in stops.
+    public static let floor = -1.0
+
+    public private(set) var bias: Double
+
+    public init(bias: Double = 0) {
+        self.bias = bias
+    }
+
+    /// The bias to use now, for a wanted `target` and the latest `clippedShare` (nil: nothing measured).
+    @discardableResult
+    public mutating func update(target: Double, clippedShare: Double?) -> Double {
+        guard let share = clippedShare else {
+            bias = target
+            return bias
+        }
+        if share > Self.clipLimit {
+            bias = max(Self.floor, min(bias, target) - Self.dropPerUpdate)
+        } else if share < Self.clearLimit {
+            bias = min(target, bias + Self.risePerUpdate)
+        } else {
+            bias = min(bias, target)
+        }
+        return bias
+    }
+}
+
+/// Finds clipping in a Log picture: a clipped sensor piles its brightest pixels up at one code value, near the top
+/// of the signal, where an unclipped highlight spreads out.
+public enum HighlightMeter {
+    /// Levels under this (0...1 of the signal) are never taken for clipping: Apple Log reaches the sensor's
+    /// limit around 0.85–0.95.
+    public static let floor = 0.75
+    /// How close to the brightest level a pixel counts as piled up.
+    public static let width = 0.006
+
+    /// Share of `levels` (0...1) at the brightest level, when that level is high enough to be the clip point.
+    public static func clippedShare(levels: [Double]) -> Double {
+        guard let peak = levels.max(), peak >= floor else { return 0 }
+        let piled = levels.reduce(0) { $0 + ($1 >= peak - width ? 1 : 0) }
+        return Double(piled) / Double(levels.count)
+    }
+
+    /// The level of a 10-bit video-range luma code (64...940), 0...1.
+    public static func level(videoRangeCode code: Int) -> Double {
+        min(max(Double(code - 64) / 876, 0), 1)
     }
 }

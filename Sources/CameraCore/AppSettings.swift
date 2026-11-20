@@ -181,6 +181,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Green (negative) to magenta (positive), with a fixed colour temperature.
     public var whiteBalanceTint = 0
     /// Bumped when defaults change; older files adopt the new defaults once.
+    /// Buttons of an underwater housing paired as a Bluetooth keyboard drive the camera (`HousingRemote`).
+    public var housingKeys = true
+    /// Apple Log under AutoMotion is exposed this many stops to the right of the camera's target (ETTR),
+    /// taken back while highlights clip. 0 exposes as the camera meters.
+    public var logETTR = 0.7
+    public static let logETTRChoices: [Double] = [0, 0.3, 0.7, 1.0]
     public var revision = AppSettings.currentRevision
 
     public static let currentRevision = 2
@@ -199,6 +205,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case videoResolution, videoFPS, videoStabilization, appleLogVideo, appleLog2, instantGrade, autoMotion, separateCameras, autoMacro, revision
         case zebra, focusPeaking, falseColor, histogram, waveform, lockExposureWhileRecording, lockWhiteBalanceWhileRecording
         case whiteBalanceKelvin, whiteBalanceTint
+        case housingKeys, logETTR
     }
 
     /// Keys older settings files used.
@@ -254,6 +261,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         lockWhiteBalanceWhileRecording = (try? c.decode(Bool.self, forKey: .lockWhiteBalanceWhileRecording)) ?? lockWhiteBalanceWhileRecording
         whiteBalanceKelvin = (try? c.decode(Int?.self, forKey: .whiteBalanceKelvin)) ?? nil
         whiteBalanceTint = (try? c.decode(Int.self, forKey: .whiteBalanceTint)) ?? whiteBalanceTint
+        housingKeys = (try? c.decode(Bool.self, forKey: .housingKeys)) ?? housingKeys
+        logETTR = min(max((try? c.decode(Double.self, forKey: .logETTR)) ?? logETTR, 0), 1.5)
         revision = (try? c.decode(Int.self, forKey: .revision)) ?? 0
         if let stabilization = try? c.decode(VideoStabilization.self, forKey: .videoStabilization) {
             videoStabilization = stabilization
