@@ -1,5 +1,6 @@
 import AppIntents
 import AVFoundation
+import CameraCore
 import AVKit
 import GameController
 import MediaPlayer
