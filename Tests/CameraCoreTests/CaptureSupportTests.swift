@@ -332,9 +332,10 @@ final class SettingsMigrationTests: XCTestCase {
         XCTAssertGreaterThan(FilmMath.halationStrength(1.7), FilmMath.halationStrength(1))
     }
 
-    func testStoredFortyEightMegapixelsFallsBackToTwelve() throws {
+    func testStoredFortyEightMegapixelsIsKept() throws {
         let settings = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"photoResolution":"mp48"}"#.utf8))
-        XCTAssertEqual(settings.photoResolution, .mp12)
+        XCTAssertEqual(settings.photoResolution, .mp48)
+        XCTAssertEqual(AppSettings().photoResolution, .mp12)
     }
 
     func testOldSettingsFileKeepsValuesAndGainsDefaults() throws {

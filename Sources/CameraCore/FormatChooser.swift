@@ -43,15 +43,28 @@ public enum FormatChooser {
     /// About 12 MP. Bigger photos are slow to capture and process, so they are not preferred.
     public static let preferredPhotoPixels = 12_200_000
 
-    public static func photoFormat(_ formats: [FormatDescriptor]) -> FormatDescriptor? {
-        let candidates = formats.filter { $0.isFourByThree && (1440 ... 2112).contains($0.width) && $0.maxFPS >= 30 }
-        return candidates.max { photoScore($0).lexicographicallyPrecedes(photoScore($1)) }
+    /// The 4:3 format photos are taken from. `maxPixels` is the largest photo wanted (nil: as big as the camera
+    /// takes). Up to 12 MP the light 1920×1440 stream is preferred; for bigger photos the format with the most
+    /// photo pixels wins, a 1920×1440 one when it has them, otherwise the full 4032×3024 stream.
+    public static func photoFormat(_ formats: [FormatDescriptor], maxPixels: Int? = preferredPhotoPixels) -> FormatDescriptor? {
+        let light = formats.filter { $0.isFourByThree && (1440 ... 2112).contains($0.width) && $0.maxFPS >= 30 }
+        if let cap = maxPixels {
+            return light.max { photoScore($0, cap: cap).lexicographicallyPrecedes(photoScore($1, cap: cap)) }
+        }
+        let all = formats.filter { $0.isFourByThree && (1440 ... 4224).contains($0.width) && $0.maxFPS >= 30 }
+        let best = all.map(\.maxPhotoPixels).max() ?? 0
+        let pool = light.contains { $0.maxPhotoPixels >= best } ? light : all
+        return pool.max { largeScore($0).lexicographicallyPrecedes(largeScore($1)) }
     }
 
-    private static func photoScore(_ format: FormatDescriptor) -> [Int] {
+    private static func largeScore(_ format: FormatDescriptor) -> [Int] {
+        [format.maxPhotoPixels, format.width == 1920 ? 1 : 0, -format.width, format.isFullRange8Bit ? 1 : 0, Int(format.maxFPS), -format.index]
+    }
+
+    private static func photoScore(_ format: FormatDescriptor, cap: Int) -> [Int] {
         [
             format.width == 1920 ? 1 : 0,
-            min(format.maxPhotoPixels, preferredPhotoPixels),
+            min(format.maxPhotoPixels, cap),
             format.isFullRange8Bit ? 1 : 0,
             Int(format.maxFPS),
             -format.index,
@@ -68,7 +81,7 @@ public enum FormatChooser {
         if appleLog, let log = sixteenByNine(formats, width: width, fps: fps, appleLog: true) {
             return VideoFormatChoice(format: log, sharedWithPhoto: false, appleLog: true)
         }
-        if width <= 1920, let photo, photo.width >= 1920, photo.maxFPS >= Double(fps) {
+        if width <= 1920, let photo, (1920 ... 2112).contains(photo.width), photo.maxFPS >= Double(fps) {
             return VideoFormatChoice(format: photo, sharedWithPhoto: true, appleLog: false)
         }
         if let format = sixteenByNine(formats, width: width, fps: fps, appleLog: false) {
@@ -96,7 +109,7 @@ public enum FormatChooser {
     public static func frameRates(_ formats: [FormatDescriptor], width: Int, candidates: [Int] = [24, 30, 60, 120, 240]) -> [Int] {
         let photo = photoFormat(formats)
         return candidates.filter { fps in
-            if width <= 1920, let photo, photo.width >= 1920, photo.maxFPS >= Double(fps) { return true }
+            if width <= 1920, let photo, (1920 ... 2112).contains(photo.width), photo.maxFPS >= Double(fps) { return true }
             return formats.contains { $0.isSixteenByNine && $0.width == width && $0.maxFPS >= Double(fps) }
         }
     }

@@ -195,7 +195,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
 
     private func plan(for config: Config, device: AVCaptureDevice) -> FormatPlan {
         let formats = Self.describe(device.formats)
-        let photo = FormatChooser.photoFormat(formats)
+        // 48 MP photos may need a format of their own; video keeps sharing the light 12 MP one.
+        let photo = FormatChooser.photoFormat(formats, maxPixels: config.mode == .photo ? config.photoResolution.pixelLimit : FormatChooser.preferredPhotoPixels)
         let fallback: AVCaptureSession.Preset = config.mode == .photo
             ? .photo
             : (config.format.width >= 3840 ? .hd4K3840x2160 : .hd1920x1080)
@@ -1231,7 +1232,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             var skipped: String?
             if wantsRAW, let rawType {
                 settings = AVCapturePhotoSettings(rawPixelFormatType: rawType, processedFormat: [AVVideoCodecKey: codec])
-                settings.photoQualityPrioritization = .speed
+                // Above 12 MP the camera merges frames for the full size; "speed" would hold it to the binned frame.
+                let big = Int(self.photoOutput.maxPhotoDimensions.width) * Int(self.photoOutput.maxPhotoDimensions.height) > FormatChooser.preferredPhotoPixels
+                settings.photoQualityPrioritization = big ? .balanced : .speed
             } else {
                 settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: codec])
                 if wantsRAW {

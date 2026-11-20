@@ -244,8 +244,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         }
         frame = (try? c.decode(FrameStyle.self, forKey: .frame)) ?? frame
         volumeShutter = (try? c.decode(Bool.self, forKey: .volumeShutter)) ?? volumeShutter
-        // 48 MP was taken out of the camera screen; a stored choice falls back to 12 MP.
-        photoResolution = .mp12
+        photoResolution = (try? c.decode(PhotoResolution.self, forKey: .photoResolution)) ?? photoResolution
         videoResolution = (try? c.decode(VideoResolution.self, forKey: .videoResolution)) ?? videoResolution
         videoFPS = (try? c.decode(Int.self, forKey: .videoFPS)) ?? videoFPS
         appleLogVideo = (try? c.decode(Bool.self, forKey: .appleLogVideo)) ?? appleLogVideo

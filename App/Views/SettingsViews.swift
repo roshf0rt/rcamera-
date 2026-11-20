@@ -90,6 +90,9 @@ struct SettingsView: View {
                     Toggle("Grid", isOn: model.binding(\.isGridEnabled))
                     Toggle("Level", isOn: model.binding(\.isLevelEnabled))
                     Toggle("Mirror front camera", isOn: model.binding(\.mirrorFrontCamera))
+                    Picker("Photo resolution", selection: model.binding(\.photoResolution)) {
+                        ForEach(PhotoResolution.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
                     Toggle("Capture RAW", isOn: model.binding(\.capturesRAW))
                     if model.settings.capturesRAW {
                         Picker("RAW format", selection: model.binding(\.rawFormat)) {

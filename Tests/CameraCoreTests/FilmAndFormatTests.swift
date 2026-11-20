@@ -92,6 +92,23 @@ final class FormatChooserTests: XCTestCase {
         XCTAssertEqual(FormatChooser.photoFormat(formats)?.index, 4)
     }
 
+    func testFortyEightMegapixelsUseTheLightStreamWhenItHasThem() {
+        XCTAssertEqual(FormatChooser.photoFormat(formats, maxPixels: nil)?.index, 4)
+    }
+
+    func testFortyEightMegapixelsTakeTheFullStreamWhenTheLightOneStopsShort() {
+        let capped = [
+            FormatDescriptor(index: 0, width: 1920, height: 1440, maxFPS: 60, maxPhotoPixels: 24_000_000),
+            FormatDescriptor(index: 1, width: 1920, height: 1080, maxFPS: 60),
+            FormatDescriptor(index: 2, width: 4032, height: 3024, maxFPS: 30, maxPhotoPixels: 48_000_000),
+        ]
+        XCTAssertEqual(FormatChooser.photoFormat(capped, maxPixels: nil)?.index, 2)
+        XCTAssertEqual(FormatChooser.photoFormat(capped)?.index, 0, "12 MP keeps the light stream")
+        let photo = FormatChooser.photoFormat(capped, maxPixels: nil)
+        XCTAssertNotEqual(FormatChooser.videoFormat(capped, width: 1920, fps: 30, appleLog: false, photo: photo)?.sharedWithPhoto, true,
+                          "1080p video does not run on the 4032 stream")
+    }
+
     func testSDR1080VideoSharesThePhotoFormat() {
         let photo = FormatChooser.photoFormat(formats)
         let choice = FormatChooser.videoFormat(formats, width: 1920, fps: 30, appleLog: false, photo: photo)
