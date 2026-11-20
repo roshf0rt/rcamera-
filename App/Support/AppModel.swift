@@ -324,6 +324,7 @@ final class AppModel {
         let photoURL = presetLibrary.lutURL(for: preset.id, slot: .photo)
         let videoURL = presetLibrary.lutURL(for: preset.id, slot: .video)
         let logURL = presetLibrary.lutURL(for: preset.id, slot: .appleLog)
+        let log2URL = presetLibrary.appleLog2URL(for: preset.id)
         let pair = usesArriPair ? await arriPair(for: slot) : nil
         let lut: LUT3D? = await Task.detached(priority: .userInitiated) {
             if let pair { return pair.mixed(crossover: crossover) }
@@ -334,6 +335,8 @@ final class AppModel {
                 return Self.parseLUT(videoURL ?? photoURL)
             case .appleLog:
                 if let log = Self.parseLUT(logURL) { return log }
+                // A look made for Apple Log 2 only: Apple Log frames are turned into Apple Log 2 first.
+                if let log2 = Self.parseLUT(log2URL) { return AppleLog.forLog1(log2) }
                 let neutral = Self.neutralAppleLog
                 return Self.parseLUT(videoURL ?? photoURL).map { neutral.followed(by: $0) } ?? neutral
             }
@@ -375,8 +378,12 @@ final class AppModel {
         let key = "\(preset.id)|appleLog2|\(preset.adjustments.crossover)"
         if let cached = lookCache[key] { return cached }
         let base = await baseLook(for: preset, slot: .appleLog)
+        let log2URL = presetLibrary.appleLog2URL(for: preset.id)
         let lut = base.lut ?? Self.neutralAppleLog
-        let converted = await Task.detached(priority: .userInitiated) { AppleLog.forLog2(lut) }.value
+        // The preset's own Apple Log 2 LUT when it has one, otherwise its Apple Log chain behind the conversion.
+        let converted = await Task.detached(priority: .userInitiated) {
+            Self.parseLUT(log2URL) ?? AppleLog.forLog2(lut)
+        }.value
         if let cached = lookCache[key] { return cached }
         let look = FilmLook(lut: converted, grain: base.grain, halation: base.halation, adjustments: base.adjustments, overlays: base.overlays)
         // ARRI makes a new mix on every Crossover step; keep only the newest.

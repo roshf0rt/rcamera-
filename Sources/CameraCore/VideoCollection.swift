@@ -13,6 +13,8 @@ public enum VideoCollection {
         public let hasVideo: Bool
         /// Apple Log LUT, used when the camera records Apple Log.
         public let hasAppleLog: Bool
+        /// The Log file is made for Apple Log 2 (`video-<key>.applelog2.*`), not Apple Log.
+        public var appleLog2 = false
 
         public var id: String { VideoCollection.idPrefix + key }
 
@@ -62,5 +64,7 @@ public enum VideoCollection {
         Entry(key: "ivakin-sup8", name: "Super 8", hasVideo: true, hasAppleLog: true),
         Entry(key: "ivakin-vision3", name: "Vision 3", hasVideo: true, hasAppleLog: true),
         Entry(key: "ivakin-skin", name: "Skin", hasVideo: true, hasAppleLog: false),
+        // IvakinColor J200 comes for Apple Log 2 only.
+        Entry(key: "ivakin-j200", name: "J200", hasVideo: false, hasAppleLog: true, appleLog2: true),
     ]
 }

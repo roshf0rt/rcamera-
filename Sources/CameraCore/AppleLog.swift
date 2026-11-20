@@ -103,6 +103,44 @@ public enum AppleLog {
         log2ToLog1LUT(size: max(lut.size, 33)).followed(by: lut)
     }
 
+    /// Linear Rec.2020 to linear Apple Wide Gamut: the inverse of `appleWideGamutTo2020`. Rec.2020 sits inside
+    /// Apple Wide Gamut, so nothing is clipped this way.
+    static let rec2020ToAppleWideGamut: [[Float]] = [
+        [0.9750429, -0.0768565, 0.1018136],
+        [0.0008446, 0.8615375, 0.1376180],
+        [0.0198782, 0.0492426, 0.9308792],
+    ]
+
+    /// An Apple Log pixel as the Apple Log 2 pixel of the same light.
+    public static func log1ToLog2(r: Float, g: Float, b: Float) -> (Float, Float, Float) {
+        let linear = [decode(r), decode(g), decode(b)]
+        let m = rec2020ToAppleWideGamut
+        let out = (0 ..< 3).map { row in
+            min(max(encode(m[row][0] * linear[0] + m[row][1] * linear[1] + m[row][2] * linear[2]), 0), 1)
+        }
+        return (out[0], out[1], out[2])
+    }
+
+    public static func log1ToLog2LUT(size: Int = 33) -> LUT3D {
+        var values: [Float] = []
+        values.reserveCapacity(size * size * size * 4)
+        let scale = Float(size - 1)
+        for b in 0 ..< size {
+            for g in 0 ..< size {
+                for r in 0 ..< size {
+                    let out = log1ToLog2(r: Float(r) / scale, g: Float(g) / scale, b: Float(b) / scale)
+                    values += [out.0, out.1, out.2, 1]
+                }
+            }
+        }
+        return try! LUT3D(size: size, rgba: values)
+    }
+
+    /// An Apple Log 2 LUT made to take Apple Log: the conversion first, then `lut`, baked at `lut`'s size.
+    public static func forLog1(_ lut: LUT3D) -> LUT3D {
+        log1ToLog2LUT(size: max(lut.size, 33)).followed(by: lut)
+    }
+
     public static func neutralRec709LUT(size: Int = 33) -> LUT3D {
         var values: [Float] = []
         values.reserveCapacity(size * size * size * 4)

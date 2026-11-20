@@ -359,6 +359,10 @@ public final class PresetLibrary {
             let target = userLUTDirectory.appendingPathComponent("\(targetID)\(slot.fileSuffix).\(url.pathExtension)")
             try? fileManager.copyItem(at: url, to: target)
         }
+        if let url = appleLog2URL(for: sourceID), appleLog2URL(for: targetID) == nil {
+            let target = userLUTDirectory.appendingPathComponent("\(targetID)\(Self.appleLog2Suffix).\(url.pathExtension)")
+            try? fileManager.copyItem(at: url, to: target)
+        }
         invalidateCache(for: targetID)
     }
 
@@ -389,6 +393,9 @@ public final class PresetLibrary {
         guard let preset = preset(id: id), preset.isCustom else { return }
         for slot in LUTSlot.allCases {
             try? removeLUT(for: preset.id, slot: slot)
+        }
+        for ext in Self.lutExtensions {
+            try? fileManager.removeItem(at: userLUTDirectory.appendingPathComponent("\(preset.id)\(Self.appleLog2Suffix).\(ext)"))
         }
         lutCache = lutCache.filter { !$0.key.hasPrefix("\(preset.id)|") }
         try? setCover(nil, for: preset.id)
@@ -447,7 +454,34 @@ public final class PresetLibrary {
     }
 
     public func hasAnyLUT(for presetID: String) -> Bool {
-        LUTSlot.allCases.contains { hasLUT(for: presetID, slot: $0) }
+        LUTSlot.allCases.contains { hasLUT(for: presetID, slot: $0) } || appleLog2URL(for: presetID) != nil
+    }
+
+    // MARK: Apple Log 2
+
+    /// Files made for Apple Log 2 are `<preset id>.applelog2.cube` or `.lut`. They are not a `LUTSlot`: in Apple Log 2
+    /// the camera uses them directly, in Apple Log through `AppleLog.forLog1`, and a preset without one uses its
+    /// Apple Log LUT through `AppleLog.forLog2`.
+    public static let appleLog2Suffix = ".applelog2"
+
+    public func appleLog2URL(for presetID: String) -> URL? {
+        for directory in [userLUTDirectory, bundledLUTDirectory].compactMap({ $0 }) {
+            for ext in Self.lutExtensions {
+                let url = directory.appendingPathComponent("\(presetID)\(Self.appleLog2Suffix).\(ext)")
+                if fileManager.fileExists(atPath: url.path) { return url }
+            }
+        }
+        return nil
+    }
+
+    /// The preset's own Apple Log 2 LUT, if it has one.
+    public func loadAppleLog2LUT(for presetID: String) throws -> LUT3D? {
+        let key = "\(presetID)|appleLog2"
+        if let cached = lutCache[key] { return cached }
+        guard let url = appleLog2URL(for: presetID) else { return nil }
+        let lut = try LUT3D.parse(data: Data(contentsOf: url), fileExtension: url.pathExtension)
+        lutCache[key] = lut
+        return lut
     }
 
     /// The LUT to use for `slot`: the slot's own file, or the other display-referred one
@@ -490,6 +524,7 @@ public final class PresetLibrary {
 
     private func invalidateCache(for presetID: String) {
         for slot in LUTSlot.allCases { lutCache["\(presetID)|\(slot.rawValue)"] = nil }
+        lutCache["\(presetID)|appleLog2"] = nil
     }
 
     private func removeUserLUT(for presetID: String, slot: LUTSlot) throws {

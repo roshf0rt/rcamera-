@@ -39,11 +39,26 @@ final class BundledLUTTests: XCTestCase {
                 XCTAssertGreaterThan(change(lut), 0.002, "\(preset.id): the LUT changes nothing")
                 checked += 1
             }
-            if video?.hasAppleLog == true {
-                let lut = try XCTUnwrap(try library.loadLUT(for: preset.id, slot: .appleLog), "\(preset.id): no Apple Log LUT")
+            if let video, video.hasAppleLog {
+                let loaded = video.appleLog2
+                    ? try library.loadAppleLog2LUT(for: preset.id)
+                    : try library.loadLUT(for: preset.id, slot: .appleLog)
+                let lut = try XCTUnwrap(loaded, "\(preset.id): no Log LUT")
                 XCTAssertGreaterThan(change(lut), 0.002, "\(preset.id): the Log LUT changes nothing")
             }
         }
         XCTAssertEqual(checked, FilmCollection.entries.count + VideoCollection.entries.filter(\.hasVideo).count)
+    }
+
+    func testJaneSuCarriesBothAppleLogVersions() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("janesu-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = try PresetLibrary(storageDirectory: directory, bundledLUTDirectory: bundled)
+        let log1 = try XCTUnwrap(try library.loadLUT(for: "preset-1", slot: .appleLog))
+        let log2 = try XCTUnwrap(try library.loadAppleLog2LUT(for: "preset-1"))
+        XCTAssertNotEqual(log1, log2, "two files, one per Log version")
+        XCTAssertNil(library.appleLog2URL(for: "preset-3"))
+        XCTAssertTrue(library.hasAnyLUT(for: "video-ivakin-j200"))
+        XCTAssertNil(library.lutURL(for: "video-ivakin-j200", slot: .appleLog))
     }
 }
