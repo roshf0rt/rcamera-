@@ -177,27 +177,29 @@ final class HoldShutterTests: XCTestCase {
 }
 
 final class MeterWatchTests: XCTestCase {
-    func testAMeterReadTheWrongWayIsCaught() {
+    func testChangingLightNeverTriggersIt() {
         var watch = MeterWatch()
-        // The loop darkens by a stop, and the meter says the picture got brighter: the sign is wrong.
-        XCTAssertFalse(watch.check(exposure: 1.0, offset: 0, outOfReach: false))
-        XCTAssertFalse(watch.check(exposure: 0.7, offset: 0.8, outOfReach: false))
-        XCTAssertTrue(watch.check(exposure: 0.5, offset: 1.5, outOfReach: false))
+        // Panning from bright to dark: the meter swings, the loop follows within its range.
+        for step in 0 ..< 200 {
+            let offset = -3.5 * sin(Double(step) / 20)
+            XCTAssertFalse(watch.check(offset: offset, outOfReach: false))
+        }
     }
 
-    func testAMeterReadTheRightWayPasses() {
-        var watch = MeterWatch()
-        XCTAssertFalse(watch.check(exposure: 1.0, offset: 1.0, outOfReach: false))
-        XCTAssertFalse(watch.check(exposure: 0.5, offset: 0.1, outOfReach: false))
-        XCTAssertFalse(watch.check(exposure: 0.25, offset: -0.6, outOfReach: false))
-    }
-
-    func testStuckAtTheEndTestsAgain() {
+    func testPinnedAtTheEndTestsAgain() {
         var watch = MeterWatch()
         for _ in 1 ..< MeterWatch.stuckSteps {
-            XCTAssertFalse(watch.check(exposure: 0.001, offset: 4, outOfReach: true))
+            XCTAssertFalse(watch.check(offset: 4, outOfReach: true))
         }
-        XCTAssertTrue(watch.check(exposure: 0.001, offset: 4, outOfReach: true))
+        XCTAssertTrue(watch.check(offset: 4, outOfReach: true))
+        XCTAssertFalse(watch.check(offset: 4, outOfReach: true), "counts again from zero")
+    }
+
+    func testOutOfReachButNotPinnedWaits() {
+        var watch = MeterWatch()
+        for _ in 0 ..< 100 {
+            XCTAssertFalse(watch.check(offset: 1.5, outOfReach: true))
+        }
     }
 }
 

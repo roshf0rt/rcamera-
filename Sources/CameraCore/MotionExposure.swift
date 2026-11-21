@@ -231,49 +231,30 @@ public enum MotionExposure {
     }
 }
 
-/// Watches that the meter answers the right way while the loop runs. Brighter exposure must read brighter: if
-/// the exposure has moved a stop one way and the meter went the other way, the meter test got its sign wrong
-/// (or the light changed under it), and the loop must stop and test again rather than run to the end of the range.
+/// Catches a loop that runs on a meter read the wrong way. Such a loop does not settle: it drives the exposure to
+/// one end of the range and stays there with the meter pinned at its limit. Light that really is out of reach looks
+/// the same, so the meter is only tested again after `stuckSteps` steps (about two seconds) like that; a change of
+/// light, however fast, never triggers it while the loop can still follow.
 public struct MeterWatch: Equatable, Sendable {
-    /// Stops the exposure moves before the meter's answer is judged.
-    public static let span = 1.0
-    /// How far the meter must have gone the wrong way, in stops.
-    public static let against = 0.5
-    /// Steps at the end of the range, out of reach, after which the meter is tested again in any case.
-    public static let stuckSteps = 40
+    /// Steps at the end of the range, meter pinned, after which the meter is tested again.
+    public static let stuckSteps = 20
+    /// The meter reading, in stops, that counts as pinned.
+    public static let pinned = 3.0
 
-    private var start: (exposure: Double, offset: Double)?
     private var stuck = 0
 
     public init() {}
 
-    public static func == (lhs: MeterWatch, rhs: MeterWatch) -> Bool {
-        lhs.start?.exposure == rhs.start?.exposure && lhs.start?.offset == rhs.start?.offset && lhs.stuck == rhs.stuck
-    }
-
-    /// `exposure` is ISO × duration now, `offset` the meter as the loop reads it (positive: too bright).
+    /// `offset` is the meter as the loop reads it; `outOfReach` whether the loop sits at the end of its range.
     /// True when the meter should be tested again.
-    public mutating func check(exposure: Double, offset: Double, outOfReach: Bool) -> Bool {
-        stuck = outOfReach ? stuck + 1 : 0
-        if stuck >= Self.stuckSteps {
-            reset()
-            return true
-        }
-        guard exposure > 0 else { return false }
-        let stops = log2(exposure)
-        guard let first = start else {
-            start = (stops, offset)
-            return false
-        }
-        let moved = stops - first.exposure
-        guard abs(moved) >= Self.span else { return false }
-        let read = offset - first.offset
-        start = (stops, offset)
-        return moved * read < 0 && abs(read) >= Self.against
+    public mutating func check(offset: Double, outOfReach: Bool) -> Bool {
+        stuck = outOfReach && abs(offset) >= Self.pinned ? stuck + 1 : 0
+        guard stuck >= Self.stuckSteps else { return false }
+        stuck = 0
+        return true
     }
 
     public mutating func reset() {
-        start = nil
         stuck = 0
     }
 }

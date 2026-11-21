@@ -626,7 +626,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         // Brighter must read brighter. A loop that runs on a meter read the wrong way drives the picture to black
         // (or white): stop, give the exposure back to the camera, and test the meter again.
         let stuckAtEnd: Bool = { if case .handedOver = lastCineState?.status { return motionMode == .motion } else { return false } }()
-        if motionMode == .motion, meterWatch.check(exposure: current.iso * current.duration, offset: offset * sign, outOfReach: stuckAtEnd) {
+        if motionMode == .motion, meterWatch.check(offset: offset * sign, outOfReach: stuckAtEnd) {
             meterWatch.reset()
             meterSign = nil
             meterProbe = nil
