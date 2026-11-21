@@ -70,12 +70,13 @@ struct UnderwaterSettingsView: View {
                             Image(systemName: "mountain.2").foregroundStyle(Theme.secondaryText)
                         }
                     }
+                    Toggle("Focus without LiDAR", isOn: model.binding(\.separateCameras))
                     Toggle("Grid", isOn: model.binding(\.isGridEnabled))
                     Toggle("Save location", isOn: model.binding(\.savesLocation))
                 } header: {
                     Text("Camera")
                 } footer: {
-                    Text("Manual focus holds the lens where you put it, so it does not hunt in murky water or on passing fish. A tap on the picture goes back to autofocus. Hold the picture to lock exposure.")
+                    Text("Manual focus holds the lens where you put it, so it does not hunt in murky water or on passing fish. A tap on the picture goes back to autofocus. Focus without LiDAR runs one lens at a time instead of the combined camera, so no fused depth (LiDAR) steers focus or lens changes, and turns off face-driven focus; iOS has no direct LiDAR switch, so test it on land in dim light. Hold the picture to lock exposure.")
                 }
 
                 Section {

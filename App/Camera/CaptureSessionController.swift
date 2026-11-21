@@ -287,6 +287,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             currentAppleLog2Wanted = config.appleLog2
             configurePhotoOutput(device: device, resolution: config.photoResolution, rawFormat: config.rawFormat, wantsRAW: config.wantsRAW, lean: leanPhotoOutput)
             if #available(iOS 18.0, *) { installControls(device: device) }
+            if config.separateCameras { avoidDepthAssist(device) }
             session.commitConfiguration()
             // 10-bit Y'CbCr keeps Apple Log precise. The list of pixel formats is only valid after the commit.
             setPixelFormat(tenBit: formatPlan.appleLog)
@@ -1143,6 +1144,24 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     }
 
     /// Holds focus at a lens position (0 close ... 1 far), or with nil goes back to continuous autofocus.
+    /// Separate cameras (RWater: focus without LiDAR): a single physical camera has no fused depth, and the
+    /// depth the camera would otherwise use to smooth zooming and lens changes is switched off where the
+    /// camera offers that switch. Each step is taken only when the camera answers to it.
+    private func avoidDepthAssist(_ device: AVCaptureDevice) {
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        defer { device.unlockForConfiguration() }
+        if device.responds(to: NSSelectorFromString("isContinuousZoomWithDepthSupported")),
+           device.responds(to: NSSelectorFromString("setContinuousZoomWithDepthEnabled:")),
+           (device.value(forKey: "continuousZoomWithDepthSupported") as? Bool) == true {
+            device.setValue(false, forKey: "continuousZoomWithDepthEnabled")
+        }
+        // Fish and divers' masks are not faces: no face-driven focus jumps.
+        if device.isFocusModeSupported(.continuousAutoFocus) {
+            device.automaticallyAdjustsFaceDrivenAutoFocusEnabled = false
+            device.isFaceDrivenAutoFocusEnabled = false
+        }
+    }
+
     /// Diagnostics for RWater: the camera's Objective-C properties and methods (public and internal) whose names
     /// mention focus, depth or the LiDAR scanner, with the current value of the yes/no and number properties.
     /// It only reads; it is there to find whether this iPhone has a switch for LiDAR-assisted focus.
