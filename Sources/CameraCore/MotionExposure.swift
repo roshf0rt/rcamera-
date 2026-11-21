@@ -241,7 +241,7 @@ public struct MeterWatch: Equatable, Sendable {
     /// The meter reading, in stops, that counts as far off.
     public static let pinned = 3.0
     /// A picture darker than this (mean, 0…1) cannot be "far too bright"; one brighter than `white` not "far too dark".
-    public static let black = 0.2
+    public static let black = 0.25
     public static let white = 0.75
 
     private var stuck = 0
