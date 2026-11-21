@@ -224,7 +224,9 @@ enum PhotoPipeline {
         let finished = turned(finish(base, look: look, aspect: aspect, mirror: mirror), orientation)
         let framed = framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex)
         // Camera, lens and exposure details go with the photo, as in a photo from the system camera.
-        return encode(framed.settingProperties(metadata(of: processed)), rawExposureOffset: offset)
+        var original: Data?
+        if case let .original(data) = source { original = data }
+        return encode(framed.settingProperties(metadata(of: original)), rawExposureOffset: offset)
     }
 
     /// Draws a pattern in translucent white over the whole frame. The photo is drawn on top and hides the middle.
