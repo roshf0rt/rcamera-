@@ -393,6 +393,11 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var meterWatch = MeterWatch()
     /// The ETTR bias the loop used last, for the readout.
     private var ettrInForce = 0.0
+    /// How fast the held-shutter loop is moving the exposure (stops per second), and when it last stepped.
+    private var motionVelocity = 0.0
+    /// The last shutter and ISO the loop asked for.
+    private var lastCommanded: CineExposure.Setting?
+    private var lastMotionStep = Date.distantPast
     /// The viewfinder picture's mean brightness and when it was read (FrameHub).
     private var pictureLuma: (value: Double, at: Date)?
     private var videoFPS = 24
@@ -468,7 +473,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
                 self.motionStrikes = 0
                 self.meterProbe = nil
             }
-            let interval = self.motionEnabled ? max(33, 3000 / max(fps, 1)) : 120
+            // Holding the shutter, the loop turns the ISO every frame, in small steps; the classic loop ten times a second.
+            let interval = self.motionEnabled ? (holdsShutter ? max(16, 1000 / max(fps, 1)) : max(33, 3000 / max(fps, 1))) : 120
             if video, self.meterTimer == nil || self.meterInterval != interval {
                 self.meterTimer?.cancel()
                 let timer = DispatchSource.makeTimerSource(queue: self.sessionQueue)
@@ -658,21 +664,36 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         if motionMode != .motion { meterWatch.reset() }
         meterDetail = String(format: "meter %+.2f · ISO %d–%d · %@", offset * sign, Int(limits.minISO), Int(limits.maxISO), sign > 0 ? "+" : "−")
         if ettrTarget > 0 { meterDetail += String(format: " · ETTR %+.1f", bias) }
+        // Stepping every frame, the camera's reading lags the last setting by a frame or two; the held-shutter loop
+        // builds on what it last asked for, so no step is lost or taken twice.
+        var base = current
+        if motionPolicy == .holdShutter, motionMode == .motion, let asked = lastCommanded,
+           abs(log2(asked.iso * asked.duration / (current.iso * current.duration))) < 0.5 {
+            base = asked
+        }
         let decision = MotionExposure.step(
             mode: motionMode,
-            current: current,
+            current: base,
             offset: offset * sign,
             fps: videoFPS,
             limits: limits,
             mainsHz: mainsHz,
             strikes: motionStrikes,
             policy: motionPolicy,
-            bias: bias
+            bias: bias,
+            velocity: motionMode == .motion ? motionVelocity : 0,
+            interval: min(Date().timeIntervalSince(lastMotionStep), 0.25)
         )
+        lastMotionStep = Date()
         motionMode = decision.mode
         motionStrikes = decision.strikes
+        motionVelocity = decision.velocity
+        if decision.mode != .motion { lastCommanded = nil }
         if let next = decision.setting {
-            let changed = abs(next.iso - current.iso) / current.iso > 0.01 || abs(next.duration - current.duration) / current.duration > 0.01
+            // Small steps every frame must all reach the camera, or slow changes would never add up.
+            let threshold = motionPolicy == .holdShutter ? 0.0005 : 0.01
+            let changed = abs(next.iso - current.iso) / current.iso > threshold || abs(next.duration - current.duration) / current.duration > threshold
+            lastCommanded = next
             if changed || device.exposureMode != .custom {
                 device.setExposureModeCustom(
                     duration: CMTime(seconds: next.duration, preferredTimescale: 1_000_000),

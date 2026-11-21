@@ -85,6 +85,8 @@ public enum MotionExposure {
         public var status: Status
         /// Steps in a row the light has stood past the threshold for switching mode; pass it to the next step.
         public var strikes = 0
+        /// `Policy.holdShutter`: how fast the exposure is moving, in stops per second; pass it to the next step.
+        public var velocity = 0.0
     }
 
     /// Steps in a row past a threshold before the mode switches.
@@ -120,10 +122,12 @@ public enum MotionExposure {
         mainsHz: Int? = nil,
         strikes: Int = 0,
         policy: Policy = .classic,
-        bias: Double = 0
+        bias: Double = 0,
+        velocity: Double = 0,
+        interval: Double = 0.1
     ) -> Decision {
         if policy == .holdShutter {
-            return holdStep(mode: mode, current: current, offset: offset, fps: fps, limits: limits, mainsHz: mainsHz, bias: bias)
+            return holdStep(mode: mode, current: current, offset: offset, fps: fps, limits: limits, mainsHz: mainsHz, bias: bias, velocity: velocity, interval: interval)
         }
         let longest = min(limits.maxDuration, 1 / Double(max(fps, 1)))
         let reference = min(max(CineExposure.referenceShutter(fps: fps, mainsHz: mainsHz), limits.minDuration), longest)
@@ -194,30 +198,45 @@ public enum MotionExposure {
     }
     // MARK: Holding the shutter (RWater)
 
-    /// The most the exposure moves in one step with `Policy.holdShutter`, in stops, so a sudden change of light glides.
-    public static let maxStep = 0.25
+    /// `Policy.holdShutter` moves the exposure like a hand on a dial, every frame: at a speed that follows the
+    /// error (`glideGain` per second), never faster than `glideSpeed`, and that speed itself changes no faster
+    /// than `glideAccel`, so a change of light starts and ends softly instead of in steps.
+    public static let glideGain = 1.6
+    /// The fastest the exposure moves, in stops per second.
+    public static let glideSpeed = 1.5
+    /// How fast that speed may change, in stops per second per second.
+    public static let glideAccel = 4.0
+    /// Meter wobble under this, in stops, is ignored (a soft edge, not a step).
+    public static let glideQuiet = 0.08
     /// Stops past the ends of ISO and shutter at which `Policy.holdShutter` says the light is out of reach.
     public static let outOfReach = 1.0
 
     /// One step with the shutter held on 180°. `bias` moves the target: +0.7 exposes 0.7 stops brighter than
-    /// the camera would (ETTR for Log).
-    static func holdStep(mode: Mode, current: CineExposure.Setting, offset: Double, fps: Int, limits: CineExposure.Limits, mainsHz: Int?, bias: Double) -> Decision {
+    /// the camera would (ETTR for Log). `velocity` is the last decision's, `interval` the seconds since it.
+    static func holdStep(mode: Mode, current: CineExposure.Setting, offset: Double, fps: Int, limits: CineExposure.Limits, mainsHz: Int?, bias: Double, velocity: Double, interval: Double) -> Decision {
         let longest = min(limits.maxDuration, 1 / Double(max(fps, 1)))
         let reference = min(max(CineExposure.referenceShutter(fps: fps, mainsHz: mainsHz), limits.minDuration), longest)
         let error = offset - bias
+        let dt = min(max(interval, 0.005), 0.25)
         let exposure: Double
+        var speed = 0.0
         switch mode {
         case .native:
-            // The camera was exposing right, so the loop starts from its brightness at once and ramps to the bias.
+            // The camera was exposing right, so the loop starts from its brightness at once and glides to the bias.
             exposure = current.iso * current.duration * pow(2, -offset)
         case .motion:
-            let correction = abs(error) < deadband ? 0 : min(max(-error * rate, -maxStep), maxStep)
-            exposure = current.iso * current.duration * pow(2, correction)
+            let quiet = abs(error) <= glideQuiet ? 0 : error - glideQuiet * (error > 0 ? 1 : -1)
+            let wanted = min(max(-quiet * glideGain, -glideSpeed), glideSpeed)
+            let change = glideAccel * dt
+            speed = velocity + min(max(wanted - velocity, -change), change)
+            // Never past the target within one step.
+            if quiet != 0, abs(speed * dt) > abs(quiet) { speed = -quiet / dt }
+            exposure = current.iso * current.duration * pow(2, speed * dt)
         }
         let iso = exposure / reference
         if iso >= limits.minISO, iso <= limits.maxISO {
             let status: Status = abs(error) < 0.5 ? .cinematic : .settling
-            return Decision(mode: .motion, setting: .init(iso: iso, duration: reference), status: status)
+            return Decision(mode: .motion, setting: .init(iso: iso, duration: reference), status: status, velocity: speed)
         }
         let edgeISO = iso < limits.minISO ? limits.minISO : limits.maxISO
         let duration = min(max(exposure / edgeISO, limits.minDuration), longest)
@@ -227,7 +246,8 @@ public enum MotionExposure {
         let status: Status = atEnd && abs(error) > outOfReach
             ? .handedOver(tooBright: iso < limits.minISO)
             : .bent(stops: log2(reference / duration))
-        return Decision(mode: .motion, setting: .init(iso: finalISO, duration: duration), status: status)
+        // Pressed against the end, the dial stops.
+        return Decision(mode: .motion, setting: .init(iso: finalISO, duration: duration), status: status, velocity: atEnd ? 0 : speed)
     }
 }
 
@@ -236,8 +256,8 @@ public enum MotionExposure {
 /// the meter and in the picture alike and is never touched, nor is any change of light: only the meter and the
 /// picture contradicting each other for `stuckSteps` steps in a row counts.
 public struct MeterWatch: Equatable, Sendable {
-    /// Steps in a row the contradiction must last (about half a second).
-    public static let stuckSteps = 5
+    /// Steps in a row the contradiction must last (half a second with the loop on every frame).
+    public static let stuckSteps = 15
     /// The meter reading, in stops, that counts as far off.
     public static let pinned = 3.0
     /// A picture darker than this (mean, 0…1) cannot be "far too bright"; one brighter than `white` not "far too dark".

@@ -148,22 +148,48 @@ final class HoldShutterTests: XCTestCase {
         XCTAssertEqual(out.mode, .motion)
         let setting = try XCTUnwrap(out.setting)
         XCTAssertEqual(setting.iso, 50, accuracy: 1e-9)
-        XCTAssertEqual(log2((1.0 / 50) / setting.duration), MotionExposure.maxStep, accuracy: 1e-6, "one capped step")
+        XCTAssertLessThan(setting.duration, 1.0 / 50, "the shutter shortens past the lowest ISO")
+        XCTAssertGreaterThan(setting.duration, 1.0 / 51, "softly: the dial starts from rest")
         let first = step(.native, iso: 130, duration: 1.0 / 40)
         XCTAssertEqual(first.mode, .motion, "the camera's exposure is taken over on the first step")
         XCTAssertEqual(try XCTUnwrap(first.setting).duration, 1.0 / 50, accuracy: 1e-12)
     }
 
-    func testBigChangesOfLightGlide() throws {
-        let setting = try XCTUnwrap(step(iso: 400, duration: 1.0 / 50, offset: -3).setting)
-        XCTAssertEqual(setting.iso, 400 * pow(2, MotionExposure.maxStep), accuracy: 1e-6)
-        XCTAssertEqual(setting.duration, 1.0 / 50, accuracy: 1e-12)
+    /// Runs the loop against a meter that follows the exposure with a few frames of delay, as a camera's does.
+    private func glide(from iso: Double, light: (Int) -> Double, frames: Int, bias: Double = 0) -> [Double] {
+        var setting = CineExposure.Setting(iso: iso, duration: 1.0 / 50)
+        var velocity = 0.0
+        var history: [Double] = []
+        let start = log2(iso)
+        for frame in 0 ..< frames {
+            // The meter sees the exposure of three frames ago against the light of now.
+            let seen = history.count >= 3 ? history[history.count - 3] : start
+            let offset = seen - light(frame)
+            let decision = MotionExposure.step(
+                mode: .motion, current: setting, offset: offset, fps: 25, limits: limits, mainsHz: 50,
+                policy: .holdShutter, bias: bias, velocity: velocity, interval: 1.0 / 30
+            )
+            setting = try! XCTUnwrap(decision.setting)
+            velocity = decision.velocity
+            history.append(log2(setting.iso))
+        }
+        return history
+    }
+
+    func testPanningIntoTheDarkGlidesWithoutStepsOrOvershoot() {
+        // From a bright window to a dark corner: three stops darker at once.
+        let path = glide(from: 800, light: { _ in log2(800) - 3 }, frames: 150)
+        let steps = zip(path.dropFirst(), path).map { $0 - $1 }
+        XCTAssertLessThanOrEqual(steps.map(abs).max()!, MotionExposure.glideSpeed / 30 + 1e-9, "no frame moves more than the top speed")
+        let jerks = zip(steps.dropFirst(), steps).map { abs($0 - $1) }
+        XCTAssertLessThanOrEqual(jerks.max()!, MotionExposure.glideAccel / 900 + 1e-9, "the speed itself changes smoothly")
+        XCTAssertTrue(steps.allSatisfy { $0 <= 1e-9 }, "always the same way: no hunting")
+        XCTAssertEqual(path.last!, log2(800) - 3, accuracy: MotionExposure.glideQuiet + 0.02, "and it gets there")
     }
 
     func testETTRBiasExposesToTheRight() throws {
-        let setting = try XCTUnwrap(step(iso: 400, duration: 1.0 / 50, bias: 0.7).setting)
-        XCTAssertEqual(setting.duration, 1.0 / 50, accuracy: 1e-12)
-        XCTAssertEqual(setting.iso, 400 * pow(2, 0.7 * MotionExposure.rate), accuracy: 1e-6)
+        let path = glide(from: 400, light: { _ in log2(400) }, frames: 120, bias: 0.7)
+        XCTAssertEqual(path.last!, log2(400) + 0.7, accuracy: MotionExposure.glideQuiet + 0.02)
         let held = step(iso: 400, duration: 1.0 / 50, offset: 0.7, bias: 0.7)
         XCTAssertEqual(held.setting, .init(iso: 400, duration: 1.0 / 50))
         XCTAssertEqual(held.status, .cinematic)
