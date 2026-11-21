@@ -177,29 +177,41 @@ final class HoldShutterTests: XCTestCase {
 }
 
 final class MeterWatchTests: XCTestCase {
-    func testChangingLightNeverTriggersIt() {
+    func testADarkSceneIsLeftAlone() {
         var watch = MeterWatch()
-        // Panning from bright to dark: the meter swings, the loop follows within its range.
+        // Deep water: the loop is at its brightest, the meter says far too dark and the picture is dark.
+        for _ in 0 ..< 200 {
+            XCTAssertFalse(watch.check(offset: -4, pictureLuma: 0.05))
+        }
+    }
+
+    func testChangingLightIsLeftAlone() {
+        var watch = MeterWatch()
         for step in 0 ..< 200 {
             let offset = -3.5 * sin(Double(step) / 20)
-            XCTAssertFalse(watch.check(offset: offset, outOfReach: false))
+            // Brighter picture when the meter says too bright, darker when too dark: they agree.
+            XCTAssertFalse(watch.check(offset: offset, pictureLuma: 0.45 + offset / 10))
         }
     }
 
-    func testPinnedAtTheEndTestsAgain() {
+    func testBlackPictureWithAMeterSayingTooBrightTestsAgain() {
         var watch = MeterWatch()
         for _ in 1 ..< MeterWatch.stuckSteps {
-            XCTAssertFalse(watch.check(offset: 4, outOfReach: true))
+            XCTAssertFalse(watch.check(offset: 4, pictureLuma: 0.02))
         }
-        XCTAssertTrue(watch.check(offset: 4, outOfReach: true))
-        XCTAssertFalse(watch.check(offset: 4, outOfReach: true), "counts again from zero")
+        XCTAssertTrue(watch.check(offset: 4, pictureLuma: 0.02))
     }
 
-    func testOutOfReachButNotPinnedWaits() {
+    func testWhitePictureWithAMeterSayingTooDarkTestsAgain() {
         var watch = MeterWatch()
-        for _ in 0 ..< 100 {
-            XCTAssertFalse(watch.check(offset: 1.5, outOfReach: true))
-        }
+        var fired = false
+        for _ in 0 ..< MeterWatch.stuckSteps { fired = watch.check(offset: -4, pictureLuma: 0.95) || fired }
+        XCTAssertTrue(fired)
+    }
+
+    func testNoPictureReadingJudgesNothing() {
+        var watch = MeterWatch()
+        for _ in 0 ..< 100 { XCTAssertFalse(watch.check(offset: 4, pictureLuma: nil)) }
     }
 }
 

@@ -58,6 +58,8 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     /// Gets the share of clipped highlights in Apple Log frames (`HighlightMeter`), four times a second.
     private var onHighlights: ((Double) -> Void)?
     private var lastHighlightTime = CMTime.invalid
+    private var onBrightness: ((Double) -> Void)?
+    private var lastBrightnessTime = CMTime.invalid
     /// At more than 60 fps the viewfinder is drawn at this many frames per second, so the grader has the
     /// time for the recording. Zero draws every frame.
     private var previewRate = 0.0
@@ -120,6 +122,49 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
     }
 
     /// About 2000 luma samples spread over a 10-bit frame, as levels 0...1 of the video range.
+    /// The picture's mean brightness (0 black … 1 white of the video range) a few times a second, from the
+    /// viewfinder stream: AutoMotion checks its meter against what the picture actually looks like.
+    func setBrightnessHandler(_ handler: ((Double) -> Void)?) {
+        lock.lock()
+        onBrightness = handler
+        lastBrightnessTime = .invalid
+        lock.unlock()
+    }
+
+    private static func meanLuma(_ buffer: CVPixelBuffer) -> Double? {
+        let format = CVPixelBufferGetPixelFormatType(buffer)
+        let tenBit = [kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+                      kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange, kCVPixelFormatType_422YpCbCr10BiPlanarFullRange].contains(format)
+        let eightBit = [kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange].contains(format)
+        guard tenBit || eightBit, CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return nil }
+        let width = CVPixelBufferGetWidthOfPlane(buffer, 0), height = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let rowBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        guard width > 0, height > 0 else { return nil }
+        let videoRange = format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange || format == kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange
+            || format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        let columns = 32, rows = 20
+        var sum = 0.0
+        for row in 0 ..< rows {
+            let y = (row * height + height / 2) / rows
+            let line = base.advanced(by: y * rowBytes)
+            for column in 0 ..< columns {
+                let x = (column * width + width / 2) / columns
+                let code: Double
+                if tenBit {
+                    let value = Double(line.assumingMemoryBound(to: UInt16.self)[x] >> 6)
+                    code = videoRange ? (value - 64) / 876 : value / 1023
+                } else {
+                    let value = Double(line.assumingMemoryBound(to: UInt8.self)[x])
+                    code = videoRange ? (value - 16) / 219 : value / 255
+                }
+                sum += min(max(code, 0), 1)
+            }
+        }
+        return sum / Double(columns * rows)
+    }
+
     private static func lumaLevels(_ buffer: CVPixelBuffer) -> [Double] {
         guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return [] }
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
@@ -263,7 +308,16 @@ final class FrameHub: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AV
             lastHighlightTime = time
             highlightHandler = onHighlights
         }
+        var brightnessHandler: ((Double) -> Void)?
+        if !isRecordStream, let onBrightness,
+           !lastBrightnessTime.isValid || CMTimeGetSeconds(CMTimeSubtract(time, lastBrightnessTime)) >= 0.2 {
+            lastBrightnessTime = time
+            brightnessHandler = onBrightness
+        }
         lock.unlock()
+        if let brightnessHandler, let luma = Self.meanLuma(source) {
+            brightnessHandler(luma)
+        }
         if let highlightHandler {
             highlightHandler(HighlightMeter.clippedShare(levels: Self.lumaLevels(source)))
         }

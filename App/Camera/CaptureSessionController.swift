@@ -391,6 +391,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var meterRetryAt = Date.distantPast
     /// Catches a meter read the wrong way while the loop runs (see `MeterWatch`).
     private var meterWatch = MeterWatch()
+    /// The viewfinder picture's mean brightness and when it was read (FrameHub).
+    private var pictureLuma: (value: Double, at: Date)?
     private var videoFPS = 24
     private var userLocked = false
     /// Exposure and white balance held where they were when the recording started.
@@ -442,6 +444,14 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             } else {
                 self.hub.setHighlightHandler(nil)
                 self.clippedShare = nil
+            }
+            if video && autoMotion {
+                self.hub.setBrightnessHandler { [weak self] luma in
+                    self?.sessionQueue.async { self?.pictureLuma = (luma, Date()) }
+                }
+            } else {
+                self.hub.setBrightnessHandler(nil)
+                self.pictureLuma = nil
             }
             let fpsChanged = self.videoFPS != fps
             self.videoFPS = fps
@@ -623,10 +633,11 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             }
             bias = min(highlightGuard.bias, ettrTarget)
         }
-        // Brighter must read brighter. A loop that runs on a meter read the wrong way drives the picture to black
-        // (or white): stop, give the exposure back to the camera, and test the meter again.
-        let stuckAtEnd: Bool = { if case .handedOver = lastCineState?.status { return motionMode == .motion } else { return false } }()
-        if motionMode == .motion, meterWatch.check(offset: offset * sign, outOfReach: stuckAtEnd) {
+        // A loop on a meter read the wrong way drives the picture to black while the meter says too bright (or to
+        // white while it says too dark). The picture itself tells: then the camera's exposure takes over and the
+        // meter is tested again. A dark scene that is simply dark reads dark on both and is left alone.
+        let luma = pictureLuma.flatMap { Date().timeIntervalSince($0.at) < 1 ? $0.value : nil }
+        if motionMode == .motion, meterWatch.check(offset: offset * sign, pictureLuma: luma) {
             meterWatch.reset()
             meterSign = nil
             meterProbe = nil

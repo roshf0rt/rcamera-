@@ -231,24 +231,33 @@ public enum MotionExposure {
     }
 }
 
-/// Catches a loop that runs on a meter read the wrong way. Such a loop does not settle: it drives the exposure to
-/// one end of the range and stays there with the meter pinned at its limit. Light that really is out of reach looks
-/// the same, so the meter is only tested again after `stuckSteps` steps (about two seconds) like that; a change of
-/// light, however fast, never triggers it while the loop can still follow.
+/// Catches a loop that runs on a meter read the wrong way. Such a loop drives the picture to black while the meter
+/// says it is far too bright (or to white while it says far too dark). A scene that is really dark reads dark on
+/// the meter and in the picture alike and is never touched, nor is any change of light: only the meter and the
+/// picture contradicting each other for `stuckSteps` steps in a row counts.
 public struct MeterWatch: Equatable, Sendable {
-    /// Steps at the end of the range, meter pinned, after which the meter is tested again.
-    public static let stuckSteps = 20
-    /// The meter reading, in stops, that counts as pinned.
+    /// Steps in a row the contradiction must last (about half a second).
+    public static let stuckSteps = 5
+    /// The meter reading, in stops, that counts as far off.
     public static let pinned = 3.0
+    /// A picture darker than this (mean, 0…1) cannot be "far too bright"; one brighter than `white` not "far too dark".
+    public static let black = 0.2
+    public static let white = 0.75
 
     private var stuck = 0
 
     public init() {}
 
-    /// `offset` is the meter as the loop reads it; `outOfReach` whether the loop sits at the end of its range.
-    /// True when the meter should be tested again.
-    public mutating func check(offset: Double, outOfReach: Bool) -> Bool {
-        stuck = outOfReach && abs(offset) >= Self.pinned ? stuck + 1 : 0
+    /// `offset` is the meter as the loop reads it (positive: too bright); `pictureLuma` the picture's mean
+    /// brightness, nil when unknown (then nothing is judged). True when the meter should be tested again.
+    public mutating func check(offset: Double, pictureLuma: Double?) -> Bool {
+        let contradicts: Bool
+        if let luma = pictureLuma {
+            contradicts = (offset >= Self.pinned && luma < Self.black) || (offset <= -Self.pinned && luma > Self.white)
+        } else {
+            contradicts = false
+        }
+        stuck = contradicts ? stuck + 1 : 0
         guard stuck >= Self.stuckSteps else { return false }
         stuck = 0
         return true
