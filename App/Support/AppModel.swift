@@ -51,6 +51,7 @@ final class AppModel {
         loaded.grainLevel = .off
         loaded.halationLevel = .off
         loaded.frame = .off
+        loaded.aspect = .ratio4x3
         loaded.instantGrade = false
         loaded.motionHoldsShutter = true
         loaded.housingKeys = true
@@ -535,8 +536,14 @@ final class AppModel {
         let frame = settings.frame
 
         Task {
-            let look = await cameraLook(for: preset, slot: .photo)
             let place = saveLocation ? await location.currentPlaceName() : nil
+            #if RWATER
+            // RWater keeps the camera's own picture: full size, its metadata, no preset.
+            let developed = await Task.detached(priority: .userInitiated) {
+                PhotoPipeline.plain(raw: photo.raw, processed: photo.processed, mirror: photo.mirror, orientation: photo.orientation)
+            }.value
+            #else
+            let look = await cameraLook(for: preset, slot: .photo)
             let developed = await Task.detached(priority: .userInitiated) {
                 PhotoPipeline.develop(
                     raw: photo.raw,
@@ -550,6 +557,7 @@ final class AppModel {
                     orientation: photo.orientation
                 )
             }.value
+            #endif
             processingCount -= 1
             guard let developed else {
                 alert = "The photo could not be processed."

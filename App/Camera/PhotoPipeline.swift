@@ -84,6 +84,47 @@ enum PhotoPipeline {
         return result
     }
 
+    /// The camera file's metadata (camera, lens, exposure, date) for the saved photo: the picture is upright
+    /// once developed, so its orientation is reset, and the sizes come from the new image.
+    static func metadata(of processed: Data?) -> [String: Any] {
+        guard let processed, let source = CGImageSourceCreateWithData(processed as CFData, nil),
+              var properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
+        else { return [:] }
+        properties[kCGImagePropertyOrientation as String] = 1
+        properties[kCGImagePropertyPixelWidth as String] = nil
+        properties[kCGImagePropertyPixelHeight as String] = nil
+        if var tiff = properties[kCGImagePropertyTIFFDictionary as String] as? [String: Any] {
+            tiff[kCGImagePropertyTIFFOrientation as String] = 1
+            properties[kCGImagePropertyTIFFDictionary as String] = tiff
+        }
+        if var exif = properties[kCGImagePropertyExifDictionary as String] as? [String: Any] {
+            exif[kCGImagePropertyExifPixelXDimension as String] = nil
+            exif[kCGImagePropertyExifPixelYDimension as String] = nil
+            properties[kCGImagePropertyExifDictionary as String] = exif
+        }
+        return properties
+    }
+
+    /// RWater: the camera's own picture, without a look and without developing the RAW, at its full size and
+    /// with the camera's metadata; only turned to how the phone was held (and mirrored for the front camera).
+    static func plain(raw: Data?, processed: Data?, mirror: Bool, orientation: DeviceOrientation) -> Developed? {
+        let base: CIImage?
+        if let processed {
+            base = processedImage(processed)
+        } else if let raw {
+            base = rawImage(raw, exposure: 0)
+        } else {
+            base = nil
+        }
+        guard var image = base else { return nil }
+        image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+        if mirror {
+            image = image.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: -image.extent.width, y: 0))
+        }
+        image = turned(image, orientation).settingProperties(metadata(of: processed))
+        return encode(image, rawExposureOffset: 0)
+    }
+
     private static func encode(_ image: CIImage, rawExposureOffset: Double) -> Developed? {
         let quality = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
         // 10-bit HEIC keeps the half-float grade's gradations; 8 bits is the fallback.
@@ -126,7 +167,9 @@ enum PhotoPipeline {
         }
         guard let base else { return nil }
         let finished = turned(finish(base, look: look, aspect: aspect, mirror: mirror), orientation)
-        return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
+        let framed = framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex)
+        // Camera, lens and exposure details go with the photo, as in a photo from the system camera.
+        return encode(framed.settingProperties(metadata(of: processed)), rawExposureOffset: offset)
     }
 
     /// The portrait frame turned to how the phone was held, before the border so the border fits the shot.
@@ -179,7 +222,9 @@ enum PhotoPipeline {
         let offset: Double
         if case let .raw(_, value) = source { offset = value } else { offset = 0 }
         let finished = turned(finish(base, look: look, aspect: aspect, mirror: mirror), orientation)
-        return encode(framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex), rawExposureOffset: offset)
+        let framed = framedIfNeeded(finished, frame: frame, label: label, accentIndex: accentIndex)
+        // Camera, lens and exposure details go with the photo, as in a photo from the system camera.
+        return encode(framed.settingProperties(metadata(of: processed)), rawExposureOffset: offset)
     }
 
     /// Draws a pattern in translucent white over the whole frame. The photo is drawn on top and hides the middle.
