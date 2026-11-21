@@ -176,6 +176,31 @@ final class HoldShutterTests: XCTestCase {
     }
 }
 
+final class MeterWatchTests: XCTestCase {
+    func testAMeterReadTheWrongWayIsCaught() {
+        var watch = MeterWatch()
+        // The loop darkens by a stop, and the meter says the picture got brighter: the sign is wrong.
+        XCTAssertFalse(watch.check(exposure: 1.0, offset: 0, outOfReach: false))
+        XCTAssertFalse(watch.check(exposure: 0.7, offset: 0.8, outOfReach: false))
+        XCTAssertTrue(watch.check(exposure: 0.5, offset: 1.5, outOfReach: false))
+    }
+
+    func testAMeterReadTheRightWayPasses() {
+        var watch = MeterWatch()
+        XCTAssertFalse(watch.check(exposure: 1.0, offset: 1.0, outOfReach: false))
+        XCTAssertFalse(watch.check(exposure: 0.5, offset: 0.1, outOfReach: false))
+        XCTAssertFalse(watch.check(exposure: 0.25, offset: -0.6, outOfReach: false))
+    }
+
+    func testStuckAtTheEndTestsAgain() {
+        var watch = MeterWatch()
+        for _ in 1 ..< MeterWatch.stuckSteps {
+            XCTAssertFalse(watch.check(exposure: 0.001, offset: 4, outOfReach: true))
+        }
+        XCTAssertTrue(watch.check(exposure: 0.001, offset: 4, outOfReach: true))
+    }
+}
+
 final class HighlightGuardTests: XCTestCase {
     func testClippingTakesTheBiasBackAndClearSkiesReturnIt() {
         var guardrail = HighlightGuard(bias: 0.7)

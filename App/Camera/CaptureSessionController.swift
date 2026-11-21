@@ -389,6 +389,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var meterProbe: (before: Double, stops: Double, steps: Int)?
     /// A meter that did not answer is tried again after this time.
     private var meterRetryAt = Date.distantPast
+    /// Catches a meter read the wrong way while the loop runs (see `MeterWatch`).
+    private var meterWatch = MeterWatch()
     private var videoFPS = 24
     private var userLocked = false
     /// Exposure and white balance held where they were when the recording started.
@@ -621,6 +623,20 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             }
             bias = min(highlightGuard.bias, ettrTarget)
         }
+        // Brighter must read brighter. A loop that runs on a meter read the wrong way drives the picture to black
+        // (or white): stop, give the exposure back to the camera, and test the meter again.
+        let stuckAtEnd: Bool = { if case .handedOver = lastCineState?.status { return motionMode == .motion } else { return false } }()
+        if motionMode == .motion, meterWatch.check(exposure: current.iso * current.duration, offset: offset * sign, outOfReach: stuckAtEnd) {
+            meterWatch.reset()
+            meterSign = nil
+            meterProbe = nil
+            motionMode = .native
+            motionStrikes = 0
+            if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+            meterDetail = "meter read the wrong way: testing again"
+            return .settling
+        }
+        if motionMode != .motion { meterWatch.reset() }
         meterDetail = String(format: "meter %+.2f · ISO %d–%d · %@", offset * sign, Int(limits.minISO), Int(limits.maxISO), sign > 0 ? "+" : "−")
         if ettrTarget > 0 { meterDetail += String(format: " · ETTR %+.1f", bias) }
         let decision = MotionExposure.step(
