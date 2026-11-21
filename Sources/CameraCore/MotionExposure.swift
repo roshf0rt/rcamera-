@@ -272,7 +272,7 @@ public struct MeterWatch: Equatable, Sendable {
 ///
 /// Fed a few times a second with the share of the picture piled up at the top of the Log signal
 /// (`HighlightMeter.clippedShare`): above `clipLimit` the bias drops quickly, below `clearLimit` it creeps back
-/// to the target, in between it stays. It may go under zero, so a bright sky is held even at the cost of shadows.
+/// to the target, in between it stays. It stops at zero: at worst the picture is exposed as the camera meters it.
 public struct HighlightGuard: Equatable, Sendable {
     /// Share of clipped pixels that starts taking the bias back.
     public static let clipLimit = 0.01
@@ -280,8 +280,9 @@ public struct HighlightGuard: Equatable, Sendable {
     public static let clearLimit = 0.003
     public static let dropPerUpdate = 0.15
     public static let risePerUpdate = 0.03
-    /// The lowest the bias goes, in stops.
-    public static let floor = -1.0
+    /// The lowest the bias goes, in stops: the camera's own metering. The guard only takes back the push to the
+    /// right; it never exposes darker than the iPhone would.
+    public static let floor = 0.0
 
     public private(set) var bias: Double
 

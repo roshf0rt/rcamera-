@@ -228,6 +228,7 @@ final class HighlightGuardTests: XCTestCase {
         XCTAssertEqual(guardrail.bias, HighlightGuard.floor + HighlightGuard.risePerUpdate, accuracy: 1e-9)
         for _ in 0 ..< 200 { guardrail.update(target: 0.7, clippedShare: 0) }
         XCTAssertEqual(guardrail.bias, 0.7, accuracy: 1e-9, "back to the target, not past it")
+        XCTAssertEqual(HighlightGuard.floor, 0, "never darker than the camera's own metering")
         XCTAssertEqual(guardrail.update(target: 0.3, clippedShare: 0), 0.3, "a lower target applies at once")
         XCTAssertEqual(guardrail.update(target: 1, clippedShare: nil), 1, "nothing measured: the target")
     }

@@ -391,6 +391,8 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
     private var meterRetryAt = Date.distantPast
     /// Catches a meter read the wrong way while the loop runs (see `MeterWatch`).
     private var meterWatch = MeterWatch()
+    /// The ETTR bias the loop used last, for the readout.
+    private var ettrInForce = 0.0
     /// The viewfinder picture's mean brightness and when it was read (FrameHub).
     private var pictureLuma: (value: Double, at: Date)?
     private var videoFPS = 24
@@ -411,6 +413,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
         var status: MotionExposure.Status?
         /// What the loop sees, for the line over the bar: the meter, the ISO range, the way the meter reads.
         var detail: String = ""
+        /// The push to the right in force for Log (stops) and the one wanted; nil without ETTR.
+        var ettr: Double?
+        var ettrTarget: Double?
     }
 
     /// Called on the main queue with the readout, or nil when it stops (outside video).
@@ -520,7 +525,9 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             angle: CineExposure.shutterAngle(duration: current.duration, fps: videoFPS),
             iso: Int(current.iso.rounded()),
             status: status,
-            detail: motionEnabled ? meterDetail : "loop is off"
+            detail: motionEnabled ? meterDetail : "loop is off",
+            ettr: motionEnabled && ettrTarget > 0 ? ettrInForce : nil,
+            ettrTarget: motionEnabled && ettrTarget > 0 ? ettrTarget : nil
         )
         // A new light is reported at once, numbers at most 8 times a second.
         let statusChanged = state.status != lastCineState?.status
@@ -633,6 +640,7 @@ final class CaptureSessionController: NSObject, @unchecked Sendable {
             }
             bias = min(highlightGuard.bias, ettrTarget)
         }
+        ettrInForce = bias
         // A loop on a meter read the wrong way drives the picture to black while the meter says too bright (or to
         // white while it says too dark). The picture itself tells: then the camera's exposure takes over and the
         // meter is tested again. A dark scene that is simply dark reads dark on both and is left alone.

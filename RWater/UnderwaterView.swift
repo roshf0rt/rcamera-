@@ -200,6 +200,12 @@ struct UnderwaterView: View {
             if engine.mode == .video, engine.appleLogActive {
                 badge(model.settings.appleLog2 ? "LOG 2" : "LOG")
             }
+            if engine.mode == .video, let ettr = engine.cineState?.ettr, let target = engine.cineState?.ettrTarget {
+                // The push to the right now; dimmed while the highlight guard holds it back from the setting.
+                Text(String(format: "ETTR %+.1f", ettr))
+                    .font(.system(size: 13, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(ettr < target - 0.05 ? Color.orange : Theme.accent)
+            }
             if engine.mode == .photo, model.settings.capturesRAW {
                 badge("RAW")
             }
