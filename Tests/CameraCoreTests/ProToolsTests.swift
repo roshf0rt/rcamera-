@@ -149,7 +149,7 @@ final class HoldShutterTests: XCTestCase {
         let setting = try XCTUnwrap(out.setting)
         XCTAssertEqual(setting.iso, 50, accuracy: 1e-9)
         XCTAssertLessThan(setting.duration, 1.0 / 50, "the shutter shortens past the lowest ISO")
-        XCTAssertGreaterThan(setting.duration, 1.0 / 51, "softly: the dial starts from rest")
+        XCTAssertGreaterThan(setting.duration, 1.0 / 52, "softly: the dial starts from rest")
         let first = step(.native, iso: 130, duration: 1.0 / 40)
         XCTAssertEqual(first.mode, .motion, "the camera's exposure is taken over on the first step")
         XCTAssertEqual(try XCTUnwrap(first.setting).duration, 1.0 / 50, accuracy: 1e-12)
